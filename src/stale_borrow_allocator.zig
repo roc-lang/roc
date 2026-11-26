@@ -94,6 +94,11 @@ pub const poisoned_capacity: usize = 16 * 1024;
 /// process may have.
 pub const protected_capacity: usize = 4 * 1024;
 
+/// The default limit on page-protected allocations whose pages are discarded,
+/// which cost address space but no memory: 4 GiB, or a sixteenth of the
+/// address space where that is smaller.
+pub const discarded_protected_bytes: usize = @min(4 * 1024 * 1024 * 1024, (std.math.maxInt(usize) + 1) / 16);
+
 /// Limits of a wrapper. Every field has a usable default.
 pub const Config = struct {
     /// Whether allocations of at least `protect_min_pages` pages get pages of
@@ -108,8 +113,9 @@ pub const Config = struct {
     /// The most page-protected allocations held, at most `protected_capacity`.
     max_protected: usize = protected_capacity,
     /// The most bytes of page-protected allocations held. On Linux their pages
-    /// are also discarded, so they cost address space but no memory.
-    max_protected_bytes: usize = if (host == .linux) 4 * 1024 * 1024 * 1024 else 256 * 1024 * 1024,
+    /// are also discarded, so they cost address space but no memory, and the
+    /// limit is `discarded_protected_bytes`.
+    max_protected_bytes: usize = if (host == .linux) discarded_protected_bytes else 256 * 1024 * 1024,
 };
 
 const Entry = struct {

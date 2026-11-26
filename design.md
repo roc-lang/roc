@@ -2493,7 +2493,8 @@ roots (`CompileTimeRootTable.fromModule`), after it has published the
 module's dispatch plans: a numeral with a `from_numeral` plan is not in value
 form, and a literal with a conversion root always has such a plan, so the
 conversion roots published later decide nothing. Deciding reads the checked
-types and changes none.
+types and changes none. The walk classifies each part by its node kind before it decodes the
+part, so a part that cannot be in value form is never decoded.
 
 A lookup is decided last, once every root of the module exists with its
 request eligibility: publication resolves it from checked CIR to the root it
@@ -7584,7 +7585,8 @@ checking. When checking completes (`checkFileInternal`, after
 the dispatch relation merges and `finalizeLiteralDispatchResolutions`),
 the checker records, in the module's own check task, every node that is
 erroneous in its own right (`ModuleEnv.erroneous_nodes`,
-`Check.recordErroneousNodes`): a runtime error node; an expression or
+`Check.recordErroneousNodes`), other than a runtime error node, which is
+erroneous by its kind alone: an expression or
 pattern whose type reaches erroneous content (a top-level definition's
 pattern is read at the definition's type); a call whose function constraint
 type, or an interpolation whose assembler type, reaches erroneous content; a
@@ -7602,12 +7604,13 @@ after checking, are on-demand analyses of the sealed module
   checked error or unreachable, propagated through evaluation order), inspect
   elision, and the state merges and loop mutations Monotype threads through
   control flow;
-- per module: whether an expression contains a diagnostic error (its own
-  `erroneous_nodes` entry, any child's, a dispatch total resolution rejected,
-  and, when a dispatch was rejected, a resolved local constant reference to
-  an erroneous value; the constant-following part crosses definitions, so it
-  is one slot for the module), and which templates and nested procedure sites
-  are single-source calls.
+- per module: which templates and nested procedure sites are single-source
+  calls.
+
+Publication alone asks whether an expression contains a diagnostic error (its
+own `erroneous_nodes` entry, a runtime error, a retired expression, or any
+child's), and only
+before it seals template references; see "Static Dispatch In Monotype".
 
 There is no propagation pass over finished bodies during checking or
 checked module assembly, and no analysis result is serialized.
@@ -7819,8 +7822,8 @@ cache entry stores one: a cache hit recomputes each result on its first demand.
   strongly connected component of the module's call graph, never per root.
 - Per-module slots: the key index (one over source types, one over
   synthesized types), interface capabilities, the method registry view,
-  provided exports, the nodes whose dispatch plan cannot run, diagnostic
-  errors, and single-source calls.
+  provided exports, the nodes whose dispatch plan cannot run, and
+  single-source calls.
 
 A slot (`collections.OnceSlot`) is a state word with three states: empty,
 claimed and done; a claimed word also records whether a consumer is parked on
@@ -7940,6 +7943,22 @@ of a node's shape costs what reading the node costs:
   declaration bits (a top-level definition's pattern, a rejected method
   declaration, a promoted procedure's pattern, a recursive value
   declaration and its binders, a scheme-alias binder, a field default).
+  While it visits each reached node it also lists, by kind, the nodes
+  publication looks for: calls, statically dispatched expressions, value
+  lookups, binding statements and lambdas, and whether a runtime error
+  node is reached. Publication's retired-call, dispatch-plan,
+  dispatch-constraint, dispatch-type-root, resolved-reference and
+  local-pattern-role passes read those lists instead of scanning every node
+  of the module.
+  The index also records each reached node's parent and, bottom up as it
+  finishes each unit, which expressions have a subtree made only of
+  literals and constructions (`ModuleIndex.inertExprs`). Template
+  reference collection and nested procedure site collection skip such a
+  subtree whole, after clearing from that set every subtree holding a
+  literal with a conversion plan or an expression where the walk records
+  something of its own (a generalized local scope, a nested function use,
+  a callable-derived scheme): nothing in what is skipped would be
+  recorded, so every collected list keeps its contents and order.
   The analyses themselves are computed on first demand. A unit's analyses
   keep their memos in dense arrays indexed by position in the unit and
   touch each node of the unit once per analysis; divergence is decided for
@@ -21641,9 +21660,8 @@ type. Reading the source-value cell neither commits the field kind nor relates
 the value to its storage slot; ordinary interface relations and relation freeze
 retain ownership of those decisions.
 
-The per-expression `contains_diagnostic_error` flag ("Per-Expression Checking
-Data") excludes rejected
-expression sites from this relation table; an error-containing checked type is
+Whether an expression contains a diagnostic error ("Per-Expression Checking
+Data") excludes rejected expression sites from this relation table; an error-containing checked type is
 not a valid specialization constraint and never reaches Monotype instantiation.
 Monotype consumes both relation sources before applying defaults or sealing a
 specialization request. It does not scan a checked body to rediscover them.
@@ -23657,40 +23675,28 @@ ineligible method's decision; neither stage branches on `rejected` to choose
 inspection's rendering. The program still reports the declaration's diagnostic
 and cannot be mistaken for valid.
 
-Checked-module construction computes the `contains_diagnostic_error` column
-once every source runtime error and rejected binding use is explicit in the
-bodies: after rejected procedure uses are rewritten to `runtime_error` and
+Checked-module publication computes which reached nodes contain a diagnostic
+error once every source runtime error and rejected binding use is explicit in
+the bodies: after reference resolution retires rejected procedure uses and
 before template references are sealed, because sealing excludes erroneous sites
-from the specialization-interface relation table. Compile-time roots take their
-context-free request eligibility from solved types when the root table is
-built, and each computation of the column only removes eligibility. Runtime
-divergence is computed once, after total dispatch resolution, because rejected
-and unreachable dispatch resolutions diverge.
+from the specialization-interface relation table. A diagnostic error starts
+only at a node checking recorded as erroneous (`ModuleEnv.erroneous_nodes`), at
+a runtime error node, or at an expression reference resolution retired. The
+module index records whether the bodies reach a runtime error node as it
+visits each one, so a module with none of the three contains no diagnostic
+error, and publication answers without walking its bodies. The result is publication scratch, released when
+publication finishes and never serialized. Runtime divergence is computed once,
+after total dispatch resolution, because rejected and unreachable dispatch
+resolutions diverge.
 
-Total dispatch resolution also records a diagnostic-error seed on that exact
-checked expression. A literal's earlier `custom_dispatch` selection proves its
-callable relation, but its selected declaration can subsequently be rejected,
-including by final strict-demand cycle checking. These seeds cannot join the
-ordinary computation: a generic-codec requirement forwarded through the
-enclosing templates' evidence chains takes precedence over a rejected concrete
-target, and those chains come from sealing, which consumes the ordinary column.
-Once all plans are resolved, checked-module construction propagates these seeds through the existing body
-diagnostic analysis before creating compile-time root requests. The conversion
-root and any enclosing constant root evaluate to the checked error they reach;
-independent roots evaluate normally. `unreachable` is not a diagnostic
-seed. The existing `contains_diagnostic_error` field carries this state through serialization;
-the resolution pass merely records whether recovery propagation is needed, so
-successful modules allocate no new index and perform no additional traversal.
-The ordinary body scan is specialized at compile time to omit recovery-graph
-bookkeeping. Error propagation only removes newly erroneous root requests; it
-does not repeat the already-completed context-free type traversal.
-On that recovery path, resolved local constant references supply initializer
-dependencies as well as the ordinary expression, pattern, and statement edges.
-The body traversal records reverse edges in contiguous scratch storage, and a
-monotone worklist propagates each new error once. References through delayed
-function bodies may form cycles; their provisional traversal answers are not
-final until the worklist closes the graph. Independent cycles remain error-free.
-This scratch is released before compile-time evaluation and is never serialized.
+A dispatch whose total resolution is a checked error is not a diagnostic-error
+seed. A literal's earlier `custom_dispatch` selection proves its callable
+relation, but its selected declaration can subsequently be rejected, including
+by final strict-demand cycle checking, and a generic-codec requirement
+forwarded through the enclosing templates' evidence chains takes precedence
+over a rejected concrete target. Lowering crashes for the rejected dispatch, so
+the conversion root and any enclosing constant root evaluate to the checked
+error they reach, and independent roots evaluate normally.
 
 `checked_error` and `unreachable` are rejected, non-returning
 dispatches. Monotype lowers both to an ordinary Roc runtime crash instead of a
