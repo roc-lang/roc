@@ -2146,8 +2146,6 @@ pub const AssociatedLocalTargets = struct {
     }
 };
 
-const TEMP_CROSS_CHECK_LITERAL_ONLY = true;
-
 /// Collect every top-level def referenced anywhere in `root_expr`'s expression
 /// tree—including nested lambda bodies and blocks—into `out` (deduplicated).
 ///
@@ -2189,7 +2187,6 @@ pub fn collectNameReferences(
     scratch_stack: *std.ArrayList(CIR.Expr.Idx),
     scratch_seen_defaults: *collections.DenseMap(CIR.Expr.Idx, void),
     allocator: std.mem.Allocator,
-    skip_literal_only: bool,
 ) std.mem.Allocator.Error!void {
     scratch_stack.clearRetainingCapacity();
     scratch_seen_defaults.clearRetainingCapacity();
@@ -2198,7 +2195,7 @@ pub fn collectNameReferences(
     while (scratch_stack.pop()) |expr_idx| {
         // A literal-only subtree names no definition
         // (`NodeStore.exprIsLiteralOnly`).
-        if (skip_literal_only and cir.store.exprIsLiteralOnly(expr_idx)) continue;
+        if (cir.store.exprIsLiteralOnly(expr_idx)) continue;
         switch (cir.store.getExpr(expr_idx)) {
             .e_lookup_local => |lookup| {
                 if (pattern_to_def.get(lookup.pattern_idx)) |def_idx| {
@@ -2442,15 +2439,7 @@ pub fn computeCheckOrder(
     for (defs_slice) |def_idx| {
         refs.clearRetainingCapacity();
         const def = cir.store.getDef(def_idx);
-        try collectNameReferences(cir, &pattern_to_def, associated_targets, def.expr, &refs, &scratch_stack, &scratch_seen_defaults, allocator, true);
-        if (TEMP_CROSS_CHECK_LITERAL_ONLY) {
-            var all_refs = collections.DenseMap(CIR.Def.Idx, void).init(allocator);
-            defer all_refs.deinit();
-            try collectNameReferences(cir, &pattern_to_def, associated_targets, def.expr, &all_refs, &scratch_stack, &scratch_seen_defaults, allocator, false);
-            std.debug.assert(all_refs.count() == refs.count());
-            var all_iter = all_refs.keyIterator();
-            while (all_iter.next()) |ref_def| std.debug.assert(refs.contains(ref_def.*));
-        }
+        try collectNameReferences(cir, &pattern_to_def, associated_targets, def.expr, &refs, &scratch_stack, &scratch_seen_defaults, allocator);
         var ref_iter = refs.keyIterator();
         while (ref_iter.next()) |ref_def_idx| {
             try graph.addEdge(def_idx, ref_def_idx.*);

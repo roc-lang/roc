@@ -13498,48 +13498,6 @@ fn collectCallableDerivedSchemes(
             }
         }
     }
-    if (TEMP_CROSS_CHECK_CLOSURES) try TEMP_checkCallableDerived(allocator, module, module_index, types_store, local_schemes, &unquantified, out);
-}
-
-const TEMP_CROSS_CHECK_CLOSURES = true;
-fn TEMP_checkCallableDerived(allocator: Allocator, module: TypedCIR.Module, module_index: *const ModuleIndex, types_store: *const types.Store, local_schemes: *const collections.DenseMap(u32, Var), unquantified: *const collections.DenseMap(Var, void), out: *const collections.DenseMap(u32, Var)) Allocator.Error!void {
-    var expected = collections.DenseMap(u32, Var).init(allocator);
-    defer expected.deinit();
-    var closure_lambdas = collections.DenseMap(CIR.Expr.Idx, void).init(allocator);
-    defer closure_lambdas.deinit();
-    var raw_node: u32 = CIR.Node.first_idx;
-    while (raw_node < module.nodeCount()) : (raw_node += 1) {
-        if (module.nodeTag(@fromBackingInt(@intCast(raw_node))) != .expr_closure) continue;
-        const closure_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node));
-        try closure_lambdas.put(module.expr(closure_expr).data.e_closure.lambda_idx, {});
-    }
-
-    var scratch = dispatch_evidence.Scratch{};
-    defer scratch.deinit(allocator);
-    var params = std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam).empty;
-    defer params.deinit(allocator);
-    raw_node = CIR.Node.first_idx;
-    while (raw_node < module.nodeCount()) : (raw_node += 1) {
-        const tag = module.nodeTag(@fromBackingInt(@intCast(raw_node)));
-        if (tag != .expr_lambda and tag != .expr_closure) continue;
-        const source_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node));
-        if (closure_lambdas.contains(source_expr)) continue;
-        if (!module_index.reachesExpr(source_expr)) continue;
-        const checked_expr = source_expr;
-        if (local_schemes.contains(@backingInt(checked_expr))) continue;
-        const fn_var = ModuleEnv.varFrom(source_expr);
-        params.clearRetainingCapacity();
-        try dispatch_evidence.enumerateEvidenceParams(allocator, types_store, fn_var, &scratch, &params);
-        for (params.items) |param| {
-            if (param.path_len == 0) continue;
-            if (!unquantified.contains(types_store.resolveVar(param.dispatcher_var).var_)) continue;
-            try expected.put(@backingInt(checked_expr), fn_var);
-            break;
-        }
-    }
-    std.debug.assert(expected.count() == out.count());
-    var keys = expected.keyIterator();
-    while (keys.next()) |key| std.debug.assert(out.get(key.*).? == expected.get(key.*).?);
 }
 
 fn noteUnquantifiedReceiver(
