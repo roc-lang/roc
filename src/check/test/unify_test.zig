@@ -103,10 +103,14 @@ const TestEnv = struct {
             .unify_scratch = &self.scratch,
             .occurs_scratch = &self.occurs_scratch,
         };
-        return try unify_mod.unify(&env, a, b, .{ .actual_region = base.Region.zero() });
+        return try unify_mod.unify(&env, a, b, &.{ .actual_region = base.Region.zero() }, .mismatch);
     }
 
     fn unifyWithOptions(self: *Self, a: Var, b: Var, opts: unify_mod.Options) std.mem.Allocator.Error!Result {
+        return self.unifyRepeatedLabelRows(a, b, opts, .mismatch);
+    }
+
+    fn unifyRepeatedLabelRows(self: *Self, a: Var, b: Var, opts: unify_mod.Options, repeated_label_rows: unify_mod.RepeatedLabelRows) std.mem.Allocator.Error!Result {
         const env = unify_mod.Env{
             .ident_store = self.module_env.getIdentStoreConst(),
             .self_module_identity = self.module_env.selfModuleIdentity(),
@@ -119,7 +123,7 @@ const TestEnv = struct {
         };
         var region_opts = opts;
         region_opts.actual_region = base.Region.zero();
-        return try unify_mod.unify(&env, a, b, region_opts);
+        return try unify_mod.unify(&env, a, b, &region_opts, repeated_label_rows);
     }
 
     /// Helper to call the write-no-report unify variant from TestEnv.
@@ -134,7 +138,7 @@ const TestEnv = struct {
             .unify_scratch = &self.scratch,
             .occurs_scratch = &self.occurs_scratch,
         };
-        return try unify_mod.unify(&env, a, b, .{ .on_mismatch = .write_no_report });
+        return try unify_mod.unify(&env, a, b, &.{ .on_mismatch = .write_no_report }, .mismatch);
     }
 
     fn unifyExact(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
@@ -148,10 +152,10 @@ const TestEnv = struct {
             .unify_scratch = &self.scratch,
             .occurs_scratch = &self.occurs_scratch,
         };
-        return try unify_mod.unify(&env, a, b, .{
+        return try unify_mod.unify(&env, a, b, &.{
             .on_mismatch = .write_no_report,
             .row_width_relation = .exact,
-        });
+        }, .mismatch);
     }
 
     const Error = error{ VarIsNotRoot, IsNotRecord, IsNotTagUnion };
@@ -707,7 +711,7 @@ test "unify - a repeated label whose occurrences conflict is the repeating row's
                 },
             };
             const a, const b = if (row_is_actual) .{ other, row } else .{ row, other };
-            const result = try env.unifyWithOptions(a, b, .{ .repeated_label_rows = .return_row });
+            const result = try env.unifyRepeatedLabelRows(a, b, .{}, .return_row);
             try std.testing.expectEqual(.mismatch, result);
             try std.testing.expectEqual(store.resolveVar(row).var_, store.resolveVar(env.scratch.repeatedLabelRow().?).var_);
             try std.testing.expectEqual(@as(usize, 0), env.problems.len());
