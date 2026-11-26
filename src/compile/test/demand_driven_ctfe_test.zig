@@ -585,7 +585,9 @@ test "a literal argument root at a sealed type stores its converted value under 
             if (!argument.sealed) continue;
             try std.testing.expect(!argument.validate_only);
             try std.testing.expect(compile_time_root.payload == .const_node);
-            try std.testing.expect(!try root.checked_types.rootContainsIdentityVariables(argument.ty));
+            // A sealed root is requested although its type keeps the
+            // variable no use fixes.
+            try std.testing.expect(try root.checked_types.rootContainsIdentityVariables(argument.ty));
             sealed += 1;
         }
         try std.testing.expectEqual(@as(usize, 1), sealed);
