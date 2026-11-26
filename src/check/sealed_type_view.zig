@@ -15,7 +15,8 @@
 //! canonical names its identifiers stand for, the checked identity and owning
 //! artifact of every module its named types come from, the checked facts of
 //! every nominal declaration it holds, and per variable whether publication
-//! reached it and through which row-tail positions. A variable's row default
+//! reached it, through which row-tail positions, and whether its type reaches
+//! a flex or rigid variable. A variable's row default
 //! is the one rendering decision that depends on more than the variable: it
 //! comes from the row-tail positions publication reached it through
 //! (`reach`).
@@ -89,13 +90,18 @@ pub const SealedCapabilityRow = struct {
     }
 };
 
-/// Per solver variable: whether publication reached it, and through which
-/// row-tail positions.
+/// Per solver variable: whether publication reached it, through which
+/// row-tail positions, and whether its type reaches a flex or rigid variable.
 pub const SealedVarFacts = packed struct(u8) {
     reached: bool = false,
     record_tail: bool = false,
     tag_tail: bool = false,
-    _padding: u5 = 0,
+    /// Whether the checked type of this class representative reaches a flex
+    /// or rigid variable through the children its payload renders
+    /// (`markIdentityVariables`), marked when publication first reaches it.
+    /// Meaningful only on reached representatives.
+    identity_variables: bool = false,
+    _padding: u4 = 0,
 };
 
 /// Append the variable of every one of `facts` publication reached to `out`,
@@ -257,6 +263,12 @@ pub const SealedTypeView = struct {
     /// Whether publication reached `var_`'s class.
     pub fn reaches(self: SealedTypeView, var_: Var) bool {
         return self.facts(self.representative(var_)).reached;
+    }
+
+    /// Whether `var_`'s checked type reaches a flex or rigid variable.
+    /// `var_` is its class's checked representative.
+    pub fn hasIdentityVariables(self: SealedTypeView, var_: Var) bool {
+        return self.facts(var_).identity_variables;
     }
 
     /// The kind of `var_`'s checked type: the tag `payload` returns, read
@@ -496,7 +508,7 @@ pub const SealedTypeColumns = struct {
 /// canonical name of every identifier the store's types use, resolve every
 /// module identity they name and every nominal declaration the store holds,
 /// and mark no variable reached. `reach` marks the variables publication
-/// reaches.
+/// reaches, and which of them reach a flex or rigid variable.
 pub fn buildColumns(
     allocator: Allocator,
     env: *const ModuleEnv,
@@ -557,6 +569,177 @@ pub fn buildColumns(
                 builtin,
             ),
         });
+    }
+}
+
+/// Scratch for `reach`, kept by the caller with its capacity between walks;
+/// empty between walks.
+pub const ReachScratch = struct {
+    /// The walk's work list.
+    pending: std.ArrayList(Var) = .empty,
+    /// The representatives the walk reached for the first time.
+    newly_reached: std.ArrayList(Var) = .empty,
+    /// Per variable: one more than its position in `newly_reached` while it
+    /// is newly reached, else zero. Sized to the store on the first walk
+    /// that reaches anything, and zero again between walks.
+    positions: std.ArrayList(u32) = .empty,
+    /// Edges between newly reached representatives, as child and parent
+    /// positions, and the parents of each position once placed.
+    edges: std.ArrayList([2]u32) = .empty,
+    parent_starts: std.ArrayList(u32) = .empty,
+    parents: std.ArrayList(u32) = .empty,
+    work: std.ArrayList(u32) = .empty,
+
+    pub fn deinit(self: *ReachScratch, allocator: Allocator) void {
+        self.pending.deinit(allocator);
+        self.newly_reached.deinit(allocator);
+        self.positions.deinit(allocator);
+        self.edges.deinit(allocator);
+        self.parent_starts.deinit(allocator);
+        self.parents.deinit(allocator);
+        self.work.deinit(allocator);
+    }
+
+    fn clear(self: *ReachScratch) void {
+        self.pending.clearRetainingCapacity();
+        for (self.newly_reached.items) |var_| {
+            if (@backingInt(var_) < self.positions.items.len) self.positions.items[@backingInt(var_)] = 0;
+        }
+        self.newly_reached.clearRetainingCapacity();
+        self.edges.clearRetainingCapacity();
+        self.parent_starts.clearRetainingCapacity();
+        self.parents.clearRetainingCapacity();
+        self.work.clearRetainingCapacity();
+    }
+};
+
+/// Mark each representative a walk newly reached whose checked type reaches
+/// a flex or rigid variable: one that is one, or one with a child that
+/// reaches one, over the children `SealedTypeView.payload` renders. Every
+/// child of a reached representative is reached, so each child is either
+/// newly reached too or was reached by an earlier walk, whose fact is
+/// already marked. The new facts are computed backward from the variables
+/// and the earlier facts over the reversed edges between the newly reached
+/// representatives, so cycles among them are classified exactly and each
+/// edge is visited once.
+fn markIdentityVariables(allocator: Allocator, env: *const ModuleEnv, var_facts: []SealedVarFacts, scratch: *ReachScratch) Allocator.Error!void {
+    const reached = scratch.newly_reached.items;
+    if (scratch.positions.items.len < var_facts.len) try scratch.positions.appendNTimes(allocator, 0, var_facts.len - scratch.positions.items.len);
+    for (reached, 1..) |var_, position_plus_one| scratch.positions.items[@backingInt(var_)] = @intCast(position_plus_one);
+
+    var lister = IdentityEdgeLister{ .allocator = allocator, .env = env, .var_facts = var_facts, .scratch = scratch };
+    for (reached, 0..) |var_, position| {
+        switch (env.types.kindOf(var_)) {
+            .flex, .rigid => {
+                var_facts[@backingInt(var_)].identity_variables = true;
+                try scratch.work.append(allocator, @intCast(position));
+                continue;
+            },
+            .err, .field_presence, .alias, .empty_record, .empty_tag_union, .record, .tuple, .nominal_type, .fn_pure, .fn_unbound, .fn_effectful, .tag_union => {},
+        }
+        lister.parent = @intCast(position);
+        lister.reaches = false;
+        try identityChildren(env, var_, &lister);
+        if (lister.reaches) {
+            var_facts[@backingInt(var_)].identity_variables = true;
+            try scratch.work.append(allocator, @intCast(position));
+        }
+    }
+
+    // Parents of each newly reached representative, placed by child.
+    const starts = &scratch.parent_starts;
+    try starts.appendNTimes(allocator, 0, reached.len + 1);
+    for (scratch.edges.items) |edge| starts.items[edge[0] + 1] += 1;
+    for (1..reached.len + 1) |position| starts.items[position] += starts.items[position - 1];
+    try scratch.parents.resize(allocator, scratch.edges.items.len);
+    for (scratch.edges.items) |edge| {
+        const child, const parent = edge;
+        // `starts[child]` serves as the fill cursor and ends at the start of
+        // `child + 1`'s parents, so each is restored after placing below.
+        scratch.parents.items[starts.items[child]] = parent;
+        starts.items[child] += 1;
+    }
+    var position = reached.len;
+    while (position > 0) : (position -= 1) starts.items[position] = starts.items[position - 1];
+    starts.items[0] = 0;
+
+    while (scratch.work.pop()) |child| {
+        for (scratch.parents.items[starts.items[child]..starts.items[child + 1]]) |parent| {
+            const facts = &var_facts[@backingInt(reached[parent])];
+            if (facts.identity_variables) continue;
+            facts.identity_variables = true;
+            try scratch.work.append(allocator, parent);
+        }
+    }
+}
+
+/// Lists the edges between newly reached representatives, and whether one
+/// has a child an earlier walk marked as reaching a variable.
+const IdentityEdgeLister = struct {
+    allocator: Allocator,
+    env: *const ModuleEnv,
+    var_facts: []const SealedVarFacts,
+    scratch: *ReachScratch,
+    parent: u32 = 0,
+    reaches: bool = false,
+
+    fn child(self: *IdentityEdgeLister, var_: Var) Allocator.Error!void {
+        const representative = self.env.types.resolveVarWord(var_).var_;
+        const position_plus_one = self.scratch.positions.items[@backingInt(representative)];
+        if (position_plus_one != 0) {
+            try self.scratch.edges.append(self.allocator, .{ position_plus_one - 1, self.parent });
+        } else if (self.var_facts[@backingInt(representative)].identity_variables) {
+            self.reaches = true;
+        }
+    }
+};
+
+/// Call `sink.child` for each child of the representative `var_` whose fact
+/// decides `var_`'s identity-variable fact: the children
+/// `SealedTypeView.payload` renders, read by kind from the stored descriptor.
+/// A flex or rigid variable decides its own fact, so its constraints are not
+/// children here.
+fn identityChildren(env: *const ModuleEnv, var_: Var, sink: anytype) Allocator.Error!void {
+    const type_store = &env.types;
+    const desc_idx = type_store.resolveDescIdx(var_);
+    switch (type_store.kindAt(desc_idx)) {
+        .err, .field_presence, .flex, .rigid, .empty_record, .empty_tag_union => {},
+        .alias => {
+            const alias = type_store.aliasAt(desc_idx);
+            try sink.child(type_store.getAliasBackingVar(alias));
+            for (type_store.sliceAliasArgs(alias)) |arg| try sink.child(arg);
+        },
+        .record => {
+            const record = type_store.recordAt(desc_idx);
+            if (record.fields.len() == 0 and checked_artifact.checkedRecordExtIsEmpty(env, record.ext)) return;
+            for (type_store.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                switch (presence.decode()) {
+                    .required => |type_var| try sink.child(type_var),
+                    .unknown => |unknown| {
+                        // A presence variable renders as a child only
+                        // while it is undetermined.
+                        if (type_store.kindOf(unknown.presence) == .flex) try sink.child(unknown.presence);
+                        try sink.child(unknown.var_);
+                    },
+                }
+            }
+            try sink.child(record.ext);
+        },
+        .tuple => for (type_store.sliceVars(type_store.tupleAt(desc_idx).elems)) |elem| try sink.child(elem),
+        .nominal_type => for (type_store.sliceNominalArgs(type_store.nominalAt(desc_idx))) |arg| try sink.child(arg),
+        .fn_pure, .fn_effectful, .fn_unbound => {
+            const func = type_store.funcAt(desc_idx);
+            for (type_store.sliceVars(func.args)) |arg| try sink.child(arg);
+            try sink.child(func.ret);
+        },
+        .tag_union => {
+            const tag_union = type_store.tagUnionAt(desc_idx);
+            if (tag_union.tags.len() == 0 and checked_artifact.checkedTagUnionExtIsEmpty(env, tag_union.ext)) return;
+            for (type_store.getTagsSlice(tag_union.tags).items(.args)) |args| {
+                for (type_store.sliceVars(args)) |arg| try sink.child(arg);
+            }
+            try sink.child(tag_union.ext);
+        },
     }
 }
 
@@ -647,22 +830,27 @@ const ColumnBuilder = struct {
 };
 
 /// Mark every variable reachable from `root` reached, recording the row-tail
-/// positions each is reached through. Each representative this reaches for
-/// the first time is appended to `newly_reached` when one is given.
-/// `pending` is the caller's scratch for the walk's work list, empty on entry
-/// and on return.
-pub fn reach(allocator: Allocator, env: *const ModuleEnv, var_facts: []SealedVarFacts, pending: *std.ArrayList(Var), root: Var, newly_reached: ?*std.ArrayList(Var)) Allocator.Error!void {
-    std.debug.assert(pending.items.len == 0);
-    errdefer pending.clearRetainingCapacity();
-    var walker = ReachWalker{ .env = env, .var_facts = var_facts, .newly_reached = newly_reached, .pending = pending };
+/// positions each is reached through, and mark each representative this
+/// reaches for the first time that reaches a flex or rigid variable. Each
+/// such representative is also appended to `newly_reached` when one is
+/// given. `scratch` is the caller's, empty on entry and on return.
+pub fn reach(allocator: Allocator, env: *const ModuleEnv, var_facts: []SealedVarFacts, scratch: *ReachScratch, root: Var, newly_reached: ?*std.ArrayList(Var)) Allocator.Error!void {
+    std.debug.assert(scratch.pending.items.len == 0 and scratch.newly_reached.items.len == 0);
+    errdefer scratch.clear();
+    var walker = ReachWalker{ .env = env, .var_facts = var_facts, .newly_reached = &scratch.newly_reached, .pending = &scratch.pending };
     try walker.reach(allocator, root, null);
+    // Most walks start at a type an earlier walk reached and reach nothing.
+    if (scratch.newly_reached.items.len == 0) return;
     while (walker.pending.pop()) |var_| try walker.expand(allocator, var_);
+    try markIdentityVariables(allocator, env, var_facts, scratch);
+    if (newly_reached) |list| try list.appendSlice(allocator, scratch.newly_reached.items);
+    scratch.clear();
 }
 
 const ReachWalker = struct {
     env: *const ModuleEnv,
     var_facts: []SealedVarFacts,
-    newly_reached: ?*std.ArrayList(Var),
+    newly_reached: *std.ArrayList(Var),
     pending: *std.ArrayList(Var),
 
     fn reach(self: *ReachWalker, allocator: Allocator, var_: Var, tail: ?RowDefault) Allocator.Error!void {
@@ -670,7 +858,7 @@ const ReachWalker = struct {
         const var_facts = &self.var_facts[@backingInt(resolved.var_)];
         if (!var_facts.reached) {
             var_facts.reached = true;
-            if (self.newly_reached) |list| try list.append(allocator, resolved.var_);
+            try self.newly_reached.append(allocator, resolved.var_);
             try self.pending.append(allocator, resolved.var_);
         }
         switch (tail orelse return) {
@@ -791,6 +979,10 @@ fn expectViewRendersPublishedTypes(source: []const u8) ViewTestError!void {
         const var_: Var = @fromBackingInt(@intCast(raw));
         if (view.representative(var_) != var_) continue;
         try expectRenders(view, var_);
+        // The published identity-variable fact agrees with a walk of the
+        // rendered types.
+        const id = type_ids.fromVar(var_);
+        try std.testing.expectEqual(try publication.store.view().walkIdentityVariablesForTest(id), try publication.store.rootContainsIdentityVariables(id));
         rendered += 1;
     }
     try std.testing.expect(rendered != 0);
