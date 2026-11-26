@@ -24386,9 +24386,7 @@ fn copyPairingColumns(comptime T: type, source: T, allocator: Allocator) Allocat
         @memcpy(result, source);
         return result;
     } else if (comptime @typeInfo(T) == .@"struct") {
-        if (comptime @hasDecl(T, "copyForPairing")) {
-            return source.copyForPairing(allocator);
-        } else if (comptime @hasDecl(T, "fromBorrowedSlice") and @hasField(T, "length")) {
+        if (comptime @hasDecl(T, "fromBorrowedSlice") and @hasField(T, "length")) {
             artifact_serialize.assertRelocatablePod(std.meta.Child(T.Slice));
             return T.fromSlice(allocator, source.items());
         } else if (comptime @hasField(T, "items") and @hasField(T, "capacity")) {
