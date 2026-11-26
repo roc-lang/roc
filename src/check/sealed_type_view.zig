@@ -546,12 +546,13 @@ pub const ReachScratch = struct {
     pending: std.ArrayList(Var) = .empty,
     /// The representatives the walk reached for the first time.
     newly_reached: std.ArrayList(Var) = .empty,
-    /// Each newly reached representative's position in `newly_reached`.
-    positions: collections.DenseMapUnmanaged(Var, u32) = .empty,
+    /// Per variable: one more than its position in `newly_reached` while it
+    /// is newly reached, else zero. Sized to the store on the first walk
+    /// that reaches anything, and zero again between walks.
+    positions: std.ArrayList(u32) = .empty,
     /// Edges between newly reached representatives, as child and parent
     /// positions, and the parents of each position once placed.
-    edge_children: std.ArrayList(u32) = .empty,
-    edge_parents: std.ArrayList(u32) = .empty,
+    edges: std.ArrayList([2]u32) = .empty,
     parent_starts: std.ArrayList(u32) = .empty,
     parents: std.ArrayList(u32) = .empty,
     work: std.ArrayList(u32) = .empty,
@@ -560,8 +561,7 @@ pub const ReachScratch = struct {
         self.pending.deinit(allocator);
         self.newly_reached.deinit(allocator);
         self.positions.deinit(allocator);
-        self.edge_children.deinit(allocator);
-        self.edge_parents.deinit(allocator);
+        self.edges.deinit(allocator);
         self.parent_starts.deinit(allocator);
         self.parents.deinit(allocator);
         self.work.deinit(allocator);
@@ -569,10 +569,11 @@ pub const ReachScratch = struct {
 
     fn clear(self: *ReachScratch) void {
         self.pending.clearRetainingCapacity();
+        for (self.newly_reached.items) |var_| {
+            if (@backingInt(var_) < self.positions.items.len) self.positions.items[@backingInt(var_)] = 0;
+        }
         self.newly_reached.clearRetainingCapacity();
-        self.positions.clearRetainingCapacity();
-        self.edge_children.clearRetainingCapacity();
-        self.edge_parents.clearRetainingCapacity();
+        self.edges.clearRetainingCapacity();
         self.parent_starts.clearRetainingCapacity();
         self.parents.clearRetainingCapacity();
         self.work.clearRetainingCapacity();
@@ -590,7 +591,8 @@ pub const ReachScratch = struct {
 /// edge is visited once.
 fn markIdentityVariables(allocator: Allocator, env: *const ModuleEnv, var_facts: []SealedVarFacts, scratch: *ReachScratch) Allocator.Error!void {
     const reached = scratch.newly_reached.items;
-    for (reached, 0..) |var_, position| try scratch.positions.put(allocator, var_, @intCast(position));
+    if (scratch.positions.items.len < var_facts.len) try scratch.positions.appendNTimes(allocator, 0, var_facts.len - scratch.positions.items.len);
+    for (reached, 1..) |var_, position_plus_one| scratch.positions.items[@backingInt(var_)] = @intCast(position_plus_one);
 
     var lister = IdentityEdgeLister{ .allocator = allocator, .env = env, .var_facts = var_facts, .scratch = scratch };
     for (reached, 0..) |var_, position| {
@@ -614,10 +616,11 @@ fn markIdentityVariables(allocator: Allocator, env: *const ModuleEnv, var_facts:
     // Parents of each newly reached representative, placed by child.
     const starts = &scratch.parent_starts;
     try starts.appendNTimes(allocator, 0, reached.len + 1);
-    for (scratch.edge_children.items) |child| starts.items[child + 1] += 1;
+    for (scratch.edges.items) |edge| starts.items[edge[0] + 1] += 1;
     for (1..reached.len + 1) |position| starts.items[position] += starts.items[position - 1];
-    try scratch.parents.resize(allocator, scratch.edge_children.items.len);
-    for (scratch.edge_children.items, scratch.edge_parents.items) |child, parent| {
+    try scratch.parents.resize(allocator, scratch.edges.items.len);
+    for (scratch.edges.items) |edge| {
+        const child, const parent = edge;
         // `starts[child]` serves as the fill cursor and ends at the start of
         // `child + 1`'s parents, so each is restored after placing below.
         scratch.parents.items[starts.items[child]] = parent;
@@ -649,9 +652,9 @@ const IdentityEdgeLister = struct {
 
     fn child(self: *IdentityEdgeLister, var_: Var) Allocator.Error!void {
         const representative = self.env.types.resolveVarWord(var_).var_;
-        if (self.scratch.positions.get(representative)) |position| {
-            try self.scratch.edge_children.append(self.allocator, position);
-            try self.scratch.edge_parents.append(self.allocator, self.parent);
+        const position_plus_one = self.scratch.positions.items[@backingInt(representative)];
+        if (position_plus_one != 0) {
+            try self.scratch.edges.append(self.allocator, .{ position_plus_one - 1, self.parent });
         } else if (self.var_facts[@backingInt(representative)].identity_variables) {
             self.reaches = true;
         }
