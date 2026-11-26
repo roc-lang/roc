@@ -15,7 +15,8 @@ const std = @import("std");
 const invariant = @import("base").invariant;
 const dev_diagnostics = @import("base").dev_diagnostics;
 const builtin = @import("builtin");
-const isaOfOrNull = @import("isa.zig").isaOfOrNull;
+const abiOf = @import("isa.zig").abiOf;
+const abiOfOrNull = @import("isa.zig").abiOfOrNull;
 const Allocator = std.mem.Allocator;
 
 const layout = @import("layout");
@@ -341,35 +342,24 @@ pub const ObjectFileCompiler = struct {
     ) CompilationError!UnitPieces.Pieces {
         const exports = try UnitExports.keep(self.allocator, lir_store, target, static_data_exports);
         defer exports.keeper.release();
-        const enum_info = @typeInfo(RocTarget).@"enum";
-        const default_target = target.defaultCpuTarget();
-        inline for (enum_info.field_values) |field_value| {
-            const comptime_target: RocTarget = @fromBackingInt(@intCast(field_value));
-            if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
-            if (default_target == comptime_target) {
-                if (comptime isaOfOrNull(comptime_target) != null) {
-                    return compilePiecesWithCodeGen(
-                        LirCodeGenMod.LirCodeGen(comptime_target),
-                        self.allocator,
-                        lir_store,
-                        layout_store,
-                        entrypoints,
-                        exports,
-                        proc_specs,
-                        target,
-                        self.enable_default_platform_runtime,
-                        self.erased_capture_prefix,
-                        self.timing,
-                        self.post_check_executor,
-                        self.internal_entrypoints,
-                        self.relocatable_expect_sites,
-                    );
-                } else {
-                    return CompilationError.UnsupportedTarget;
-                }
-            }
+        switch (abiOfOrNull(target) orelse return CompilationError.UnsupportedTarget) {
+            inline .x86_64_sysv, .x86_64_windows, .aarch64_aapcs, .aarch64_apple, .aarch64_windows => |abi| return compilePiecesWithCodeGen(
+                LirCodeGenMod.LirCodeGen(abi),
+                self.allocator,
+                lir_store,
+                layout_store,
+                entrypoints,
+                exports,
+                proc_specs,
+                target,
+                self.enable_default_platform_runtime,
+                self.erased_capture_prefix,
+                self.timing,
+                self.post_check_executor,
+                self.internal_entrypoints,
+                self.relocatable_expect_sites,
+            ),
         }
-        return CompilationError.UnsupportedTarget;
     }
 
     /// Compose the pieces of a program's units into one relocatable object
@@ -381,20 +371,9 @@ pub const ObjectFileCompiler = struct {
         target: RocTarget,
         options: ComposeOptions,
     ) CompilationError!CompilationResult {
-        const enum_info = @typeInfo(RocTarget).@"enum";
-        const default_target = target.defaultCpuTarget();
-        inline for (enum_info.field_values) |field_value| {
-            const comptime_target: RocTarget = @fromBackingInt(@intCast(field_value));
-            if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
-            if (default_target == comptime_target) {
-                if (comptime isaOfOrNull(comptime_target) != null) {
-                    return composeWithCodeGen(LirCodeGenMod.LirCodeGen(comptime_target), self.allocator, inputs, target, options, self.timing, self.post_check_executor);
-                } else {
-                    return CompilationError.UnsupportedTarget;
-                }
-            }
+        switch (abiOfOrNull(target) orelse return CompilationError.UnsupportedTarget) {
+            inline .x86_64_sysv, .x86_64_windows, .aarch64_aapcs, .aarch64_apple, .aarch64_windows => |abi| return composeWithCodeGen(LirCodeGenMod.LirCodeGen(abi), self.allocator, inputs, target, options, self.timing, self.post_check_executor),
         }
-        return CompilationError.UnsupportedTarget;
     }
 
     /// Which pieces of a unit its image keeps.
@@ -1912,39 +1891,28 @@ fn crossCompileDispatch(
     executor: ?Executor,
     reuse_same_program: ?*const NativeProcCompiler.Retained,
 ) CompilationError!CompilationResult {
-    const enum_info = @typeInfo(RocTarget).@"enum";
-    const default_target = target.defaultCpuTarget();
-    inline for (enum_info.field_values) |field_value| {
-        const comptime_target: RocTarget = @fromBackingInt(@intCast(field_value));
-        if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
-        if (default_target == comptime_target) {
-            if (comptime isaOfOrNull(comptime_target) != null) {
-                return compileWithCodeGen(
-                    LirCodeGenMod.LirCodeGen(comptime_target),
-                    allocator,
-                    lir_store,
-                    layout_store,
-                    entrypoints,
-                    static_data_exports,
-                    proc_specs,
-                    target,
-                    enable_default_platform_runtime,
-                    erased_capture_prefix,
-                    timing,
-                    capture_all_procedures,
-                    link_unit,
-                    capture_excerpts,
-                    capture_code_locations,
-                    emit_object,
-                    executor,
-                    reuse_same_program,
-                );
-            } else {
-                return CompilationError.UnsupportedTarget;
-            }
-        }
+    switch (abiOfOrNull(target) orelse return CompilationError.UnsupportedTarget) {
+        inline .x86_64_sysv, .x86_64_windows, .aarch64_aapcs, .aarch64_apple, .aarch64_windows => |abi| return compileWithCodeGen(
+            LirCodeGenMod.LirCodeGen(abi),
+            allocator,
+            lir_store,
+            layout_store,
+            entrypoints,
+            static_data_exports,
+            proc_specs,
+            target,
+            enable_default_platform_runtime,
+            erased_capture_prefix,
+            timing,
+            capture_all_procedures,
+            link_unit,
+            capture_excerpts,
+            capture_code_locations,
+            emit_object,
+            executor,
+            reuse_same_program,
+        ),
     }
-    return CompilationError.UnsupportedTarget;
 }
 
 // Tests
@@ -2176,7 +2144,7 @@ test "ObjectFileCompiler runtime static-root excerpts own only reachable canonic
         try store.setSourceFiles(files);
         var layouts = try layout.Store.init(allocator, .u64);
         defer layouts.deinit();
-        const CG = LirCodeGenMod.LirCodeGen(target);
+        const CG = LirCodeGenMod.LirCodeGen(abiOf(target));
         var receiver = try CG.init(allocator, &store, &layouts, .{}, .default);
         defer receiver.deinit();
         var procs = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
