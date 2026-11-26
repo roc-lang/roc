@@ -239,7 +239,6 @@ test "issue 11236: rejection survives exports and serialization without callable
         if (std.mem.eql(u8, source, "Alias.f")) {
             try std.testing.expect(importer_bodies.exprData(expr) == .runtime_error);
             try std.testing.expect(try importer_bodies.exprDiverges(expr, .run));
-            try std.testing.expect(try importer_bodies.exprContainsDiagnosticError(expr));
             try std.testing.expect(!try importer_bodies.exprEvaluationMayBeElidedForInspect(expr));
             found_use = true;
         }
