@@ -1863,10 +1863,13 @@ const Decoder = struct {
     }
 
     /// How a decoded worker is used: as the value the encoding stands for,
-    /// or as the scope of another worker it names (a lambda's outer worker,
-    /// an entry's or a thunk's target, an adapter's outer worker), which
-    /// nothing here calls directly, so an imported one binds no interface.
-    const Role = enum { value, scope };
+    /// or as the scope of another worker it names (an entry's or a thunk's
+    /// target, an adapter's outer worker), which nothing here calls
+    /// directly, so an imported one binds no interface, or as a stored
+    /// lambda's owner, whose scope alone the lambda reads: the owner's body
+    /// ran at compile time, and restoring the lambda lowers none of it (a
+    /// constant's entry wrapper owns the lambdas of its value).
+    const Role = enum { value, scope, lambda_owner };
 
     fn workerAs(self: *Decoder, role: Role) Allocator.Error!WorkerId {
         const program = self.program;
@@ -1878,6 +1881,7 @@ const Decoder = struct {
                 return switch (role) {
                     .value => try program.templateWorker(module_index, template_id),
                     .scope => try program.templateScopeWorker(module_index, template_id),
+                    .lambda_owner => try program.templateScope(module_index, template_id),
                 };
             },
             .template_list_int => {
@@ -1886,13 +1890,14 @@ const Decoder = struct {
                 return switch (role) {
                     .value => try program.listIntTemplateWorker(module_index, ref.id, ref.item),
                     .scope => try program.listIntTemplateScopeWorker(module_index, ref.id, ref.item),
+                    .lambda_owner => try program.listIntTemplateScope(module_index, ref.id, ref.item),
                 };
             },
             .lambda => {
                 const owner = try self.siteOwner();
                 const expr = try program.lambdaAt(owner, self.word());
                 const captured_scheme = self.word() != 0;
-                const outer = try self.workerAs(.scope);
+                const outer = try self.workerAs(.lambda_owner);
                 var builder = try body.Builder.init(program, outer);
                 defer builder.deinit();
                 return try builder.storedLambdaWorker(outer, expr, captured_scheme);
