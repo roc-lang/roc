@@ -126,6 +126,9 @@ types: *types_mod.Store,
 cir: *ModuleEnv,
 /// The source region each type variable reports problems at.
 var_regions: VarRegions,
+/// What the type store held when checking began (`sealTypes`), recorded
+/// once checking begins.
+canonical_vars: ?CanonicalVars = null,
 /// List of directly imported  module. Import indexes in CIR refer to this list
 imported_modules: []const *const ModuleEnv,
 /// Module envs whose public APIs are semantically visible through imported checked data.
@@ -1820,6 +1823,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .types = .input,
     .cir = .input,
     .var_regions = .keyed,
+    .canonical_vars = .input,
     .imported_modules = .input,
     .owner_modules = .input,
     .owner_envs_by_identity = .keyed,
@@ -15853,14 +15857,45 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     try self.sealTypes();
 }
 
+/// What the module's type store held when checking began, which sealing
+/// keeps (`sealTypes`).
+const CanonicalVars = struct {
+    /// Canonicalization made every variable below this count: each CIR
+    /// node's own variable and the variables CIR names besides.
+    count: u64,
+    /// The regions of those variables, before checking gave its own
+    /// variables theirs.
+    regions: VarRegions.Mark,
+};
+
 /// Canonicalize and seal the solved type store, flattening the rows the
-/// module's checked output can name (design.md "Sealing").
+/// module's checked output can name and closing the gaps its dead entries
+/// leave (design.md "Sealing"). The variables canonicalization made keep
+/// their numbers; every variable and constraint index checking recorded
+/// outside the store is renumbered with it.
 pub fn sealTypes(self: *Self) std.mem.Allocator.Error!void {
+    const canonical = self.canonical_vars orelse base.invariant("a type store was sealed before checking began", .{});
     try self.types.canonicalizeAndSealReached(self.cir.getIdentStoreConst(), SealRoots{
         .env = self.cir,
         .node_vars = @intCast(@min(self.cir.store.nodes.len(), self.types.len())),
-    });
+    }, canonical.count, SealHolders{ .cir = self.cir, .problems = &self.problems });
+    // Sealing renumbered every variable checking made; their regions served
+    // only checking, which has finished.
+    self.var_regions.truncate(canonical.regions);
 }
+
+/// What checking recorded outside the type store that names its variables
+/// or constraints: the module's side tables and CIR, and the problems.
+/// Snapshots name variables only as their own keys and are not renumbered.
+const SealHolders = struct {
+    cir: *ModuleEnv,
+    problems: *ProblemStore,
+
+    pub fn visitSealHolders(self: SealHolders, visitor: anytype) void {
+        self.cir.visitSealHolders(visitor);
+        self.problems.visitSealHolders(visitor);
+    }
+};
 
 /// Every variable a reader of the module's sealed type store may start from:
 /// each CIR node's own variable, and each variable a node or a recorded
@@ -15966,6 +16001,13 @@ pub fn checkFileLeavingStoreOpen(self: *Self) std.mem.Allocator.Error!void {
 fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    // Canonicalization made every variable the store holds before checking
+    // fills it up to the module's nodes, and checking makes the rest.
+    self.canonical_vars = .{
+        .count = @max(self.types.len(), self.cir.store.regions.len()),
+        .regions = self.var_regions.mark(),
+    };
 
     // Fill in types store up to the size of CIR nodes
     try ensureTypeStoreIsFilled(self);

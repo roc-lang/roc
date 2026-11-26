@@ -120,7 +120,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "value")))
-			(e-dispatch-call (method "run!") (constraint-fn-var 308)
+			(e-dispatch-call (method "run!") (constraint-fn-var 303)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "value"))))
@@ -138,7 +138,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 321)
+			(e-call (constraint-fn-var 313)
 				(e-lookup-local
 					(p-assign (ident "go!")))
 				(e-nominal (nominal "Task")

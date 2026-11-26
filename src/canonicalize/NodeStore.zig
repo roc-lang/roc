@@ -2980,6 +2980,43 @@ pub fn replaceExprWithStructuralHash(
     store.nodes.set(node_idx, node);
 }
 
+/// Hand every type variable checking recorded in this store to `visitor`
+/// (`types.Store.canonicalizeAndSeal`): the checker relations of call,
+/// dispatch and method-equality nodes, including nodes a runtime error
+/// replaced, and the literal and interpolation side tables.
+pub fn visitSealHolders(store: *NodeStore, visitor: anytype) void {
+    visitNodeSealHolders(store.nodes.field(.tag), store.nodes.field(.payload), visitor);
+    visitNodeSealHolders(store.replaced_source_nodes.field(.tag), store.replaced_source_nodes.field(.payload), visitor);
+    for (store.literal_dispatch_plans.items()) |*plan| {
+        visitor.rawVar(&plan.target_var);
+        visitor.optionalVar(&plan.fn_var);
+    }
+    for (store.literal_pattern_contexts.items()) |*context| visitor.optionalVar(&context.equality_fn_var);
+    for (store.interpolation_data.items()) |*data| {
+        inline for (.{ "constraint_fn_var", "assembler_fn_var", "dispatcher_var", "item_var", "iterator_var", "seed_list_var", "iter_fn_var", "append_fn_var" }) |name| {
+            visitor.optionalVar(&@field(data, name));
+        }
+    }
+}
+
+fn visitNodeSealHolders(tags: []const Node.Tag, payloads: []Node.Payload, visitor: anytype) void {
+    // Only these five of the many node tags hold a variable.
+    for (tags, payloads) |tag, *payload| {
+        if (tag == .expr_call) {
+            visitor.optionalRawVar(&payload.expr_call.constraint_fn_var);
+        } else if (tag == .expr_dispatch_call) {
+            visitor.rawVar(&payload.expr_dispatch_call.constraint_fn_var);
+        } else if (tag == .expr_method_eq) {
+            visitor.rawVar(&payload.expr_method_eq.constraint_fn_var);
+        } else if (tag == .expr_type_dispatch_call) {
+            visitor.rawVar(&payload.expr_type_dispatch_call.constraint_fn_var);
+        } else if (tag == .expr_type_dispatch_call_dispatcher) {
+            visitor.rawVar(&payload.expr_type_dispatch_call.owner);
+            visitor.rawVar(&payload.expr_type_dispatch_call.constraint_fn_var);
+        }
+    }
+}
+
 /// Replaces an existing expression with a call node carrying its checker relation.
 pub fn replaceExprWithCallConstraint(
     store: *NodeStore,

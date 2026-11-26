@@ -96,7 +96,7 @@ NO CHANGE
 			(args
 				(p-underscore)
 				(p-underscore))
-			(e-call (constraint-fn-var 252)
+			(e-call (constraint-fn-var 251)
 				(e-lookup-local
 					(p-assign (ident "helper")))
 				(e-num (value "5"))))
