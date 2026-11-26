@@ -11469,7 +11469,9 @@ fn seedUrlPackage(io: std.Io, allocator: Allocator, cache_root: []const u8, hash
 
 /// A program of vector operations and a string pattern builds for wasm32 and
 /// wasm32v1 at every optimization level, each module returns the same
-/// value, and every wasm32v1 module uses nothing past WebAssembly 1.0.
+/// value, every wasm32v1 module uses nothing past WebAssembly 1.0, and the dev
+/// (wasm backend) and speed (LLVM) wasm32 modules lower `U8x16.table_lookup`
+/// to `i8x16.swizzle`.
 fn customWasm32v1VectorLowering(
     io: std.Io,
     allocator: Allocator,
@@ -11477,7 +11479,7 @@ fn customWasm32v1VectorLowering(
     timer: *harness.Timer,
     timeout_ms: u64,
 ) ?TestResult {
-    const expected = "(U8x16(144, 144, 144, 2, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144), U8x16(255, 255, 255, 2, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255), U16x8(24464, 24464, 24464, 24464, 24464, 24464, 24464, 24464), 1, \"width is 16\")";
+    const expected = "(U8x16(144, 144, 144, 2, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144), U8x16(255, 255, 255, 2, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255), U16x8(24464, 24464, 24464, 24464, 24464, 24464, 24464, 24464), 1, U8x16(0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1), \"width is 16\")";
     for ([_][]const u8{ "wasm32", "wasm32v1" }) |target_name| {
         for ([_][]const u8{ "dev", "size", "speed" }) |opt| {
             const output_path = std.fmt.allocPrint(allocator, "{s}/vector_{s}_{s}.wasm", .{ env.dirs.work_dir, target_name, opt }) catch |err|
@@ -11502,6 +11504,11 @@ fn customWasm32v1VectorLowering(
             if (validateWasmOutput(io, allocator, timer, output_path)) |failure| return failure;
             if (std.mem.eql(u8, target_name, "wasm32v1")) {
                 if (validateWasm10Output(io, allocator, timer, output_path)) |failure| return failure;
+            } else if (!std.mem.eql(u8, opt, "size")) {
+                // After linking, Binaryen's size pipeline inlines the host's
+                // constant seed and folds the result to a `v128.const`, so only
+                // dev and speed keep a swizzle.
+                if (validateWasmSwizzleOutput(io, allocator, timer, output_path)) |failure| return failure;
             }
             var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
                 return customFailure(allocator, timer, "failed to load the {s} {s} module: {}", .{ target_name, opt, err });
@@ -14609,6 +14616,27 @@ fn validateWasm10Output(
         return customFailure(allocator, timer, "{s} is not WebAssembly 1.0: {s}", .{ path, violation });
     }
     return null;
+}
+
+/// Fail unless the wasm module at `path` contains an `i8x16.swizzle`.
+fn validateWasmSwizzleOutput(
+    io: std.Io,
+    allocator: Allocator,
+    timer: *harness.Timer,
+    path: []const u8,
+) ?TestResult {
+    const wasm_bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read wasm output {s}: {}", .{ path, err });
+    defer allocator.free(wasm_bytes);
+    var module_def = bytebox.createModuleDefinition(allocator, .{ .debug_name = "cli_wasm_swizzle_output" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create wasm validator: {}", .{err});
+    defer module_def.destroy();
+    module_def.decode(wasm_bytes) catch |err|
+        return customFailure(allocator, timer, "generated invalid wasm {s}: {}", .{ path, err });
+    for (module_def.code.instructions.items) |instruction| {
+        if (instruction.opcode == .I8x16_Swizzle) return null;
+    }
+    return customFailure(allocator, timer, "{s} has no i8x16.swizzle", .{path});
 }
 
 fn wasm10ValType(vt: bytebox.ValType) bool {

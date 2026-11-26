@@ -7099,6 +7099,13 @@ pub const MonoLlvmCodeGen = struct {
         return self.target.cpu.arch == .aarch64 or self.target.cpu.arch == .aarch64_be;
     }
 
+    /// Whether this is a wasm32 target that lowers SIMD through simd128.
+    ///
+    /// `wasm32v1` targets WebAssembly 1.0, which has no vector instructions.
+    fn isWasmSimd(self: *const MonoLlvmCodeGen) bool {
+        return self.target.cpu.arch == .wasm32 and std.Target.wasm.featureSetHas(self.target.cpu.features, .simd128);
+    }
+
     fn simdVectorForLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) ?layout.Vector {
         const value_layout = self.layoutValue(layout_idx);
         if (value_layout.tag != .scalar or value_layout.getScalar().tag != .vector) return null;
@@ -7719,7 +7726,7 @@ pub const MonoLlvmCodeGen = struct {
         }
         // simd128's swizzle zeroes a lane whose index is 16 or more, which is
         // exactly the semantics this op promises.
-        if (self.target.cpu.arch == .wasm32 and std.Target.wasm.featureSetHas(self.target.cpu.features, .simd128)) {
+        if (self.isWasmSimd()) {
             try self.storeSimdLocal(target, try self.callIntrinsic("llvm.wasm.swizzle", vector_ty, &.{ vector_ty, vector_ty }, &.{ table, indices }));
             return;
         }
@@ -14712,7 +14719,7 @@ pub const MonoLlvmCodeGen = struct {
         } else if (arch == .wasm32) {
             // WebAssembly 1.0 has no vector values, so a target without
             // simd128 passes vectors by lane, as the other backends do.
-            return if (std.Target.wasm.featureSetHas(self.target.cpu.features, .simd128)) .wasm32 else .wasm32v1;
+            return if (self.isWasmSimd()) .wasm32 else .wasm32v1;
         } else if (arch == .wasm64) {
             return .wasm64;
         } else {
