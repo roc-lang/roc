@@ -5570,7 +5570,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
         const all_stmts = self.store.sliceStatements(self.all_statements);
         var has_type_decl = false;
         for (all_stmts) |stmt_idx| {
-            const tag = std.meta.activeTag(self.store.getStatement(stmt_idx));
+            const tag = self.store.statementKind(stmt_idx);
             if (tag == .s_alias_decl or tag == .s_nominal_decl or tag == .s_where_alias_decl) {
                 has_type_decl = true;
                 break;
@@ -5583,9 +5583,9 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
             const type_decls_attrs = tree.beginNode();
 
             for (all_stmts) |stmt_idx| {
-                const stmt = self.store.getStatement(stmt_idx);
-                switch (stmt) {
-                    .s_alias_decl => |alias| {
+                switch (self.store.statementKind(stmt_idx)) {
+                    .s_alias_decl => {
+                        const alias = self.store.statementView(stmt_idx).s_alias_decl.decode();
                         const stmt_begin = try tree.beginNamedNode("alias");
 
                         // Add region info for the statement
@@ -5609,7 +5609,8 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
 
                         try tree.endNode(stmt_begin, stmt_attrs);
                     },
-                    .s_where_alias_decl => |where_alias| {
+                    .s_where_alias_decl => {
+                        const where_alias = self.store.statementView(stmt_idx).s_where_alias_decl.decode();
                         const stmt_begin = try tree.beginNamedNode("where-alias");
 
                         const stmt_region = self.store.getStatementRegion(stmt_idx);
@@ -5623,7 +5624,8 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                         try header.pushToSExprTree(self, tree, where_alias.header);
                         try tree.endNode(stmt_begin, stmt_attrs);
                     },
-                    .s_nominal_decl => |nominal| {
+                    .s_nominal_decl => {
+                        const nominal = self.store.statementView(stmt_idx).s_nominal_decl.decode();
                         const stmt_begin = try tree.beginNamedNode("nominal");
 
                         // Add region info for the statement

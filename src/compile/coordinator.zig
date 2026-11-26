@@ -9724,9 +9724,8 @@ fn compileForReuseWithStrategy(allocator: Allocator, cache_dir: []const u8, app_
             .def => |def| def,
             .hoisted, .expr, .statement, .required_binding, .literal, .literal_argument => continue,
         };
-        const pattern = env.store.getPattern(env.store.getDef(def).pattern);
-        if (pattern != .assign) continue;
-        try names.append(allocator, try allocator.dupe(u8, env.getIdent(pattern.assign.ident)));
+        const pattern = env.store.patternAs(env.store.getDef(def).pattern, .assign) orelse continue;
+        try names.append(allocator, try allocator.dupe(u8, env.getIdent(pattern.ident)));
         var stored: ?i64 = null;
         if (root.payload == .const_node) {
             var node = app.const_store.get(root.payload.const_node);
@@ -10225,8 +10224,8 @@ test "app artifact records platform requirement solutions from checking" {
     try std.testing.expectEqualStrings("prog", app_artifact.canonical_names.exportNameText(top_level.source_name));
 
     // The solved requirement type is the record the app provided.
-    const solved_payload = app_artifact.checked_types.payload(solution.solved_root);
-    try std.testing.expect(solved_payload == .record);
+    const solved_payload_kind = app_artifact.checked_types.payloadTag(solution.solved_root);
+    try std.testing.expect(solved_payload_kind == .record);
 
     // Exactly one identity variable (the for-clause `model`), solved to the
     // app's `Model` alias.
@@ -10539,8 +10538,8 @@ test "platform requirement relation specializes identity reached through app ali
     try std.testing.expectEqual(@as(usize, 1), relations.len);
 
     const relation = relations[0];
-    const payload = platform_artifact.checked_types.payload(relation.requested_source_ty_payload);
-    try std.testing.expect(payload != .pending);
+    const payload_kind = platform_artifact.checked_types.payloadTag(relation.requested_source_ty_payload);
+    try std.testing.expect(payload_kind != .pending);
 }
 
 test "diagnostic-only mode publishes the platform root during checking" {
@@ -14679,8 +14678,8 @@ test "Boxy checked constants share across checkouts and survive unrelated applic
             const root_id = root: for (artifact.compile_time_roots.roots.items()) |root| {
                 if (root.source != .def) continue;
                 const env = artifact.moduleEnvConst();
-                const pattern = env.store.getPattern(env.store.getDef(root.source.def).pattern);
-                if (pattern == .assign and std.mem.eql(u8, env.getIdent(pattern.assign.ident), "count")) break :root root.id;
+                const pattern = env.store.patternAs(env.store.getDef(root.source.def).pattern, .assign);
+                if (pattern != null and std.mem.eql(u8, env.getIdent(pattern.?.ident), "count")) break :root root.id;
             } else return error.TestUnexpectedResult;
             const cached = artifact.module_env == .cached_entry;
             const stored = artifact.compile_time_roots.root(root_id).payload == .const_node;

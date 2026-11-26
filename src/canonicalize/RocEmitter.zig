@@ -369,7 +369,7 @@ fn pushUnaryReceiverFrames(
 fn fieldAccessPathReceiverNeedsParens(self: *Self, receiver_idx: Expr.Idx) bool {
     var current_idx = receiver_idx;
     while (true) {
-        switch (self.module_env.store.getExpr(current_idx)) {
+        switch (self.module_env.store.exprKind(current_idx)) {
             .e_num,
             .e_frac_f32,
             .e_frac_f64,
@@ -397,16 +397,16 @@ fn fieldAccessPathReceiverNeedsParens(self: *Self, receiver_idx: Expr.Idx) bool 
             .e_for,
             => return true,
 
-            .e_dispatch_call => |call| return switch (call.surface_origin) {
+            .e_dispatch_call => return switch (self.module_env.store.exprView(current_idx).e_dispatch_call.get(.surface_origin)) {
                 .binop, .unary_minus => true,
                 .method_call => false,
             },
-            .e_call => |call| return call.called_via == .unary_op,
+            .e_call => return self.module_env.store.exprView(current_idx).e_call.get(.called_via) == .unary_op,
 
             // Nominal nodes emit only their transparent backing expression,
             // so iteratively peel them before classifying surface precedence.
-            .e_nominal => |nominal| current_idx = nominal.backing_expr,
-            .e_nominal_external => |nominal| current_idx = nominal.backing_expr,
+            .e_nominal => current_idx = self.module_env.store.exprView(current_idx).e_nominal.get(.backing_expr),
+            .e_nominal_external => current_idx = self.module_env.store.exprView(current_idx).e_nominal_external.get(.backing_expr),
             .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached Roc source emission", .{}),
 
             .e_str_segment,
@@ -603,68 +603,84 @@ fn emitExprFrame(
     frames: *std.ArrayList(EmitFrame),
     allocator: std.mem.Allocator,
 ) EmitError!void {
-    const expr = self.module_env.store.getExpr(expr_idx);
-    switch (expr) {
-        .e_num => |num| try self.emitIntValue(num.value),
-        .e_frac_f32 => |frac| try self.output.print(self.allocator, "{d}f32", .{frac.value}),
-        .e_frac_f64 => |frac| try self.output.print(self.allocator, "{d}f64", .{frac.value}),
-        .e_dec => |dec| try self.emitScaledDec(dec.value.num, false),
-        .e_dec_small => |small| try self.emitSmallDec(small.value),
+    switch (self.module_env.store.exprKind(expr_idx)) {
+        .e_num => try self.emitIntValue(self.module_env.store.exprView(expr_idx).e_num.get(.value)),
+        .e_frac_f32 => try self.output.print(self.allocator, "{d}f32", .{self.module_env.store.exprView(expr_idx).e_frac_f32.get(.value)}),
+        .e_frac_f64 => try self.output.print(self.allocator, "{d}f64", .{self.module_env.store.exprView(expr_idx).e_frac_f64.get(.value)}),
+        .e_dec => try self.emitScaledDec(self.module_env.store.exprView(expr_idx).e_dec.get(.value).num, false),
+        .e_dec_small => try self.emitSmallDec(self.module_env.store.exprView(expr_idx).e_dec_small.get(.value)),
         .e_num_from_numeral => try self.emitRecordedNumeral(ModuleEnv.nodeIdxFrom(expr_idx), null),
-        .e_typed_int => |typed| {
+        .e_typed_int => {
+            const typed = self.module_env.store.exprView(expr_idx).e_typed_int.decode();
             try self.emitIntValue(typed.value);
             try self.output.print(self.allocator, ".{s}", .{self.module_env.getIdent(typed.type_name)});
         },
-        .e_typed_frac => |typed| {
+        .e_typed_frac => {
+            const typed = self.module_env.store.exprView(expr_idx).e_typed_frac.decode();
             try self.emitScaledDec(typed.value.toI128(), true);
             try self.output.print(self.allocator, ".{s}", .{self.module_env.getIdent(typed.type_name)});
         },
-        .e_typed_num_from_numeral => |typed| try self.emitRecordedNumeral(ModuleEnv.nodeIdxFrom(expr_idx), typed.type_name),
-        .e_str_segment => |seg| try self.emitStringLiteral(self.module_env.common.getString(seg.literal)),
-        .e_bytes_literal => |bytes| try self.output.print(self.allocator, "<bytes:{d}>", .{self.module_env.common.getString(bytes.literal).len}),
-        .e_str => |str| {
+        .e_typed_num_from_numeral => try self.emitRecordedNumeral(ModuleEnv.nodeIdxFrom(expr_idx), self.module_env.store.exprView(expr_idx).e_typed_num_from_numeral.get(.type_name)),
+        .e_str_segment => try self.emitStringLiteral(self.module_env.common.getString(self.module_env.store.exprView(expr_idx).e_str_segment.get(.literal))),
+        .e_bytes_literal => bytes_blk: {
+            const bytes = self.module_env.store.exprView(expr_idx).e_bytes_literal.decode();
+            break :bytes_blk try self.output.print(self.allocator, "<bytes:{d}>", .{self.module_env.common.getString(bytes.literal).len});
+        },
+        .e_str => {
+            const str = self.module_env.store.exprView(expr_idx).e_str.decode();
             const segments = self.module_env.store.sliceExpr(str.span);
             try self.write("\"");
             for (segments) |segment_idx| {
-                const segment = self.module_env.store.getExpr(segment_idx);
-                std.debug.assert(segment == .e_str_segment);
-                try self.emitStringBytes(self.module_env.common.getString(segment.e_str_segment.literal));
+                const segment = self.module_env.store.exprAs(segment_idx, .e_str_segment);
+                std.debug.assert(segment != null);
+                try self.emitStringBytes(self.module_env.common.getString(segment.?.literal));
             }
             try self.write("\"");
         },
-        .e_lookup_local => |lookup| {
+        .e_lookup_local => {
+            const lookup = self.module_env.store.exprView(expr_idx).e_lookup_local.decode();
             if (self.capture_renames.get(lookup.pattern_idx)) |renamed| {
                 try self.emitIdent(renamed);
             } else {
                 try frames.append(allocator, .{ .pattern = lookup.pattern_idx });
             }
         },
-        .e_lookup_external => |ext| try self.emitIdent(self.module_env.getIdent(ext.ident_idx)),
-        .e_lookup_associated_local => |lookup| try self.output.print(
-            self.allocator,
-            "{s}.{s}",
-            .{ self.module_env.getIdent(lookup.type_ident), self.module_env.getIdent(lookup.item_ident) },
-        ),
-        .e_lookup_associated => |lookup| try self.output.print(
-            self.allocator,
-            "{s}.{s}",
-            .{ self.module_env.getIdent(lookup.type_ident), self.module_env.getIdent(lookup.item_ident) },
-        ),
-        .e_lookup_associated_resolved => |lookup| try self.emitIdent(self.module_env.getIdent(lookup.source_ident)),
-        .e_list => |list| {
+        .e_lookup_external => try self.emitIdent(self.module_env.getIdent(self.module_env.store.exprView(expr_idx).e_lookup_external.get(.ident_idx))),
+        .e_lookup_associated_local => lookup_blk: {
+            const lookup = self.module_env.store.exprView(expr_idx).e_lookup_associated_local.decode();
+            break :lookup_blk try self.output.print(
+                self.allocator,
+                "{s}.{s}",
+                .{ self.module_env.getIdent(lookup.type_ident), self.module_env.getIdent(lookup.item_ident) },
+            );
+        },
+        .e_lookup_associated => lookup_blk: {
+            const lookup = self.module_env.store.exprView(expr_idx).e_lookup_associated.decode();
+            break :lookup_blk try self.output.print(
+                self.allocator,
+                "{s}.{s}",
+                .{ self.module_env.getIdent(lookup.type_ident), self.module_env.getIdent(lookup.item_ident) },
+            );
+        },
+        .e_lookup_associated_resolved => try self.emitIdent(self.module_env.getIdent(self.module_env.store.exprView(expr_idx).e_lookup_associated_resolved.get(.source_ident))),
+        .e_list => {
+            const list = self.module_env.store.exprView(expr_idx).e_list.decode();
             try self.write("[");
             try pushExprList(frames, allocator, self.module_env.store.sliceExpr(list.elems), "]", ", ");
         },
         .e_empty_list => try self.write("[]"),
-        .e_tuple => |tuple| {
+        .e_tuple => {
+            const tuple = self.module_env.store.exprView(expr_idx).e_tuple.decode();
             try self.write("(");
             try pushExprList(frames, allocator, self.module_env.store.sliceExpr(tuple.elems), ")", ", ");
         },
-        .e_tuple_access => |tuple_access| {
+        .e_tuple_access => {
+            const tuple_access = self.module_env.store.exprView(expr_idx).e_tuple_access.decode();
             try frames.append(allocator, .{ .write = try std.fmt.allocPrint(allocator, ".{d}", .{tuple_access.elem_index}) });
             try frames.append(allocator, .{ .expr = tuple_access.tuple });
         },
-        .e_if => |if_expr| {
+        .e_if => {
+            const if_expr = self.module_env.store.exprView(expr_idx).e_if.decode();
             try frames.append(allocator, .{ .expr = if_expr.final_else });
             try frames.append(allocator, .{ .write = " else " });
             const branches = self.module_env.store.sliceIfBranches(if_expr.branches);
@@ -678,7 +694,8 @@ fn emitExprFrame(
                 try frames.append(allocator, .{ .write = if (i > 0) " else if (" else "if (" });
             }
         },
-        .e_call => |call| {
+        .e_call => {
+            const call = self.module_env.store.exprView(expr_idx).e_call.decode();
             if (call.called_via == .unary_op) {
                 const args = self.module_env.store.sliceExpr(call.args);
                 std.debug.assert(args.len == 1);
@@ -690,7 +707,8 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .write = "(" });
             try self.pushCallCalleeFrames(call.func, frames, allocator);
         },
-        .e_record => |record| {
+        .e_record => {
+            const record = self.module_env.store.exprView(expr_idx).e_record.decode();
             try self.write("{ ");
             try frames.append(allocator, .{ .write = " }" });
             const fields = self.module_env.store.sliceRecordFields(record.fields);
@@ -707,7 +725,8 @@ fn emitExprFrame(
             }
         },
         .e_empty_record => try self.write("{}"),
-        .e_block => |block| {
+        .e_block => {
+            const block = self.module_env.store.exprView(expr_idx).e_block.decode();
             try self.write("{\n");
             self.indent_level += 1;
             try frames.append(allocator, .{ .write = "}" });
@@ -725,7 +744,8 @@ fn emitExprFrame(
                 try frames.append(allocator, .indent);
             }
         },
-        .e_tag => |tag| {
+        .e_tag => {
+            const tag = self.module_env.store.exprView(expr_idx).e_tag.decode();
             try self.emitTagName(self.module_env.getIdent(tag.name));
             const args = self.module_env.store.sliceExpr(tag.args);
             if (args.len > 0) {
@@ -733,9 +753,10 @@ fn emitExprFrame(
                 try pushExprList(frames, allocator, args, ")", ", ");
             }
         },
-        .e_zero_argument_tag => |tag| try self.emitTagName(self.module_env.getIdent(tag.name)),
-        .e_closure => |closure| try frames.append(allocator, .{ .expr = closure.lambda_idx }),
-        .e_lambda => |lambda| {
+        .e_zero_argument_tag => try self.emitTagName(self.module_env.getIdent(self.module_env.store.exprView(expr_idx).e_zero_argument_tag.get(.name))),
+        .e_closure => try frames.append(allocator, .{ .expr = self.module_env.store.exprView(expr_idx).e_closure.get(.lambda_idx) }),
+        .e_lambda => {
+            const lambda = self.module_env.store.exprView(expr_idx).e_lambda.decode();
             try self.write("|");
             const args = self.module_env.store.slicePatterns(lambda.args);
             try frames.append(allocator, .{ .expr = lambda.body });
@@ -747,29 +768,34 @@ fn emitExprFrame(
                 if (i > 0) try frames.append(allocator, .{ .write = ", " });
             }
         },
-        .e_binop => |binop| {
+        .e_binop => {
+            const binop = self.module_env.store.exprView(expr_idx).e_binop.decode();
             try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = binop.rhs, .outer_op = binop.op, .side = .right } });
             try frames.append(allocator, .{ .write = " " });
             try frames.append(allocator, .{ .write = binopToStr(binop.op) });
             try frames.append(allocator, .{ .write = " " });
             try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = binop.lhs, .outer_op = binop.op, .side = .left } });
         },
-        .e_unary_minus => |unary| {
+        .e_unary_minus => {
+            const unary = self.module_env.store.exprView(expr_idx).e_unary_minus.decode();
             try self.pushUnaryReceiverFrames(unary.expr, frames, allocator);
             try frames.append(allocator, .{ .write = "-" });
         },
-        .e_field_access => |field_access| {
+        .e_field_access => {
+            const field_access = self.module_env.store.exprView(expr_idx).e_field_access.decode();
             try frames.append(allocator, .{ .field_access_suffix = field_access.segments });
             try self.pushFieldAccessPathReceiverFrames(field_access.receiver, frames, allocator);
         },
-        .e_method_call => |method_call| {
+        .e_method_call => {
+            const method_call = self.module_env.store.exprView(expr_idx).e_method_call.decode();
             try pushExprList(frames, allocator, self.module_env.store.sliceExpr(method_call.args), ")", ", ");
             try frames.append(allocator, .{ .write = "(" });
             try frames.append(allocator, .{ .write = self.module_env.getIdent(method_call.method_name) });
             try frames.append(allocator, .{ .write = "." });
             try frames.append(allocator, .{ .expr = method_call.receiver });
         },
-        .e_dispatch_call => |method_call| {
+        .e_dispatch_call => {
+            const method_call = self.module_env.store.exprView(expr_idx).e_dispatch_call.decode();
             // Re-emit in the surface form the dispatch was desugared from
             // (see `SurfaceOrigin`): printing a desugared `+` back as
             // `.plus()` would weaken the re-checked program.
@@ -796,32 +822,37 @@ fn emitExprFrame(
                 },
             }
         },
-        .e_interpolation => |interpolation| {
+        .e_interpolation => {
+            const interpolation = self.module_env.store.exprView(expr_idx).e_interpolation.decode();
             try frames.append(allocator, .{ .write = ")" });
             try pushExprList(frames, allocator, self.module_env.store.sliceExpr(interpolation.parts), "]", ", ");
             try frames.append(allocator, .{ .write = ", [" });
             try frames.append(allocator, .{ .expr = interpolation.first });
             try frames.append(allocator, .{ .write = "<interpolation>(" });
         },
-        .e_structural_eq => |eq| {
+        .e_structural_eq => {
+            const eq = self.module_env.store.exprView(expr_idx).e_structural_eq.decode();
             const op: Expr.Binop.Op = if (eq.negated) .ne else .eq;
             try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = eq.rhs, .outer_op = op, .side = .right } });
             try frames.append(allocator, .{ .write = if (eq.negated) " != " else " == " });
             try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = eq.lhs, .outer_op = op, .side = .left } });
         },
-        .e_structural_hash => |h| {
+        .e_structural_hash => {
+            const h = self.module_env.store.exprView(expr_idx).e_structural_hash.decode();
             try frames.append(allocator, .{ .write = ")" });
             try frames.append(allocator, .{ .expr = h.hasher });
             try frames.append(allocator, .{ .write = ".to_hash(" });
             try frames.append(allocator, .{ .expr = h.value });
         },
-        .e_method_eq => |eq| {
+        .e_method_eq => {
+            const eq = self.module_env.store.exprView(expr_idx).e_method_eq.decode();
             const op: Expr.Binop.Op = if (eq.negated) .ne else .eq;
             try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = eq.rhs, .outer_op = op, .side = .right } });
             try frames.append(allocator, .{ .write = if (eq.negated) " != " else " == " });
             try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = eq.lhs, .outer_op = op, .side = .left } });
         },
-        .e_type_method_call => |method_call| {
+        .e_type_method_call => {
+            const method_call = self.module_env.store.exprView(expr_idx).e_type_method_call.decode();
             try pushExprList(frames, allocator, self.module_env.store.sliceExpr(method_call.args), ")", ", ");
             try frames.append(allocator, .{ .write = "(" });
             try frames.append(allocator, .{ .write = self.module_env.getIdent(method_call.method_name) });
@@ -829,7 +860,8 @@ fn emitExprFrame(
             const alias_str = try std.fmt.allocPrint(allocator, "__type_dispatch_{d}__", .{@backingInt(method_call.type_dispatch_stmt)});
             try frames.append(allocator, .{ .write = alias_str });
         },
-        .e_type_dispatch_call => |method_call| {
+        .e_type_dispatch_call => {
+            const method_call = self.module_env.store.exprView(expr_idx).e_type_dispatch_call.decode();
             try pushExprList(frames, allocator, self.module_env.store.sliceExpr(method_call.args), ")", ", ");
             try frames.append(allocator, .{ .write = "(" });
             try frames.append(allocator, .{ .write = self.module_env.getIdent(method_call.method_name) });
@@ -841,25 +873,32 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .write = alias_str });
         },
         .e_runtime_error => try self.write("<runtime_error>"),
-        .e_crash => |crash| try self.output.print(self.allocator, "crash \"{s}\"", .{self.module_env.common.getString(crash.msg)}),
-        .e_dbg => |dbg| {
+        .e_crash => crash_blk: {
+            const crash = self.module_env.store.exprView(expr_idx).e_crash.decode();
+            break :crash_blk try self.output.print(self.allocator, "crash \"{s}\"", .{self.module_env.common.getString(crash.msg)});
+        },
+        .e_dbg => {
+            const dbg = self.module_env.store.exprView(expr_idx).e_dbg.decode();
             try frames.append(allocator, .{ .expr = dbg.expr });
             try frames.append(allocator, .{ .write = "dbg " });
         },
         .e_expect_err => try self.write("<expect_err>"),
-        .e_expect => |expect| {
+        .e_expect => {
+            const expect = self.module_env.store.exprView(expr_idx).e_expect.decode();
             try frames.append(allocator, .{ .expr = expect.body });
             try frames.append(allocator, .{ .write = "expect " });
         },
         .e_ellipsis => try self.write("..."),
         .e_anno_only => try self.write("<anno_only>"),
         .e_derived_method => try self.write("<derived_method>"),
-        .e_return => |ret| {
+        .e_return => {
+            const ret = self.module_env.store.exprView(expr_idx).e_return.decode();
             try frames.append(allocator, .{ .expr = ret.expr });
             try frames.append(allocator, .{ .write = "return " });
         },
         .e_break => try self.write("break"),
-        .e_match => |match| {
+        .e_match => {
+            const match = self.module_env.store.exprView(expr_idx).e_match.decode();
             try self.write("match ");
             try frames.append(allocator, .{ .write = "}" });
             try frames.append(allocator, .indent);
@@ -889,11 +928,12 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .write = " {\n" });
             try frames.append(allocator, .{ .expr = match.cond });
         },
-        .e_nominal => |nominal| try frames.append(allocator, .{ .expr = nominal.backing_expr }),
-        .e_nominal_external => |nominal| try frames.append(allocator, .{ .expr = nominal.backing_expr }),
+        .e_nominal => try frames.append(allocator, .{ .expr = self.module_env.store.exprView(expr_idx).e_nominal.get(.backing_expr) }),
+        .e_nominal_external => try frames.append(allocator, .{ .expr = self.module_env.store.exprView(expr_idx).e_nominal_external.get(.backing_expr) }),
         .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached Roc source emission", .{}),
         .e_lookup_required => try self.write("<required>"),
-        .e_for => |for_expr| {
+        .e_for => {
+            const for_expr = self.module_env.store.exprView(expr_idx).e_for.decode();
             try frames.append(allocator, .{ .expr = for_expr.body });
             try frames.append(allocator, .{ .write = " " });
             try frames.append(allocator, .{ .expr = for_expr.expr });
@@ -905,7 +945,7 @@ fn emitExprFrame(
             } });
         },
         .e_hosted_lambda => try self.write("<hosted_lambda>"),
-        .e_run_low_level => |run_ll| try self.output.print(self.allocator, "<run_low_level: {s}>", .{@tagName(run_ll.op)}),
+        .e_run_low_level => try self.output.print(self.allocator, "<run_low_level: {s}>", .{@tagName(self.module_env.store.exprView(expr_idx).e_run_low_level.get(.op))}),
     }
 }
 
@@ -1027,9 +1067,9 @@ fn emitPatternRecordFieldFrame(
     try self.write(name);
     switch (destruct.kind) {
         .Required => |pat_idx| {
-            const inner_pat = self.module_env.store.getPattern(pat_idx);
-            const shorthand = if (inner_pat == .assign)
-                std.mem.eql(u8, name, self.module_env.getIdent(inner_pat.assign.ident))
+            const inner_pat = self.module_env.store.patternAs(pat_idx, .assign);
+            const shorthand = if (inner_pat != null)
+                std.mem.eql(u8, name, self.module_env.getIdent(inner_pat.?.ident))
             else
                 false;
             if (!shorthand) {

@@ -2311,7 +2311,7 @@ const ComponentDominance = struct {
             for (successors.items) |next| try edges.append(gpa, .{ .from = @intCast(index), .to = self.denseOf(next) });
         }
         for (procs) |proc| {
-            const body = store.getProcSpec(@fromBackingInt(@intCast(proc))).arcBody() orelse continue;
+            const body = store.getProcSpecImmediate(@fromBackingInt(@intCast(proc))).arcBody() orelse continue;
             try edges.append(gpa, .{ .from = entry, .to = self.denseOf(body) });
         }
         return StatementDominance.initGraph(gpa, stmts.items.len + 1, entry, edges.items);
@@ -4378,7 +4378,7 @@ pub fn compute(
                 if (!joins_ready[owner]) {
                     joins_ready[owner] = true;
                     try collectProcJoinBodies(store, solution.procStatements(@fromBackingInt(@intCast(owner))), &proc_joins[owner]);
-                    const proc_body = store.getProcSpec(@fromBackingInt(@intCast(owner))).body.get().?;
+                    const proc_body = store.getProcSpecImmediate(@fromBackingInt(@intCast(owner))).body.get().?;
                     proc_graphs[owner] = try future_fields.buildProcGraph(gpa, store, &.{proc_body}, &proc_joins[owner]);
                 }
                 const join_bodies = &proc_joins[owner];

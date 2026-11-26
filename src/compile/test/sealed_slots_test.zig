@@ -78,7 +78,7 @@ test "a template's stored sealed slots match the independent scalar oracle" {
     };
     const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
     const templates = &artifact.checked_procedure_templates;
-    var walk = CheckedArtifact.SealedSchemeVarWalk.init(gpa, artifact.checked_types.view());
+    var walk = CheckedArtifact.SealedSchemeVarWalk.init(gpa, &artifact.checked_types.view());
     defer walk.deinit();
 
     // The production batch and the scalar oracle must agree on every actual
