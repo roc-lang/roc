@@ -419,7 +419,7 @@ test "a function value a constant holds lowers the same whether evaluated or rea
     );
 }
 
-test "strategy root readiness preserves nested callable representations across a shared cache" {
+test "each strategy keeps nested callable representations in its own cache entry" {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
@@ -465,16 +465,17 @@ test "strategy root readiness preserves nested callable representations across a
     try std.testing.expect(same_lss.cache_hits > 0);
     try std.testing.expectEqualDeep(first.first_lss_function, same_lss.first_lss_function);
 
+    // Each strategy files its own checked entry (a stored image is at its
+    // writer's layouts), so the Boxy build checks cold beside the LSS
+    // entry, stores Boxy function values and no LSS ones, and its warm
+    // build reads them back.
     var boxy_target = dev_target;
     boxy_target.specialization_strategy = .boxy;
     const boxy = try buildWithCacheAtTarget(gpa, cache, app, boxy_target);
     defer gpa.free(boxy.program);
-    try std.testing.expect(boxy.cache_hits > 0);
     try std.testing.expect(boxy.boxy_functions > 0);
     try std.testing.expect(boxy.first_boxy_function != null);
     try std.testing.expectEqual(@as(usize, 0), boxy.pending_boxy_functions);
-    try std.testing.expectEqualDeep(first.first_lss_function, boxy.first_lss_function);
-    try std.testing.expectEqual(first.lss_functions, boxy.lss_functions);
     try std.testing.expectEqual(first.debug_observations, boxy.debug_observations);
     // These are always-active RF assertions over the emitted immutable graph,
     // not an expectation that a debug invariant happens to catch the bug.
@@ -485,14 +486,13 @@ test "strategy root readiness preserves nested callable representations across a
     defer gpa.free(same_boxy.program);
     try std.testing.expect(same_boxy.cache_hits > 0);
     try std.testing.expectEqualDeep(boxy.first_boxy_function, same_boxy.first_boxy_function);
-    try std.testing.expectEqualDeep(first.first_lss_function, same_boxy.first_lss_function);
     try std.testing.expectEqual(@as(usize, 0), same_boxy.invalid_static_parts);
 
+    // The LSS entry is untouched by the Boxy builds.
     const last = try buildWithCacheAtTarget(gpa, cache, app, dev_target);
     defer gpa.free(last.program);
     try std.testing.expect(last.cache_hits > 0);
     try std.testing.expectEqualDeep(first.first_lss_function, last.first_lss_function);
-    try std.testing.expectEqualDeep(boxy.first_boxy_function, last.first_boxy_function);
     try std.testing.expectEqual(first.debug_observations, last.debug_observations);
 }
 

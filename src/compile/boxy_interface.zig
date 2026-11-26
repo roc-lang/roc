@@ -509,8 +509,11 @@ pub const Digests = struct {
     /// `read_by_importers` names the roots an importer restores whatever
     /// their constant template says: callable bindings, whose stored
     /// function values a method bound to one or an exposed binding restores
-    /// (design.md "Stored Function Values"). An exposed constant's stored
-    /// function value is in `hashConsts`.
+    /// (design.md "Stored Function Values"), and polymorphic constant
+    /// instances, which an importer deriving an instance from its types
+    /// restores from whichever module holds it (design.md "Polymorphic
+    /// Constants"). An exposed constant's stored function value is in
+    /// `hashConsts`.
     const RootScope = enum { every_root, read_by_importers };
 
     /// The values of `artifact`'s compile-time roots in `scope`. A module's
@@ -519,7 +522,14 @@ pub const Digests = struct {
         for (artifact.compile_time_roots.roots.items()) |root| {
             switch (scope) {
                 .every_root => {},
-                .read_by_importers => if (root.kind != .callable_binding) continue,
+                .read_by_importers => switch (root.kind) {
+                    .callable_binding => {},
+                    .literal_argument => {
+                        const argument = root.literal_argument orelse base.invariant("a literal argument root records no literal argument", .{});
+                        if (argument.site.kind != .constant_instance or argument.sealed) continue;
+                    },
+                    .constant, .hoisted_constant, .hoisted_validation, .expect, .numeral_conversion, .quote_conversion, .interpolation_conversion, .repl_expr => continue,
+                },
             }
             try self.hashRootValue(hasher, artifact, root);
         }
@@ -530,7 +540,12 @@ pub const Digests = struct {
         const payload = root.payloadFor(.boxy);
         hashTag(hasher, @tagName(std.meta.activeTag(payload)));
         switch (payload) {
-            .const_node => |node| try artifact.const_store.hashGraph(self.gpa, node, hasher, context),
+            // A value that is data alone names itself by the digest its
+            // image was stored with, which nothing recomputes.
+            .const_node => |node| if (artifact.const_store.imageOf(node)) |image| {
+                hashTag(hasher, "image");
+                hasher.update(&artifact.const_store.image(image).digest);
+            } else try artifact.const_store.hashGraph(self.gpa, node, hasher, context),
             .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
             .pending, .unevaluated, .discarded, .expect, .runtime => {},
         }

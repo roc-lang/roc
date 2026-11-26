@@ -1215,6 +1215,24 @@ pub const EvidenceNode = struct {
     subst: artifact_serialize.Span = .{},
 };
 
+/// A use of a name a destructuring scheme alias binds (`(twice, _) =
+/// doubling`): the quantified variables of the name's scheme, in the order
+/// the use's site substitution (`SiteEvidenceEntry.subst_start`) gives
+/// their types, so the declaration's lookup can be instantiated at the use
+/// (design.md "Polymorphic Constants").
+pub const DestructuredUse = extern struct {
+    /// The CIR node of the use.
+    key: u32,
+    /// Range into `StaticDispatchPlanTable.site_substitutions`.
+    formals_start: u32,
+    formals_len: u32,
+    /// Range into `StaticDispatchPlanTable.site_substitutions`: the
+    /// declaration's lookup's substitution with the name's variables at the
+    /// use's types, which the use's edge instantiates the lookup's scheme at.
+    subst_start: u32 = 0,
+    subst_len: u32 = 0,
+};
+
 /// Public `SiteEvidenceEntry` declaration.
 ///
 /// Evidence for one instantiation site (keyed by the checked expression of the
@@ -1749,6 +1767,8 @@ pub const StaticDispatchPlanTable = struct {
     site_evidence: collections.SafeList(SiteEvidenceEntry) = .{},
     /// Flat pool backing `SiteEvidenceEntry` substitution ranges.
     site_substitutions: collections.SafeList(CheckedTypeId) = .{},
+    /// Each use of a name a destructuring scheme alias binds, sorted by key.
+    destructured_uses: collections.SafeList(DestructuredUse) = .{},
     /// Per procedure template (indexed like the template table), the
     /// chain-free evidence of the template's root edge: how each of its own
     /// obligations resolves when nothing instantiates it (a compile-time
@@ -1778,14 +1798,15 @@ pub const StaticDispatchPlanTable = struct {
         evidence_refs: SerializedSlice(CheckedEvidence) = .{},
         site_evidence: SerializedSlice(SiteEvidenceEntry) = .{},
         site_substitutions: SerializedSlice(CheckedTypeId) = .{},
+        destructured_uses: SerializedSlice(DestructuredUse) = .{},
         template_root_evidence: SerializedSlice(?artifact_serialize.Span) = .{},
         generated_codec_derivations: SerializedSlice(GeneratedCodecDerivation) = .{},
         generated_codec_calls: SerializedSlice(GeneratedCodecCall) = .{},
 
         comptime {
-            // 19 side lists → 19 base-pointer fixups on deserialize, never a
+            // 20 side lists → 20 base-pointer fixups on deserialize, never a
             // function of how many plans/operands the table holds.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 19);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 20);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(StaticDispatchPlanTable, @This());
@@ -2437,6 +2458,23 @@ pub const StaticDispatchPlanTable = struct {
         return self.site_substitutions.items()[found.subst_start .. found.subst_start + found.subst_len];
     }
 
+    /// The substitution a use `expr` of a destructured name instantiates
+    /// its declaration's lookup's scheme at; null for any other expression.
+    pub fn destructuredUseSubstitution(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?[]const CheckedTypeId {
+        const found = artifact_serialize.binarySearchByKey(DestructuredUse, u32, self.destructured_uses.items(), @backingInt(expr), destructuredUseOrder) orelse return null;
+        // A lookup whose scheme has no variable is instantiated as it is.
+        if (found.subst_len == 0) return null;
+        return self.site_substitutions.items()[found.subst_start .. found.subst_start + found.subst_len];
+    }
+
+    /// The quantified variables of the scheme of the destructured name a
+    /// use `expr` reads, which its site substitution is over; null for any
+    /// other expression.
+    pub fn destructuredUseFormals(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?[]const CheckedTypeId {
+        const found = artifact_serialize.binarySearchByKey(DestructuredUse, u32, self.destructured_uses.items(), @backingInt(expr), destructuredUseOrder) orelse return null;
+        return self.site_substitutions.items()[found.formals_start .. found.formals_start + found.formals_len];
+    }
+
     /// Build-time-only teardown: frees the heap-owned slices. A frozen
     /// (deserialized) table's slices alias the artifact's single backing buffer and are
     /// NEVER freed here—the artifact's `deinitInternal` frees the buffer wholesale and
@@ -2460,6 +2498,7 @@ pub const StaticDispatchPlanTable = struct {
         self.evidence_refs.deinit(allocator);
         self.site_evidence.deinit(allocator);
         self.site_substitutions.deinit(allocator);
+        self.destructured_uses.deinit(allocator);
         self.template_root_evidence.deinit(allocator);
         self.generated_codec_derivations.deinit(allocator);
         self.generated_codec_calls.deinit(allocator);
@@ -2468,6 +2507,10 @@ pub const StaticDispatchPlanTable = struct {
 };
 
 fn siteEvidenceOrder(e: SiteEvidenceEntry, key: u32) std.math.Order {
+    return std.math.order(e.key, key);
+}
+
+fn destructuredUseOrder(e: DestructuredUse, key: u32) std.math.Order {
     return std.math.order(e.key, key);
 }
 
@@ -3014,7 +3057,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
     // The fixup count is fixed by the number of serialized base pointers, never
     // by how much data each pool holds. The two tables below differ in operand
     // count by three orders of magnitude yet relocate identically.
-    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".field_names.len == 19);
+    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".field_names.len == 20);
 
     inline for (.{ @as(u32, 4), @as(u32, 4000) }) |operand_count| {
         const operands = try gpa.alloc(StaticDispatchOperand, operand_count);

@@ -1153,6 +1153,10 @@ pattern_str_interpolation_data: collections.SafeList(PatternStrInterpolationData
 pattern_str_interpolation_steps: collections.SafeList(PatternStrInterpolationStepData), // Typed storage for string interpolation pattern steps
 where_clause_owners: collections.SafeList(WhereClauseOwnerData), // Canonical receiver ownership for each where-clause scope
 index_data: collections.SafeList(u32), // Storage for variable-length index arrays (tuple elems, tag args, scratch spans)
+/// One bit per node, set for an expression whose whole subtree is literals
+/// and structural constructions (`exprIsLiteralOnly`), decided as the
+/// expression is added. Words past the end read as all clear.
+literal_only_exprs: collections.SafeList(u64),
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
 
 /// A source name that writes an existing mutable binding. Binding patterns keep
@@ -2147,6 +2151,115 @@ inline fn statementVariant(store: *const NodeStore, _: Node.Idx, comptime tag: S
 pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
     const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr)));
     return @call(.always_inline, exprFromNode, .{ store, node_idx, store.nodes.get(node_idx) });
+}
+
+/// Whether an expression's whole subtree is literals and structural
+/// constructions: numeric, string and bytes literals, empty and payload-free
+/// constructions, and lists, tuples, tags and records (with no update base)
+/// built only from such subtrees. It names no definition, calls nothing,
+/// creates no procedure and constructs no nominal value, so a walk that
+/// collects references between definitions finds nothing in it. Only
+/// expressions canonicalization adds through `ModuleEnv.addExpr` are
+/// recorded; any other expression reads as not literal-only. Checking
+/// rewrites no node of such a subtree into a lookup, call, procedure or
+/// nominal construction; it can only replace one with a runtime error whose
+/// evaluated operands are its own literal-only children.
+pub fn exprIsLiteralOnly(store: *const NodeStore, expr: CIR.Expr.Idx) bool {
+    const raw: u32 = @backingInt(expr);
+    const words = store.literal_only_exprs.items();
+    if (raw >> 6 >= words.len) return false;
+    return words[raw >> 6] & (@as(u64, 1) << @intCast(raw & 63)) != 0;
+}
+
+/// Record whether `expr`, just added at `expr_idx` with all its children
+/// added before it, is literal-only (`exprIsLiteralOnly`).
+pub fn recordLiteralOnly(store: *NodeStore, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) Allocator.Error!void {
+    if (store.childrenMakeLiteralOnly(expr)) try store.markLiteralOnly(expr_idx);
+}
+
+fn markLiteralOnly(store: *NodeStore, expr: CIR.Expr.Idx) Allocator.Error!void {
+    const raw: u32 = @backingInt(expr);
+    while (store.literal_only_exprs.len() <= raw >> 6) _ = try store.literal_only_exprs.append(store.gpa, 0);
+    store.literal_only_exprs.items()[raw >> 6] |= @as(u64, 1) << @intCast(raw & 63);
+}
+
+fn allLiteralOnly(store: *const NodeStore, exprs: []const CIR.Expr.Idx) bool {
+    for (exprs) |child| if (!store.exprIsLiteralOnly(child)) return false;
+    return true;
+}
+
+/// Whether an expression being added is literal-only (`exprIsLiteralOnly`),
+/// from its kind and its children, which are added before it.
+fn childrenMakeLiteralOnly(store: *const NodeStore, expr: CIR.Expr) bool {
+    return switch (expr) {
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_str_segment,
+        .e_bytes_literal,
+        .e_empty_list,
+        .e_empty_record,
+        .e_zero_argument_tag,
+        => true,
+        .e_str => |str| store.allLiteralOnly(store.sliceExpr(str.span)),
+        .e_list => |list| store.allLiteralOnly(store.sliceExpr(list.elems)),
+        .e_tuple => |tuple| store.allLiteralOnly(store.sliceExpr(tuple.elems)),
+        .e_tag => |tag| store.allLiteralOnly(store.sliceExpr(tag.args)),
+        .e_record => |record| blk: {
+            if (record.ext != null) break :blk false;
+            for (store.sliceRecordFields(record.fields)) |field| {
+                if (!store.exprIsLiteralOnly(store.getRecordField(field).value)) break :blk false;
+            }
+            break :blk true;
+        },
+        .e_nominal,
+        .e_nominal_external,
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_deferred_import_ref,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
+        .e_lookup_required,
+        .e_match,
+        .e_if,
+        .e_block,
+        .e_closure,
+        .e_lambda,
+        .e_binop,
+        .e_unary_minus,
+        .e_field_access,
+        .e_method_call,
+        .e_structural_eq,
+        .e_structural_hash,
+        .e_type_method_call,
+        .e_tuple_access,
+        .e_crash,
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_derived_method,
+        .e_return,
+        .e_break,
+        .e_for,
+        .e_hosted_lambda,
+        .e_run_low_level,
+        .e_runtime_error,
+        .e_call,
+        .e_interpolation,
+        .e_dispatch_call,
+        .e_method_eq,
+        .e_type_dispatch_call,
+        => false,
+    };
 }
 
 /// Retrieves an expression as written in source, reading through a runtime
@@ -6093,6 +6206,7 @@ pub const Serialized = extern struct {
     pattern_str_interpolation_steps: collections.SafeList(PatternStrInterpolationStepData).Serialized,
     where_clause_owners: collections.SafeList(WhereClauseOwnerData).Serialized,
     index_data: collections.SafeList(u32).Serialized,
+    literal_only_exprs: collections.SafeList(u64).Serialized,
     scratch: u64, // Reserve enough space for a 64-bit pointer
 
     comptime {

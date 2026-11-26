@@ -812,6 +812,10 @@ checking_executable_root: bool = false,
 checking_binding_rhs: bool = false,
 /// Pattern for the immediate binding RHS being checked.
 checking_binding_rhs_pattern: ?CIR.Pattern.Idx = null,
+/// True when the immediate binding RHS being checked is a polymorphic
+/// constant's (`topLevelConstantGeneralizes`): its frame generalizes over
+/// every type variable that carries no requirement.
+checking_constant_rhs: bool = false,
 /// The outer RHS expression of the currently checked `_ = ...` discard binding,
 /// if any. Nested instantiations inside that RHS use this as their error target:
 /// the whole discarded expression is the useful source region, rather than an
@@ -2025,6 +2029,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .checking_executable_root = .lexical,
     .checking_binding_rhs = .lexical,
     .checking_binding_rhs_pattern = .lexical,
+    .checking_constant_rhs = .lexical,
     .discarded_binding_rhs_expr = .lexical,
     .exhaustiveness_context = .lexical,
     .value_lookup_tracking = .settled,
@@ -22742,6 +22747,8 @@ const DefActivity = struct {
     saved: ?SavedDefState = null,
     def_name: ?Ident.Idx = null,
     def_is_function: bool = false,
+    /// The definition is a polymorphic constant (`topLevelConstantGeneralizes`).
+    def_is_polymorphic_constant: bool = false,
 
     /// Checker state a definition's check replaces while it runs.
     const SavedDefState = struct {
@@ -22903,6 +22910,7 @@ fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error
     const def_closure = self.cir.store.exprAs(def.expr, .e_closure);
     const def_is_function = isFunctionDef(&self.cir.store, def.expr);
     state.def_is_function = def_is_function;
+    state.def_is_polymorphic_constant = self.topLevelConstantGeneralizes(def_idx);
     const def_expectation = if (def_is_function)
         expectation.withHoistPosition(.eligible)
     else
@@ -22911,6 +22919,7 @@ fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error
     if (self.checking_executable_root) self.checking_immediate_callee = true;
     self.checking_binding_rhs = true;
     self.checking_binding_rhs_pattern = def.pattern;
+    self.checking_constant_rhs = state.def_is_polymorphic_constant;
     try self.recordPolymorphicAnnotationOwner(def.annotation, def.pattern);
     // A singleton value definition has no scheme boundary and therefore owns
     // no side-table candidates. Recursive groups still provisionally own every
@@ -22940,10 +22949,11 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
     const expr_var = ModuleEnv.varFrom(def.expr);
     const def_is_function = isFunctionDef(&self.cir.store, def.expr);
     const platform_required = self.platform_required_defs.get(def_idx);
-    // A function, a pure signature, and a value alias generalize, so a `..`
-    // in their output positions is redundant. Every other value binding is
-    // weak (design.md "Value Bindings Generalize By Expression").
-    const binding_generalizes = bindingRhsGeneralizes(&self.cir.store, def.expr);
+    // A function, a pure signature, a value alias, and a polymorphic constant
+    // generalize, so a `..` in their output positions is redundant. Every
+    // other value binding is weak (design.md "Value Bindings Generalize By
+    // Expression").
+    const binding_generalizes = bindingRhsGeneralizes(&self.cir.store, def.expr) or state.def_is_polymorphic_constant;
     const applied_annotation = self.appliedAnnotation(def.pattern, def.annotation);
     try self.endBoundedAnnotationRows(state.saved.?.bounding_annotation, applied_annotation, binding_generalizes);
     if (applied_annotation) |annotation_idx| {
@@ -23132,7 +23142,7 @@ fn rejectTopLevelValueAnnotations(self: *Self) std.mem.Allocator.Error!void {
         const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
         const def = self.cir.store.getDef(def_idx);
         const annotation_idx = def.annotation orelse continue;
-        if (!self.valueAnnotationIsRejected(annotation_idx, def.expr)) continue;
+        if (!self.topLevelValueAnnotationIsRejected(def_idx, annotation_idx)) continue;
         try self.rejectValueAnnotation(def.pattern, annotation_idx, def.expr);
     }
 }
@@ -24718,11 +24728,13 @@ fn beginGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.E
     state.saved_active_scheme_root = self.active_scheme_root;
     self.active_scheme_root = null;
 
-    // A singleton value def never generalizes, so its obligations resolve at
-    // the base rank (after checkDef); everything else's boundary is the RHS
-    // or shared group frame.
+    // A singleton weak value def never generalizes, so its obligations
+    // resolve at the base rank (after checkDef); everything else's boundary
+    // is the RHS (a function's or a polymorphic constant's) or the shared
+    // group frame.
     const group_is_value_def = !scc.is_recursive and
-        !isFunctionDef(&self.cir.store, self.cir.store.getDef(scc.defs[0]).expr);
+        !isFunctionDef(&self.cir.store, self.cir.store.getDef(scc.defs[0]).expr) and
+        !self.topLevelConstantGeneralizes(scc.defs[0]);
 
     self.group_states.items[group_index] = .checking;
     const boundary_rank = if (group_is_value_def) base_rank else base_rank.innerScope();
@@ -33096,6 +33108,13 @@ const ExprCheckFrame = struct {
     previous_active_scheme_root: ?Var,
     suppress_group_member_generalize: bool,
     should_generalize: bool,
+    /// The frame is a polymorphic constant's right-hand side: it generalizes
+    /// only the type variables that carry no requirement
+    /// (`keepRequirementVarsWeak`).
+    generalizes_constant: bool,
+    /// For a polymorphic constant's frame, how many instantiated dispatchers
+    /// were recorded before its right-hand side was checked.
+    instantiation_dispatchers_start: usize,
     rank_pushed: bool,
     /// The hoist frame this frame opened for `expr_idx` is still open.
     hoist_frame_open: bool,
@@ -33239,7 +33258,11 @@ const ExprCheckFrame = struct {
                 // This frame is the enclosing group's generalization boundary (a
                 // singleton group's def RHS). Resolve dispatch obligations into
                 // unchecked groups before anything here generalizes (Invariant D),
-                // interleaved with boundary defaulting.
+                // interleaved with boundary defaulting. A polymorphic constant's
+                // requirement-carrying variables leave the boundary first, so
+                // boundary defaulting decides none of them: they stay weak, as
+                // a weak value's are.
+                if (self.generalizes_constant) try checker.keepRequirementVarsWeak(env, self.instantiation_dispatchers_start);
                 return .boundary;
             }
             // Inner lambda: boundary defaulting runs first—it must see
@@ -33274,6 +33297,7 @@ const ExprCheckFrame = struct {
         try checker.judgePendingAccessesAtBoundary(env);
         checker.unify_scratch.clearPersistentOpenings();
         try checker.linkDeferredUsesFrom(env.rank());
+        if (self.generalizes_constant) try checker.keepRequirementVarsWeak(env, self.instantiation_dispatchers_start);
         try checker.generalizeRank(env, &.{self.expr_var});
         try checker.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }}, env);
         try checker.deduplicateGeneralizedDispatchRequirements(
@@ -33335,6 +33359,8 @@ fn beginExprCheckFrame(
         .previous_active_scheme_root = previous_active_scheme_root,
         .suppress_group_member_generalize = false,
         .should_generalize = false,
+        .generalizes_constant = false,
+        .instantiation_dispatchers_start = self.instantiation_dispatchers.items.len,
         .rank_pushed = false,
         .hoist_frame_open = false,
     };
@@ -33364,8 +33390,10 @@ fn beginExprCheckFrame(
     // Consume the binding-RHS flag: it applies only to this expression.
     frame.is_binding_rhs = self.checking_binding_rhs;
     const binding_rhs_pattern = self.checking_binding_rhs_pattern;
+    frame.generalizes_constant = frame.is_binding_rhs and self.checking_constant_rhs;
     self.checking_binding_rhs = false;
     self.checking_binding_rhs_pattern = null;
+    self.checking_constant_rhs = false;
     if (frame.is_binding_rhs) {
         frame.binding_pattern = binding_rhs_pattern;
         if (binding_rhs_pattern) |pattern_idx| {
@@ -33381,8 +33409,12 @@ fn beginExprCheckFrame(
     if (frame.suppress_group_member_generalize) self.suppress_generalize_expr = null;
 
     frame.should_generalize = !frame.suppress_group_member_generalize and
-        self.shouldGeneralize(expr_idx, frame.is_binding_rhs, frame.is_call_arg, frame.is_forwarded_result);
-    if (frame.should_generalize) try self.activateSchemeOwner(expr_var_raw);
+        (frame.generalizes_constant or
+            self.shouldGeneralize(expr_idx, frame.is_binding_rhs, frame.is_call_arg, frame.is_forwarded_result));
+    // A polymorphic constant's scheme quantifies only variables that carry
+    // no requirement, so it owns no requirement: every requirement its body
+    // records belongs where a weak value's would (`keepRequirementVarsWeak`).
+    if (frame.should_generalize and !frame.generalizes_constant) try self.activateSchemeOwner(expr_var_raw);
 
     if (frame.should_generalize) {
         try self.pushGeneralizationScope(env, expr_region, &.{expr_idx});
@@ -39787,6 +39819,132 @@ fn bindingRhsGeneralizes(store: *const CIR.NodeStore, expr_idx: CIR.Expr.Idx) bo
     return isFunctionDef(store, expr_idx) or isValueAlias(store.exprKind(expr_idx));
 }
 
+/// Whether a top-level definition is a polymorphic constant (design.md
+/// "Polymorphic Constants"): a value definition (its right-hand side is not
+/// one `bindingRhsGeneralizes` admits) bound to one name, in a binding group
+/// of its own, that no platform requirement types. Its right-hand side
+/// generalizes over every type variable that carries no requirement
+/// (`keepRequirementVarsWeak`).
+fn topLevelConstantGeneralizes(self: *const Self, def_idx: CIR.Def.Idx) bool {
+    const def = self.cir.store.getDef(def_idx);
+    if (bindingRhsGeneralizes(&self.cir.store, def.expr)) return false;
+    if (self.cir.store.patternKind(def.pattern) != .assign) return false;
+    if (self.platform_required_defs.contains(def_idx)) return false;
+    const check_order = self.check_order orelse return false;
+    const group_index = self.defGroupIndex(def_idx) orelse return false;
+    return !check_order.sccs[group_index].is_recursive;
+}
+
+/// Keep every type variable of the polymorphic constant whose boundary is
+/// generalizing that carries a requirement (a static-dispatch constraint,
+/// a literal conversion among them) out of the constant's scheme, with every
+/// variable its requirements mention (design.md "Polymorphic Constants"). Each
+/// such class is pinned at the enclosing rank, so it stays one weak variable
+/// shared by every use, as a weak value's variables are.
+fn keepRequirementVarsWeak(self: *Self, env: *Env, instantiation_dispatchers_start: usize) std.mem.Allocator.Error!void {
+    const outer_rank = env.rank().prev();
+    var pending: std.ArrayListUnmanaged(Var) = .empty;
+    defer pending.deinit(self.gpa);
+    for (env.var_pool.getVarsForRank(env.rank())) |var_| {
+        const resolved = self.types.resolveVar(var_);
+        const constraints = switch (resolved.desc.content) {
+            // A record literal's uncommitted tail is no open row: the record
+            // has exactly its fields, and the tail only lets a use lift it
+            // into a nominal type (design.md "Uncommitted Record Tails"), so
+            // every use shares that lift, as a weak value's uses do.
+            .flex => |flex| if (flex.literal != .none or resolved.desc.flags.uncommitted_record_tail) {
+                try pending.append(self.gpa, resolved.var_);
+                continue;
+            } else flex.constraints,
+            .rigid => |rigid| rigid.constraints,
+            // A record literal's undetermined field kinds are no type
+            // variable the program can write; they stay weak and commit as a
+            // weak value's do.
+            .structure => |flat| {
+                if (flat == .record) {
+                    for (self.types.getRecordFieldsSlice(flat.record.fields).items(.presence)) |presence| {
+                        if (presence.presenceVar()) |kind| try pending.append(self.gpa, kind);
+                    }
+                }
+                continue;
+            },
+            .alias, .field_presence, .err => continue,
+        };
+        if (self.types.sliceStaticDispatchConstraints(constraints).len == 0) continue;
+        try pending.append(self.gpa, resolved.var_);
+    }
+    // A requirement still waiting to be checked (on a structure whose open
+    // parts decide it, or on a target not yet checked) is a requirement on
+    // everything it reaches.
+    for (self.scratch_deferred_static_dispatch_constraints.sliceFromStart(0)) |deferred| {
+        try pending.append(self.gpa, deferred.var_);
+        for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |constraint| try pending.append(self.gpa, constraint.fn_var);
+    }
+    for (env.deferred_static_dispatch_constraints.items()) |deferred| {
+        try pending.append(self.gpa, deferred.var_);
+        for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |constraint| try pending.append(self.gpa, constraint.fn_var);
+    }
+    // A recursive dispatch whose state is judged once inference finishes
+    // (`settleDispatchRepeats`) is a requirement on that state.
+    for (self.open_recursive_dispatches.items) |open| {
+        try pending.append(self.gpa, self.dispatch_target_instantiations.items[open.instantiation].receiver_var);
+        try pending.append(self.gpa, open.constraint.fn_var);
+    }
+    // A requirement the body copied out of a scheme onto a receiver it
+    // shares with an enclosing scope waits in the registry until that
+    // receiver is grounded; its result is decided then.
+    for (self.instantiation_dispatchers.items[instantiation_dispatchers_start..]) |dispatcher| {
+        switch (self.types.resolveVar(dispatcher.dispatcher_var).desc.content) {
+            .flex, .rigid => {},
+            .alias, .structure, .field_presence, .err => continue,
+        }
+        try pending.append(self.gpa, dispatcher.dispatcher_var);
+        for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |constraint| try pending.append(self.gpa, constraint.fn_var);
+    }
+    for (self.final_codec_dispatch_constraints.items) |parked| {
+        try pending.append(self.gpa, parked.dispatcher_var);
+        try pending.append(self.gpa, parked.constraint.fn_var);
+    }
+    var seen: collections.DenseMapUnmanaged(Var, void) = .empty;
+    defer seen.deinit(self.gpa);
+    while (pending.pop()) |var_| {
+        const resolved = self.types.resolveVar(var_);
+        if (resolved.desc.rank == .generalized) continue;
+        if ((try seen.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+        try self.pinVarAtRank(resolved.var_, outer_rank, env);
+        switch (resolved.desc.content) {
+            .err, .field_presence => {},
+            .flex => |flex| for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| try pending.append(self.gpa, constraint.fn_var),
+            .rigid => |rigid| for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| try pending.append(self.gpa, constraint.fn_var),
+            .alias => |alias| {
+                try pending.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+                try pending.append(self.gpa, self.types.getAliasBackingVar(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .empty_record, .empty_tag_union => {},
+                .tuple => |tuple| try pending.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| try pending.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try pending.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try pending.append(self.gpa, func.ret);
+                    try pending.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
+                },
+                .record => |record| {
+                    for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                        try pending.append(self.gpa, presence.typeVar());
+                        if (presence.presenceVar()) |kind| try pending.append(self.gpa, kind);
+                    }
+                    try pending.append(self.gpa, record.ext);
+                },
+                .tag_union => |tag_union| {
+                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |args| try pending.appendSlice(self.gpa, self.types.sliceVars(args));
+                    try pending.append(self.gpa, tag_union.ext);
+                },
+            },
+        }
+    }
+}
+
 /// Whether a binding's annotation writes a type variable the binding cannot
 /// quantify: the binding does not generalize (`bindingRhsGeneralizes`), and
 /// the annotation introduces a type variable, named or an anonymous `..`. A
@@ -39795,6 +39953,18 @@ fn bindingRhsGeneralizes(store: *const CIR.NodeStore, expr_idx: CIR.Expr.Idx) bo
 fn valueAnnotationIsRejected(self: *const Self, annotation_idx: CIR.Annotation.Idx, rhs: CIR.Expr.Idx) bool {
     if (bindingRhsGeneralizes(&self.cir.store, rhs)) return false;
     return self.cir.store.getAnnotation(annotation_idx).introduces_type_var;
+}
+
+/// Whether a top-level definition's annotation writes a type variable the
+/// definition cannot quantify. A polymorphic constant quantifies every
+/// variable its annotation introduces except one a where clause gives a
+/// requirement, which stays weak (`keepRequirementVarsWeak`), so its
+/// annotation is rejected exactly when it has a where clause. Any other
+/// definition follows `valueAnnotationIsRejected`.
+fn topLevelValueAnnotationIsRejected(self: *const Self, def_idx: CIR.Def.Idx, annotation_idx: CIR.Annotation.Idx) bool {
+    const annotation = self.cir.store.getAnnotation(annotation_idx);
+    if (self.topLevelConstantGeneralizes(def_idx)) return annotation.introduces_type_var and annotation.where != null;
+    return self.valueAnnotationIsRejected(annotation_idx, self.cir.store.getDef(def_idx).expr);
 }
 
 /// Report a value binding's rejected annotation and record its pattern, so

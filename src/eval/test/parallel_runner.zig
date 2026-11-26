@@ -185,9 +185,15 @@ pub const TestCase = struct {
     };
 };
 
-fn constScalar(value: check.CheckedArtifact.ConstValue) ?check.CheckedArtifact.ConstScalar {
+/// The scalar a stored value is: a scalar node, or an image whose root type
+/// is a number.
+fn constScalar(store: *const check.CheckedArtifact.ConstStore, value: check.CheckedArtifact.ConstValue) ?check.CheckedArtifact.ConstScalar {
     return switch (value) {
         .scalar => |scalar| scalar,
+        .image => |image_id| switch (store.imageLiteral(image_id) orelse return null) {
+            .scalar => |scalar| scalar,
+            .tag, .str => null,
+        },
         .pending,
         .zst,
         .str,
@@ -205,6 +211,37 @@ fn constScalar(value: check.CheckedArtifact.ConstValue) ?check.CheckedArtifact.C
     };
 }
 
+/// The element bytes of the list a stored image holds, when its root type is
+/// a list of `element`: the root is the list's 64-bit descriptor (elements
+/// pointer as a block offset, then length), and an empty list has no
+/// elements allocation.
+fn imageListElementBytes(
+    store: *const check.CheckedArtifact.ConstStore,
+    image_id: check.ConstStore.ConstImageId,
+    element: check.ConstStore.Primitive,
+    element_size: usize,
+) ?[]const u8 {
+    const view = store.image(image_id);
+    var ty = view.root_type;
+    const element_ty = while (true) switch (store.type_store.get(ty)) {
+        .named => |named| ty = (named.backing.get() orelse return null).ty,
+        .list => |element_ty| break element_ty,
+        .primitive, .record, .tuple, .tag_union, .box, .func, .erased, .zst => return null,
+    };
+    ty = element_ty;
+    while (true) switch (store.type_store.get(ty)) {
+        .named => |named| ty = (named.backing.get() orelse return null).ty,
+        .primitive => |primitive| if (primitive == element) break else return null,
+        .list, .record, .tuple, .tag_union, .box, .func, .erased, .zst => return null,
+    };
+    const word = check.ConstStore.image_word_size;
+    const descriptor = view.rootBytes();
+    const len: usize = @intCast(std.mem.readInt(u64, descriptor[word..][0..word], .little));
+    if (len == 0) return &.{};
+    const start: usize = @intCast(std.mem.readInt(u64, descriptor[0..word], .little));
+    return view.bytes[start..][0 .. len * element_size];
+}
+
 fn constList(value: check.CheckedArtifact.ConstValue) ?check.ConstStore.ConstList {
     return switch (value) {
         .list => |items| items,
@@ -220,6 +257,7 @@ fn constList(value: check.CheckedArtifact.ConstValue) ?check.ConstStore.ConstLis
         .tag,
         .nominal,
         .fn_value,
+        .image,
         .boxy_fn,
         => null,
     };
@@ -234,7 +272,7 @@ fn constF32ListMatches(
         .nodes => |items| blk: {
             if (items.len != expected.len) break :blk false;
             for (items, expected) |item, bits| {
-                if ((constF32Bits(store.get(item)) orelse break :blk false) != bits) break :blk false;
+                if ((constF32Bits(store, store.get(item)) orelse break :blk false) != bits) break :blk false;
             }
             break :blk true;
         },
@@ -260,7 +298,7 @@ fn constF64ListMatches(
         .nodes => |items| blk: {
             if (items.len != expected.len) break :blk false;
             for (items, expected) |item, bits| {
-                if ((constF64Bits(store.get(item)) orelse break :blk false) != bits) break :blk false;
+                if ((constF64Bits(store, store.get(item)) orelse break :blk false) != bits) break :blk false;
             }
             break :blk true;
         },
@@ -277,8 +315,8 @@ fn constF64ListMatches(
     };
 }
 
-fn constF32Bits(value: check.CheckedArtifact.ConstValue) ?u32 {
-    const scalar = constScalar(value) orelse return null;
+fn constF32Bits(store: *const check.CheckedArtifact.ConstStore, value: check.CheckedArtifact.ConstValue) ?u32 {
+    const scalar = constScalar(store, value) orelse return null;
     return switch (scalar) {
         .f32_bits => |bits| bits,
         .i8,
@@ -297,8 +335,8 @@ fn constF32Bits(value: check.CheckedArtifact.ConstValue) ?u32 {
     };
 }
 
-fn constF64Bits(value: check.CheckedArtifact.ConstValue) ?u64 {
-    const scalar = constScalar(value) orelse return null;
+fn constF64Bits(store: *const check.CheckedArtifact.ConstStore, value: check.CheckedArtifact.ConstValue) ?u64 {
+    const scalar = constScalar(store, value) orelse return null;
     return switch (scalar) {
         .f64_bits => |bits| bits,
         .i8,
@@ -1056,19 +1094,35 @@ fn runComptimeFloatBitsTest(
     const const_store = &resources.checked_artifact.const_store;
 
     const matches = switch (expected) {
-        .comptime_f32_bits => |expected_bits| if (constF32Bits(stored)) |actual_bits|
+        .comptime_f32_bits => |expected_bits| if (constF32Bits(const_store, stored)) |actual_bits|
             actual_bits == expected_bits
         else
             false,
-        .comptime_f64_bits => |expected_bits| if (constF64Bits(stored)) |actual_bits|
+        .comptime_f64_bits => |expected_bits| if (constF64Bits(const_store, stored)) |actual_bits|
             actual_bits == expected_bits
         else
             false,
         .comptime_f32_list_bits => |expected_bits| blk: {
+            if (const_store.imageOf(node)) |image_id| {
+                const bytes = imageListElementBytes(const_store, image_id, .f32, 4) orelse break :blk false;
+                if (bytes.len != expected_bits.len * 4) break :blk false;
+                for (expected_bits, 0..) |bits, i| {
+                    if (std.mem.readInt(u32, bytes[i * 4 ..][0..4], .little) != bits) break :blk false;
+                }
+                break :blk true;
+            }
             const items = constList(stored) orelse break :blk false;
             break :blk constF32ListMatches(const_store, items, expected_bits);
         },
         .comptime_f64_list_bits => |expected_bits| blk: {
+            if (const_store.imageOf(node)) |image_id| {
+                const bytes = imageListElementBytes(const_store, image_id, .f64, 8) orelse break :blk false;
+                if (bytes.len != expected_bits.len * 8) break :blk false;
+                for (expected_bits, 0..) |bits, i| {
+                    if (std.mem.readInt(u64, bytes[i * 8 ..][0..8], .little) != bits) break :blk false;
+                }
+                break :blk true;
+            }
             const items = constList(stored) orelse break :blk false;
             break :blk constF64ListMatches(const_store, items, expected_bits);
         },
@@ -1081,15 +1135,15 @@ fn runComptimeFloatBitsTest(
     };
     if (!matches) {
         const message = switch (expected) {
-            .comptime_f32_bits => |expected_bits| if (constF32Bits(stored)) |actual_bits|
+            .comptime_f32_bits => |expected_bits| if (constF32Bits(const_store, stored)) |actual_bits|
                 try std.fmt.allocPrint(allocator, "ConstStore F32 bits: expected 0x{x:0>8}, got 0x{x:0>8}", .{ expected_bits, actual_bits })
-            else if (constScalar(stored) != null)
+            else if (constScalar(const_store, stored) != null)
                 "ConstStore root was not an F32 scalar"
             else
                 "ConstStore root was not a scalar",
-            .comptime_f64_bits => |expected_bits| if (constF64Bits(stored)) |actual_bits|
+            .comptime_f64_bits => |expected_bits| if (constF64Bits(const_store, stored)) |actual_bits|
                 try std.fmt.allocPrint(allocator, "ConstStore F64 bits: expected 0x{x:0>16}, got 0x{x:0>16}", .{ expected_bits, actual_bits })
-            else if (constScalar(stored) != null)
+            else if (constScalar(const_store, stored) != null)
                 "ConstStore root was not an F64 scalar"
             else
                 "ConstStore root was not a scalar",

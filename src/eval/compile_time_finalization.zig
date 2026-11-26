@@ -2276,8 +2276,8 @@ const ValueFormModuleWriting = struct {
         const root_schema_started = Timing.startStep(options.timing);
         const root_schema = try schema.root(module.key.digest(), request);
         Timing.finishStep(options.timing, root_schema_started, .value_form_root_schemas);
-        const payload: checked.CompileTimeRootPayload = .{ .const_node = try writer.storeCheckedRoot(root_schema.plan, root_schema.ret_layout, root.rootExpr(), root.reads_constants) };
         const root_type = try writer.storeType(root_schema.ret_type);
+        const payload: checked.CompileTimeRootPayload = .{ .const_node = try writer.storeCheckedRoot(root_schema.plan, root_schema.ret_layout, root_type, root.rootExpr(), root.reads_constants) };
         module.compile_time_roots.fillPayload(root_id, payload);
         finishConstRoot(module, root, payload, root_type);
         self.writing.completed += 1;
@@ -2427,7 +2427,7 @@ fn evaluateRootsBoxy(
     const classification_step_started = Timing.startStep(options.timing);
     const classification_started = if (base.dev_diagnostics.isSet(.trace_boxy_work)) (if (options.timing) |timing| nowNs(timing.std_io) else 0) else 0;
     for (roots, specialized) |root, *flag| {
-        flag.* = !artifacts[root.module].compile_time_roots.root(root.root).isBoxyEvaluated() and
+        flag.* = functionClassified(artifacts[root.module].compile_time_roots.root(root.root)) and
             try checked_root_graph.rootHoldsFunction(allocator, function_types, artifacts, lowering_modules, root);
     }
     Timing.finishStep(options.timing, classification_step_started, .root_classification);
@@ -2656,7 +2656,7 @@ pub const EarlyEvaluation = struct {
         errdefer allocator.free(specialized);
         const classification_started = Timing.startStep(options.timing);
         for (roots.items, specialized) |root, *flag| {
-            flag.* = !artifacts[root.module].compile_time_roots.root(root.root).isBoxyEvaluated() and
+            flag.* = functionClassified(artifacts[root.module].compile_time_roots.root(root.root)) and
                 try checked_root_graph.rootHoldsFunction(allocator, &self.function_types, artifacts, lowering, root);
         }
         Timing.finishStep(options.timing, classification_started, .root_classification);
@@ -3079,7 +3079,7 @@ const ModuleEvaluation = struct {
                 // A literal argument root and an interpolation conversion root
                 // are the `.boxy` evaluator's whatever reads them (design.md
                 // "Literal Arguments").
-                if (chosen[dep] or shared.modules[roots[dep].module].module.compile_time_roots.root(roots[dep].root).isBoxyEvaluated()) continue;
+                if (chosen[dep] or !functionClassified(shared.modules[roots[dep].module].module.compile_time_roots.root(roots[dep].root))) continue;
                 chosen[dep] = true;
                 try work.append(allocator, dep);
             }
@@ -7625,6 +7625,7 @@ fn reportDevHostEvents(
     events: []const CompileTimeHost.HostEvent,
 ) FinalizeError!bool {
     var had_problem = false;
+    if (!reportsObservations(root)) return false;
     const root_region = rootBodySourceRegion(module, root);
     for (events) |event| {
         switch (event) {
@@ -7659,7 +7660,17 @@ fn reportInterpreterDebugMessages(
     root: checked.CompileTimeRoot,
     messages: []const []const u8,
 ) Allocator.Error!void {
+    if (!reportsObservations(root)) return;
     for (messages) |msg| try reportDebugMessage(allocator, options, module, root, msg);
+}
+
+/// Whether a root's evaluation reports its `dbg` output and `expect`
+/// failures: every root's but a polymorphic constant's instance other than
+/// its canonical one, which alone reports what the constant's body observes
+/// (design.md "Polymorphic Constants").
+fn reportsObservations(root: checked.CompileTimeRoot) bool {
+    const argument = root.literal_argument orelse return true;
+    return argument.site.kind != .constant_instance or argument.canonical;
 }
 
 fn reportDebugMessage(allocator: Allocator, options: Options, module: checked.ModuleId, root: checked.CompileTimeRoot, message: []const u8) Allocator.Error!void {
@@ -7793,6 +7804,7 @@ fn reportCompileTimeExpectFailures(
     failures: []const ExpectFailure,
 ) FinalizeError!bool {
     if (failures.len == 0) return false;
+    if (!reportsObservations(root)) return false;
     const problem_store = maybe_problem_store orelse return false;
     const root_region = rootBodySourceRegion(module, root);
     for (failures) |failure| {
@@ -8090,7 +8102,7 @@ const RootFailure = enum {
         return switch (payload) {
             .const_node => |node| switch (module.const_store.get(node)) {
                 .checked_error => .checked_error,
-                .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .nominal, .fn_value, .boxy_fn => .crash,
+                .image, .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .nominal, .fn_value, .boxy_fn => .crash,
             },
             .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => .crash,
         };
@@ -8281,6 +8293,15 @@ fn compileTimeRootForRequest(
     return root_id;
 }
 
+/// Whether a root may hold a function value, so that it runs in a program
+/// that stores function values: every root but a literal argument root and
+/// an interpolation conversion root, which hold none (design.md "Literal
+/// Arguments"), except a polymorphic constant's instance, which is stored
+/// whatever it holds (design.md "Polymorphic Constants").
+fn functionClassified(root: checked.CompileTimeRoot) bool {
+    return !root.isBoxyEvaluated() or root.isConstantInstance();
+}
+
 /// Store an evaluated root's value; a hoisted validation keeps no value,
 /// nor does a validate-only root (design.md "Literal Arguments").
 fn storeRootValue(
@@ -8330,7 +8351,7 @@ fn completeRoot(
     module.compile_time_roots.roots.items()[@backingInt(root_id)].lss_value_has_functions = function_strategy == .lss and switch (payload) {
         .fn_value => true,
         .const_node => |node| switch (module.const_store.get(node)) {
-            .crash, .checked_error => false,
+            .image, .crash, .checked_error => false,
             .pending => unreachable, // A completed root's stored node is fully published.
             .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value, .boxy_fn => true,
         },

@@ -1,7 +1,10 @@
-//! Lists of tag unions whose payloads are all zero-sized, and of records
-//! holding them, are stored as packed bytes, and a list literal stores the
-//! bytes evaluating the same list stores. A union with a payload that has
-//! bytes stores one node per item.
+//! A list constant is stored as its image (design.md "Stored Images"), and a
+//! list literal stores the image evaluating the same list stores. A list of
+//! tag unions whose payloads are all zero-sized holds each item's
+//! discriminant, its tag's index in byte-wise name order. A constant whose
+//! annotation names a tag union is polymorphic in the union's implicitly
+//! open row (design.md "Polymorphic Constants"), and its canonical instance,
+//! evaluated at the union closed, is what is read.
 const std = @import("std");
 const roc_target = @import("roc_target");
 const compile_build = @import("../compile_build.zig");
@@ -10,16 +13,17 @@ const TestError = compile_build.InitError || compile_build.BuildRootError ||
     std.Io.Dir.WriteFileError || std.Io.Dir.RealPathFileAllocError ||
     error{ TestExpectedEqual, TestUnexpectedResult };
 
-/// What one module's one constant stored: its packed items, or null when
-/// it stored them as nodes.
+/// What one module's one list constant stored.
 const Stored = struct {
-    /// The packed item bytes, owned by the testing allocator.
-    bytes: ?[]u8,
-    len: u32,
-    product_width: u32,
+    /// The list's item bytes, owned by the testing allocator.
+    items: []u8,
+    len: u64,
     /// Whether the checked-value writer stored the constant from its
     /// expression, rather than an evaluator from its result.
     value_form: bool,
+    /// Whether the constant is polymorphic, so that its canonical
+    /// instance, which an evaluator stores, holds the list.
+    polymorphic: bool,
 };
 
 fn storedList(source: []const u8) TestError!Stored {
@@ -47,32 +51,36 @@ fn storedList(source: []const u8) TestError!Stored {
         return error.TestUnexpectedResult;
     };
     var found: ?Stored = null;
-    errdefer if (found) |stored| if (stored.bytes) |bytes| gpa.free(bytes);
-    for (artifact.compile_time_roots.roots.items()) |root| {
-        if (root.kind != .constant) continue;
-        try std.testing.expect(found == null and root.payload == .const_node);
-        const value = artifact.const_store.get(root.payload.const_node);
-        try std.testing.expect(value == .list);
-        if (value.list.items == .nodes) {
-            found = .{ .bytes = null, .len = @intCast(value.list.items.nodes.len), .product_width = 0, .value_form = root.completion == .write_value };
-            continue;
-        }
-        const packed_list = value.list.items.packed_bytes;
-        try std.testing.expect(packed_list.element == null);
+    errdefer if (found) |stored| gpa.free(stored.items);
+    for (artifact.compile_time_roots.roots.items()) |constant| {
+        if (constant.kind != .constant) continue;
+        try std.testing.expect(found == null);
+        const canonical = for (artifact.compile_time_roots.roots.items()) |candidate| {
+            const argument = candidate.literal_argument orelse continue;
+            if (argument.canonical and argument.site.node == @backingInt(constant.id)) break candidate;
+        } else null;
+        const root = canonical orelse constant;
+        try std.testing.expect(root.payload == .const_node);
+        const image = artifact.const_store.image(artifact.const_store.imageOf(root.payload.const_node) orelse return error.TestUnexpectedResult);
+        const word = 8;
+        const len = std.mem.readInt(u64, image.bytes[word..][0..word], .little);
+        // The items run from the pointer word to the block's end: the list
+        // holds no other allocation. A list of zero-sized items has none.
+        const items: []const u8 = if (len == 0 or image.pointers.len == 0) &.{} else image.bytes[@intCast(std.mem.readInt(u64, image.bytes[0..word], .little))..];
         found = .{
-            .bytes = try gpa.dupe(u8, artifact.const_store.blobData(packed_list.bytes)),
-            .len = packed_list.len,
-            .product_width = packed_list.product_width,
+            .items = try gpa.dupe(u8, items),
+            .len = len,
             .value_form = root.completion == .write_value,
+            .polymorphic = canonical != null,
         };
     }
     return found orelse error.TestUnexpectedResult;
 }
 
 /// The module `header` begins, declaring `values : annotation` as `literal`
-/// and as evaluating the same list, stores the same packed bytes both ways:
-/// `expected`, items `width` bytes wide.
-fn expectPackedBothWays(header: []const u8, annotation: []const u8, literal: []const u8, width: u32, expected: []const u8) TestError!void {
+/// and as evaluating the same list, stores the same items both ways, which
+/// are `expected` when given.
+fn expectSameImageBothWays(header: []const u8, annotation: []const u8, literal: []const u8, expected: ?[]const u8) TestError!void {
     const gpa = std.testing.allocator;
     const literal_source = try std.fmt.allocPrint(gpa, "{s}\nvalues : {s}\nvalues = {s}\n", .{ header, annotation, literal });
     defer gpa.free(literal_source);
@@ -81,73 +89,64 @@ fn expectPackedBothWays(header: []const u8, annotation: []const u8, literal: []c
     defer gpa.free(evaluated_source);
 
     const from_literal = try storedList(literal_source);
-    defer if (from_literal.bytes) |bytes| gpa.free(bytes);
+    defer gpa.free(from_literal.items);
     const from_evaluation = try storedList(evaluated_source);
-    defer if (from_evaluation.bytes) |bytes| gpa.free(bytes);
-    try std.testing.expect(from_literal.value_form);
+    defer gpa.free(from_evaluation.items);
+    try std.testing.expectEqual(from_literal.polymorphic, from_evaluation.polymorphic);
+    try std.testing.expect(from_literal.value_form != from_literal.polymorphic);
     try std.testing.expect(!from_evaluation.value_form);
-    for ([_]Stored{ from_literal, from_evaluation }) |stored| {
-        try std.testing.expectEqual(width, stored.product_width);
-        try std.testing.expectEqualSlices(u8, expected, stored.bytes orelse return error.TestUnexpectedResult);
-    }
+    // The evaluated concatenation may keep more capacity than the literal,
+    // so the two agree on the items they hold.
     try std.testing.expectEqual(from_literal.len, from_evaluation.len);
+    try std.testing.expectEqualSlices(u8, from_literal.items, from_evaluation.items);
+    if (expected) |bytes| try std.testing.expectEqualSlices(u8, bytes, from_literal.items);
 }
 
-test "a list of Bools is stored as one byte per item both ways" {
-    try expectPackedBothWays("module [values]", "List(Bool)", "[Bool.True, Bool.False, Bool.False, Bool.True]", 1, "\x01\x00\x00\x01");
+test "a list of Bools holds one byte per item both ways" {
+    try expectSameImageBothWays("module [values]", "List(Bool)", "[Bool.True, Bool.False, Bool.False, Bool.True]", "\x01\x00\x00\x01");
 }
 
-test "a list of tags without payloads stores each tag's index in name order both ways" {
-    try expectPackedBothWays("module [values]", "List([Red, Green, Blue])", "[Red, Blue, Green, Red]", 1, "\x02\x00\x01\x02");
+test "a list of tags without payloads holds each tag's index in name order both ways" {
+    try expectSameImageBothWays("module [values]", "List([Red, Green, Blue])", "[Red, Blue, Green, Red]", "\x02\x00\x01\x02");
 }
 
-test "a list of a nominal type's tags without payloads is stored packed both ways" {
-    try expectPackedBothWays("module [values, Color]\nColor := [Red, Green, Blue]", "List(Color)", "[Color.Green, Color.Red]", 1, "\x01\x02");
+test "a list of a nominal type's tags without payloads is the same image both ways" {
+    try expectSameImageBothWays("module [values, Color]\nColor := [Red, Green, Blue]", "List(Color)", "[Color.Green, Color.Red]", "\x01\x02");
 }
 
-test "a list of one tag without a payload stores no item bytes both ways" {
-    try expectPackedBothWays("module [values]", "List([Only])", "[Only, Only, Only]", 0, "");
+test "a list of one tag without a payload holds no item bytes both ways" {
+    try expectSameImageBothWays("module [values]", "List([Only])", "[Only, Only, Only]", "");
 }
 
-test "a list of records holding tags without payloads is stored packed both ways" {
-    // Fields in name order: `color`, then `count`, then `on`.
-    try expectPackedBothWays(
+test "a list of records holding tags without payloads is the same image both ways" {
+    try expectSameImageBothWays(
         "module [values]",
         "List({ on : Bool, count : U16, color : [Red, Green, Blue] })",
         "[{ on: Bool.True, count: 258, color: Green }, { on: Bool.False, count: 7, color: Blue }]",
-        4,
-        "\x01\x02\x01\x01" ++ "\x00\x07\x00\x00",
+        null,
     );
 }
 
-test "a list of tags with a zero-sized payload is stored packed both ways" {
-    try expectPackedBothWays("module [values]", "List([A({}), B])", "[A({}), B, B, A({})]", 1, "\x00\x01\x01\x00");
+test "a list of tags with a zero-sized payload holds each tag's index both ways" {
+    try expectSameImageBothWays("module [values]", "List([A({}), B])", "[A({}), B, B, A({})]", "\x00\x01\x01\x00");
 }
 
-test "a list mixing bare tags and tags with zero-sized payloads is stored packed both ways" {
-    try expectPackedBothWays("module [values]", "List([A, B({}), C({}, ({}, {}))])", "[C({}, ({}, {})), A, B({})]", 1, "\x02\x00\x01");
+test "a list mixing bare tags and tags with zero-sized payloads holds each tag's index both ways" {
+    try expectSameImageBothWays("module [values]", "List([A, B({}), C({}, ({}, {}))])", "[C({}, ({}, {})), A, B({})]", "\x02\x00\x01");
 }
 
-test "a list of tags whose payload is a union of one tag is stored packed both ways" {
-    try expectPackedBothWays("module [values]", "List([A([Only]), B])", "[B, A(Only)]", 1, "\x01\x00");
+test "a list of tags whose payload is a union of one tag holds each tag's index both ways" {
+    try expectSameImageBothWays("module [values]", "List([A([Only]), B])", "[B, A(Only)]", "\x01\x00");
 }
 
-test "a list of a nominal type's tags with zero-sized payloads is stored packed both ways" {
-    try expectPackedBothWays("module [values, Wrap]\nWrap := [A({}), B]", "List(Wrap)", "[Wrap.B, Wrap.A({})]", 1, "\x01\x00");
+test "a list of a nominal type's tags with zero-sized payloads holds each tag's index both ways" {
+    try expectSameImageBothWays("module [values, Wrap]\nWrap := [A({}), B]", "List(Wrap)", "[Wrap.B, Wrap.A({})]", "\x01\x00");
 }
 
-test "a list of records holding tags with zero-sized payloads is stored packed both ways" {
-    // Fields in name order: `n`, then `tag`.
-    try expectPackedBothWays("module [values]", "List({ tag : [A({}), B], n : U8 })", "[{ tag: A({}), n: 9 }, { tag: B, n: 4 }]", 2, "\x09\x00\x04\x01");
+test "a list of records holding tags with zero-sized payloads is the same image both ways" {
+    try expectSameImageBothWays("module [values]", "List({ tag : [A({}), B], n : U8 })", "[{ tag: A({}), n: 9 }, { tag: B, n: 4 }]", null);
 }
 
-test "a list of tags with a payload that has bytes is stored one node per item both ways" {
-    const gpa = std.testing.allocator;
-    for ([_][]const u8{ "[A(7), B, A(9)]", "List.concat([], [A(7), B, A(9)])" }) |value| {
-        const source = try std.fmt.allocPrint(gpa, "module [values]\nvalues : List([A(U8), B])\nvalues = {s}\n", .{value});
-        defer gpa.free(source);
-        const stored = try storedList(source);
-        try std.testing.expect(stored.bytes == null);
-        try std.testing.expectEqual(@as(u32, 3), stored.len);
-    }
+test "a list of tags with a payload that has bytes is the same image both ways" {
+    try expectSameImageBothWays("module [values]", "List([A(U8), B])", "[A(7), B, A(9)]", null);
 }

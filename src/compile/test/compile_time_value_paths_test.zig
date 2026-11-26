@@ -562,18 +562,24 @@ test "a constant aggregate's image does not grow with its copies, and every cons
                     try std.testing.expectEqual(@as(usize, 1), buffers);
                 },
                 .nested_rows => {
-                    // Every element names the one row in the image.
-                    var rows: usize = 0;
-                    var outer: ?static_data_exports.StaticDataExport = null;
+                    // The value is one stored image: the outer list's
+                    // descriptor, its items, and the one row every item
+                    // names, so the block's pointers are the descriptor's
+                    // and one per item, and they point at two places.
+                    var block: ?static_data_exports.StaticDataExport = null;
                     for (lowered.image) |item| {
-                        // A row is its elements behind a refcount header,
-                        // with no pointers of its own.
-                        if (item.relocations.len == 0 and item.bytes.len >= row_len * @sizeOf(u64) and item.bytes.len <= (row_len + 2) * @sizeOf(u64)) rows += 1;
-                        if (item.relocations.len == count) outer = item;
+                        if (item.relocations.len == count + 1) block = item;
                     }
-                    try std.testing.expectEqual(@as(usize, 1), rows);
-                    const elements = (outer orelse return error.TestUnexpectedResult).relocations;
-                    for (elements) |relocation| try std.testing.expectEqual(elements[0].target_symbol_name, relocation.target_symbol_name);
+                    const pointers = (block orelse return error.TestUnexpectedResult).relocations;
+                    var targets: [2]i64 = .{ pointers[0].addend, pointers[0].addend };
+                    for (pointers) |relocation| {
+                        try std.testing.expectEqual(pointers[0].target_symbol_name, relocation.target_symbol_name);
+                        if (relocation.addend != targets[0]) {
+                            if (targets[1] == targets[0]) targets[1] = relocation.addend;
+                            try std.testing.expectEqual(targets[1], relocation.addend);
+                        }
+                    }
+                    try std.testing.expect(targets[0] != targets[1]);
                 },
                 .heap_strings, .string_records => {},
             }
