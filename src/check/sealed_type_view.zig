@@ -304,6 +304,30 @@ pub const SealedTypeView = struct {
         return tag;
     }
 
+    /// The declaration key of `var_`'s checked type when it is a nominal
+    /// type, and null otherwise: the key `payload` names, read without
+    /// decoding the payload.
+    pub fn nominalKey(self: SealedTypeView, var_: Var) ?canonical.NominalTypeKey {
+        const type_store = self.typeStore();
+        const desc_idx = type_store.resolveDescIdx(var_);
+        if (type_store.wordAt(desc_idx).kind != .nominal_type) {
+            std.debug.assert(self.payloadTag(var_) != .nominal);
+            return null;
+        }
+        const nominal = type_store.nominalAt(desc_idx);
+        const key: canonical.NominalTypeKey = .{
+            .module = self.originIdentity(nominal.origin_module),
+            .source_decl = nominal.statement(),
+        };
+        if (std.debug.runtime_safety) {
+            const decoded = self.payload(var_).nominal;
+            if (decoded.origin_module != key.module or decoded.source_decl != key.source_decl) {
+                invariant("checked type {d}'s nominal key disagreed with its decoded payload", .{@backingInt(var_)});
+            }
+        }
+        return key;
+    }
+
     /// `var_`'s checked type. `var_` is its class's checked representative,
     /// and publication reached it. The content is read by kind from the
     /// stored descriptor, so only the payload of the kind found is decoded.

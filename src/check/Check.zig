@@ -1236,10 +1236,13 @@ ambiguity_candidate_by_key: std.AutoHashMapUnmanaged(AmbiguityCandidateKey, u32)
 /// performed with no probe open are permanent and never journaled.
 ambiguity_candidate_journal: std.ArrayListUnmanaged(AmbiguityCandidateFlip) = .empty,
 /// Index into `ambiguity_candidates` where the currently-processing top-level
-/// def's entries begin. Generalization events scan only from here: entries
-/// below the cursor belong to earlier defs and are either already judged or
-/// awaiting the end-of-check residual judgment.
+/// def's entries that a generalization event may still judge begin.
+/// Generalization events scan only from here: entries below the cursor are
+/// this def's already judged leading entries, or belong to earlier defs and
+/// are either already judged or awaiting the end-of-check residual judgment.
 ambiguity_candidates_def_start: usize = 0,
+/// How many candidates generalization events have looked at.
+test_ambiguity_candidate_visits: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
 /// Prefix covered by the module-final residual judgment. Generalization may
 /// judge entries out of order, so the first residual pass still scans the
 /// whole prefix; afterward committed target probes only append a suffix and
@@ -2119,6 +2122,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .ambiguity_candidate_by_key = .keyed,
     .ambiguity_candidate_journal = .frame_partitioned,
     .ambiguity_candidates_def_start = .lexical,
+    .test_ambiguity_candidate_visits = .scratch,
     .ambiguity_candidates_residual_checked = .keyed,
     .ambiguity_verdicts = .settled,
     .default_materializations = .settled,
@@ -9090,30 +9094,28 @@ fn unifyEnv(self: *Self) unifier.Env {
 
 /// The single core: run unification, then assign ranks/regions to fresh vars,
 /// copy out deferred constraints, and assert array sync.
-fn runUnify(self: *Self, a: Var, b: Var, env: *Env, opts: unifier.Options) std.mem.Allocator.Error!unifier.Result {
+fn runUnify(self: *Self, a: Var, b: Var, env: *Env, opts: *const unifier.Options) std.mem.Allocator.Error!unifier.Result {
     return self.runUnifyWithDispatchOwner(a, b, env, opts, .current_group);
 }
 
-fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifier.Options, owner: DeferredDispatchObligationOwner) Allocator.Error!unifier.Result {
+fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: *const unifier.Options, owner: DeferredDispatchObligationOwner) Allocator.Error!unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     const unify_env = self.unifyEnv();
+    const saved_fresh_region_var = self.unify_fresh_region_var;
+    self.unify_fresh_region_var = b;
+    defer self.unify_fresh_region_var = saved_fresh_region_var;
     // A row repeating a label whose occurrences do not relate conflicts on
     // its own, whatever it is related to: normalizing it reports that
     // conflict once (design.md "Row Union Normalization"), and the operands
     // are related again with the row normalized or poisoned.
-    var unify_opts = opts;
-    unify_opts.repeated_label_rows = .return_row;
-    const saved_fresh_region_var = self.unify_fresh_region_var;
-    self.unify_fresh_region_var = b;
-    defer self.unify_fresh_region_var = saved_fresh_region_var;
-    var result = try unifier.unify(&unify_env, a, b, unify_opts);
-    while (unify_opts.repeated_label_rows == .return_row and result == .mismatch) {
+    var result = try unifier.unify(&unify_env, a, b, opts, .return_row);
+    while (result == .mismatch) {
         const row = self.unify_scratch.repeatedLabelRow() orelse break;
         try self.adoptUnifyScratch(env, b, owner);
         try self.normalizeRowUnionOrReport(row, b, env);
-        result = try unifier.unify(&unify_env, a, b, unify_opts);
+        result = try unifier.unify(&unify_env, a, b, opts, .return_row);
     }
     try self.finishUnify(result, b, env, owner);
     return result;
@@ -9138,8 +9140,10 @@ fn finishUnify(self: *Self, result: unifier.Result, b: Var, env: *Env, owner: De
         .unified, .suppressed_by_error, .mismatch => {},
     }
 
-    if (result.isAccepted()) {
-        try self.absorbed_defaults.appendSlice(self.gpa, self.unify_scratch.absorbed_record_defaults.items());
+    // Most unifications absorb no defaults and determine no literals.
+    const absorbed_defaults = self.unify_scratch.absorbed_record_defaults.items();
+    if (result.isAccepted() and absorbed_defaults.len != 0) {
+        try self.absorbed_defaults.appendSlice(self.gpa, absorbed_defaults);
     }
     // A deferred literal whose type this unification determined is decided
     // here, in the context this unification ran in and against the variable
@@ -9148,7 +9152,8 @@ fn finishUnify(self: *Self, result: unifier.Result, b: Var, env: *Env, owner: De
     // literal.
     const determined_top = self.determined_literal_vars.items.len;
     defer self.determined_literal_vars.shrinkRetainingCapacity(determined_top);
-    try self.determined_literal_vars.appendSlice(self.gpa, self.unify_scratch.determined_literals.items());
+    const determined_literals = self.unify_scratch.determined_literals.items();
+    if (determined_literals.len != 0) try self.determined_literal_vars.appendSlice(self.gpa, determined_literals);
     try self.adoptUnifyScratch(env, b, owner);
     if (self.determined_literal_vars.items.len != determined_top) {
         self.pending_literals_scanned = 0;
@@ -9166,7 +9171,7 @@ fn finishUnify(self: *Self, result: unifier.Result, b: Var, env: *Env, owner: De
 /// Only a constructor-backing root relation can still reject such a pair.
 /// Looking for the shared class costs every other pair two more root lookups
 /// than `runUnify`, so only relations that often find one come through here.
-fn runUnifyOftenRelated(self: *Self, a: Var, b: Var, env: *Env, opts: unifier.Options) Allocator.Error!unifier.Result {
+fn runUnifyOftenRelated(self: *Self, a: Var, b: Var, env: *Env, opts: *const unifier.Options) Allocator.Error!unifier.Result {
     if (opts.root_relation == .ordinary and self.types.resolveDescIdx(a) == self.types.resolveDescIdx(b)) {
         if (opts.on_mismatch == .poison_to_err) self.types.assertNoProbeOpen();
         _ = self.types.resolveVarWordAndCompressPath(a);
@@ -9308,7 +9313,7 @@ fn currentRelationRelatesUse(self: *const Self, use_expr: CIR.Expr.Idx) bool {
 
 /// Unify two types where `a` is the expected type and `b` is the actual type.
 fn unify(self: *Self, a: Var, b: Var, env: *Env) std.mem.Allocator.Error!unifier.Result {
-    return self.runUnify(a, b, env, .{});
+    return self.runUnify(a, b, env, &.{});
 }
 
 fn fieldPresenceRelationForContext(
@@ -9336,7 +9341,7 @@ fn unifyOptionsForContext(ctx: problem.Context, on_mismatch: unifier.MismatchBeh
 
 /// Unify two types with a context for error reporting.
 fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
-    return self.runUnify(a, b, env, unifyOptionsForContext(ctx, .poison_to_err));
+    return self.runUnify(a, b, env, &unifyOptionsForContext(ctx, .poison_to_err));
 }
 
 /// Unify the record relation that owns a record-aware diagnostic. If a
@@ -9345,7 +9350,7 @@ fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) 
 fn unifyRecordInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
     var opts = unifyOptionsForContext(ctx, .poison_to_err);
     opts.nominal_record_mismatch_role = .expected;
-    return self.runUnify(a, b, env, opts);
+    return self.runUnify(a, b, env, &opts);
 }
 
 fn exprIsFreshRecordConstruction(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
@@ -9365,7 +9370,7 @@ fn unifyOwnedRelation(
     ctx: problem.Context,
     row_width_relation: unifier.RowWidthRelation,
 ) std.mem.Allocator.Error!unifier.Result {
-    return self.unifyOwnedRootRelation(expected, actual, env, ownedRelationOptions(ctx, row_width_relation, .ordinary, .none));
+    return self.unifyOwnedRootRelation(expected, actual, env, &ownedRelationOptions(ctx, row_width_relation, .ordinary, .none));
 }
 
 fn unifyOwnedRecordRelation(
@@ -9378,7 +9383,7 @@ fn unifyOwnedRecordRelation(
 ) std.mem.Allocator.Error!unifier.Result {
     var opts = ownedRelationOptions(ctx, .construction, .ordinary, .actual);
     opts.member_tail = access_tail;
-    return self.unifyOwnedRootRelation(expected, actual, env, opts);
+    return self.unifyOwnedRootRelation(expected, actual, env, &opts);
 }
 
 /// How an owned relation unifies: a rejection leaves the operands unpoisoned
@@ -9406,7 +9411,7 @@ fn unifyOwnedRootRelation(
     expected: Var,
     actual: Var,
     env: *Env,
-    opts: unifier.Options,
+    opts: *const unifier.Options,
 ) std.mem.Allocator.Error!unifier.Result {
     const result = try self.runUnifyOftenRelated(expected, actual, env, opts);
     if (result.isAccepted()) return result;
@@ -9664,7 +9669,7 @@ fn unifyNominalConstructorBacking(
         expected_backing,
         actual_backing,
         env,
-        ownedRelationOptions(.{ .nominal_constructor = ctx }, row_width_relation, .nominal_constructor_backing, .none),
+        &ownedRelationOptions(.{ .nominal_constructor = ctx }, row_width_relation, .nominal_constructor_backing, .none),
     );
 }
 
@@ -10543,7 +10548,7 @@ fn relateRepeatedRowLabel(self: *Self, outer: RowLabelOccurrence, inner: RowLabe
 
 /// One axis of `relateRepeatedRowLabel`.
 fn relateRepeatedRowLabelAxis(self: *Self, outer: Var, inner: Var, env: *Env) Allocator.Error!bool {
-    return (try self.runUnify(outer, inner, env, .{ .on_mismatch = .write_no_report })).isEstablished();
+    return (try self.runUnify(outer, inner, env, &.{ .on_mismatch = .write_no_report })).isEstablished();
 }
 
 /// Whether a scanned tag occurrence is pattern-only.
@@ -20216,6 +20221,7 @@ fn recordAmbiguityCandidate(
 }
 
 fn shrinkAmbiguityCandidatesTo(self: *Self, new_len: usize) void {
+    self.ambiguity_candidates_def_start = @min(self.ambiguity_candidates_def_start, new_len);
     while (self.ambiguity_candidates.items.len > new_len) {
         const candidate = self.ambiguity_candidates.pop().?;
         const did_remove = self.ambiguity_candidate_by_key.remove(.{
@@ -20514,8 +20520,16 @@ fn judgeAmbiguityCandidatesAtGeneralizationMultiRoot(
     self: *Self,
     roots: []const BoundaryRoot,
 ) Allocator.Error!void {
+    // A judged candidate stays judged, so the leading ones are passed once
+    // for all of this def's later events.
+    while (self.ambiguity_candidates_def_start < self.ambiguity_candidates.items.len and
+        self.ambiguity_candidates.items[self.ambiguity_candidates_def_start].judged)
+    {
+        self.ambiguity_candidates_def_start += 1;
+    }
     var sets_built = false;
     for (self.ambiguity_candidates.items[self.ambiguity_candidates_def_start..]) |*candidate| {
+        if (builtin.is_test) self.test_ambiguity_candidate_visits += 1;
         if (candidate.judged) continue;
         const resolved = self.types.resolveVar(candidate.var_);
         const constraints_range = contentConstraintRange(resolved.desc.content) orelse {
@@ -24046,7 +24060,7 @@ fn relatePredeclaredUse(
                 base.invariant("type checker invariant violated: a use of a predeclared scheme was related after the using definition generalized it", .{});
             }
         }
-        const result = try self.runUnify(use_copy, image, env, .{ .on_mismatch = .write_no_report, .row_width_relation = .exact });
+        const result = try self.runUnify(use_copy, image, env, &.{ .on_mismatch = .write_no_report, .row_width_relation = .exact });
         if (!result.isAccepted()) {
             try self.rejectPredeclaredUse(annotation_idx, site);
             return;
@@ -27091,7 +27105,7 @@ fn liftKeptTailSources(self: *Self, env: *Env, ctx: problem.Context, probe: ?*Pr
         if (probe) |open| {
             if (!(try self.probeRelate(open, kept.source, target, opts)).isAccepted()) return false;
             try self.probeKeep(open, target);
-        } else if (!(try self.runUnify(kept.source, target, env, opts)).isAccepted()) return false;
+        } else if (!(try self.runUnify(kept.source, target, env, &opts)).isAccepted()) return false;
     }
     return true;
 }
@@ -29819,7 +29833,7 @@ fn stepRigidAnnoGen(self: *Self, frame: *AnnoGenFrame, rigid: std.meta.fieldInfo
             const representative = constraint_representatives.getOrPutAssumeCapacity(scratch_constraint.constraint.fn_name);
             if (representative.found_existing) {
                 const representative_constraint = self.scratch_static_dispatch_constraints.items.items[representative.value_ptr.*];
-                _ = try self.runUnify(representative_constraint.constraint.fn_var, scratch_constraint.constraint.fn_var, env, .{
+                _ = try self.runUnify(representative_constraint.constraint.fn_var, scratch_constraint.constraint.fn_var, env, &.{
                     .method_requirements = .{
                         .method_name = scratch_constraint.constraint.fn_name,
                         .receiver = anno_var,
@@ -33160,7 +33174,7 @@ const ExprCheckFrame = struct {
             // its report, so, like any other consumer of an erroneous value, the
             // annotation relates to it without reporting a mismatch of its own.
             const annotation_result = if (expr_is_erroneous)
-                try checker.runUnify(anno_vars.anno_var, self.expr_var, env, unifyOptionsForContext(anno_vars.context, .write_no_report))
+                try checker.runUnify(anno_vars.anno_var, self.expr_var, env, &unifyOptionsForContext(anno_vars.context, .write_no_report))
             else
                 try checker.unifyInContext(anno_vars.anno_var, self.expr_var, env, anno_vars.context);
             if (!annotation_result.isEstablished()) {
@@ -33340,30 +33354,34 @@ fn beginExprCheckFrame(
     const previous_discarded_binding_rhs_expr = self.discarded_binding_rhs_expr;
     const previous_active_scheme_root = self.active_scheme_root;
 
-    frame.* = ExprCheckFrame{
-        .expr_idx = expr_idx,
-        .expr = expr,
-        .expr_region = expr_region,
-        .expr_var_raw = expr_var_raw,
-        .expr_var = undefined,
-        .mb_anno_vars = null,
-        .nested_expected = expected.*,
-        .is_call_arg = false,
-        .is_immediate_callee = false,
-        .is_forwarded_result = false,
-        .is_binding_rhs = false,
-        .binding_pattern = null,
-        .previous_instantiation_source = previous_instantiation_source,
-        .previous_instantiation_is_immediate_callee = previous_instantiation_is_immediate_callee,
-        .previous_discarded_binding_rhs_expr = previous_discarded_binding_rhs_expr,
-        .previous_active_scheme_root = previous_active_scheme_root,
-        .suppress_group_member_generalize = false,
-        .should_generalize = false,
-        .generalizes_constant = false,
-        .instantiation_dispatchers_start = self.instantiation_dispatchers.items.len,
-        .rank_pushed = false,
-        .hoist_frame_open = false,
-    };
+    // Each field is written in place, and the expected type is copied
+    // straight from `expected`: a struct literal assigned to `frame.*` would
+    // copy the expected type through a temporary.
+    comptime std.debug.assert(std.meta.fieldNames(ExprCheckFrame).len == 24);
+    frame.expr_idx = expr_idx;
+    frame.expr = expr;
+    frame.expr_region = expr_region;
+    frame.expr_var_raw = expr_var_raw;
+    frame.expr_var = undefined;
+    frame.mb_anno_vars = null;
+    @memcpy(@as(*[1]Expected, &frame.nested_expected), @as(*const [1]Expected, expected));
+    frame.is_call_arg = false;
+    frame.is_immediate_callee = false;
+    frame.is_forwarded_result = false;
+    frame.is_binding_rhs = false;
+    frame.binding_pattern = null;
+    frame.previous_instantiation_source = previous_instantiation_source;
+    frame.previous_instantiation_is_immediate_callee = previous_instantiation_is_immediate_callee;
+    frame.previous_discarded_binding_rhs_expr = previous_discarded_binding_rhs_expr;
+    frame.previous_active_scheme_root = previous_active_scheme_root;
+    frame.suppress_group_member_generalize = false;
+    frame.should_generalize = false;
+    frame.generalizes_constant = false;
+    frame.instantiation_dispatchers_start = self.instantiation_dispatchers.items.len;
+    frame.rank_pushed = false;
+    frame.hoist_frame_open = false;
+    frame.annotation = null;
+    frame.active = true;
     errdefer frame.deinit(self, env);
 
     // Attribute any dispatcher instantiated while checking this expression to it,
@@ -39065,7 +39083,7 @@ fn relateBranchPatternToScrutinee(
     const pattern_var = ModuleEnv.varFrom(pattern);
     var opts = unifyOptionsForContext(ctx, .write_no_report);
     opts.member_tail = member_tail;
-    const result = try self.runUnify(state.ptrn_target_var, pattern_var, env, opts);
+    const result = try self.runUnify(state.ptrn_target_var, pattern_var, env, &opts);
     if (result.isEstablished()) return;
     state.had_type_error = true;
     if (result.isAccepted()) return;
@@ -43617,7 +43635,7 @@ fn finishNominalTypeUsage(
         const context: problem.Context = .{ .nominal_constructor = .{
             .backing_type = @fromBackingInt(@intCast(@backingInt(backing_type))),
         } };
-        const result = try self.runUnify(prepared.backing_var, actual_backing_var, env, .{
+        const result = try self.runUnify(prepared.backing_var, actual_backing_var, env, &.{
             .context = context,
             .on_mismatch = .write_no_report,
             .root_relation = .nominal_constructor_backing,
@@ -45008,11 +45026,10 @@ fn probeRelate(self: *Self, probe: *Probe, a: Var, b: Var, opts: unifier.Options
     const unify_env = self.unifyEnv();
     var unify_opts = opts;
     unify_opts.on_mismatch = .write_no_report;
-    unify_opts.repeated_label_rows = .return_row;
     const saved_fresh_region_var = self.unify_fresh_region_var;
     self.unify_fresh_region_var = b;
     defer self.unify_fresh_region_var = saved_fresh_region_var;
-    const result = try unifier.unify(&unify_env, a, b, unify_opts);
+    const result = try unifier.unify(&unify_env, a, b, &unify_opts, .return_row);
     if (result == .mismatch and probe.repeated_label_row == null) {
         if (self.unify_scratch.repeatedLabelRow()) |row| {
             if (self.types.predatesProbe(row)) probe.repeated_label_row = .{ .row = row, .actual = b };
@@ -45495,7 +45512,7 @@ fn bindRecordDestruct(self: *Self, pending: PendingRecordDestruct, env: *Env) st
     // is shared with every use of the name, so a rejection reports here,
     // poisons neither operand, and rejects the construct that owns the
     // pattern.
-    const result = try self.runUnify(pending.binder_var, bound_var, env, .{
+    const result = try self.runUnify(pending.binder_var, bound_var, env, &.{
         .context = .record_destructure,
         .on_mismatch = .write_no_report,
     });
@@ -48723,7 +48740,7 @@ fn relateSameMethodRequirements(
         // fail as this method conflict, which is described by the two method
         // types as they were before the relation, so they are recorded first.
         if (!defers) {
-            const redo_result = try self.runUnify(retained_fn_var, duplicate.fn_var, env, .{ .on_mismatch = .write_no_report });
+            const redo_result = try self.runUnify(retained_fn_var, duplicate.fn_var, env, &.{ .on_mismatch = .write_no_report });
             std.debug.assert(redo_result.isEstablished());
             return .merged;
         }
@@ -48733,7 +48750,7 @@ fn relateSameMethodRequirements(
             .use_var = self.methodConflictUseVar(duplicate_requirement, roots),
             .definitions = try self.recordMergedMethodDefinitions(roots),
         };
-        const redo_result = try self.runUnify(retained_fn_var, duplicate.fn_var, env, .{ .on_mismatch = .write_no_report });
+        const redo_result = try self.runUnify(retained_fn_var, duplicate.fn_var, env, &.{ .on_mismatch = .write_no_report });
         std.debug.assert(redo_result.isEstablished());
         const deferred_end = env.deferred_static_dispatch_constraints.len();
         var deferred_index = deferred_start;
@@ -51238,7 +51255,7 @@ fn relateResultValue(
     if (self.branchValueIsErroneous(actual_expr)) return .suppressed_by_error;
     const actual = ModuleEnv.varFrom(actual_expr);
     if (try self.relateWidenedResultValue(expected, actual_expr, env, ctx, target)) |result| return result;
-    const result = try self.runUnify(expected, actual, env, unifyOptionsForContext(ctx, .write_no_report));
+    const result = try self.runUnify(expected, actual, env, &unifyOptionsForContext(ctx, .write_no_report));
     if (!result.isProblem()) return result;
     const result_expr = self.resultValueExpr(actual_expr);
     const problem_idx = try self.appendTypeMismatch(expected, actual, self.mismatchContext(ctx, actual));
@@ -51298,7 +51315,7 @@ fn relateWidenedResultValue(
         return .{ .problem = idx };
     }
     if (widening == null) return null;
-    const result = try self.runUnify(expected, related, env, unifyOptionsForContext(ctx, .write_no_report));
+    const result = try self.runUnify(expected, related, env, &unifyOptionsForContext(ctx, .write_no_report));
     if (!result.isAccepted()) {
         self.discardResultWidening(widening.?);
         return null;
@@ -51557,7 +51574,7 @@ fn varReachesAny(self: *Self, root: Var, targets: []const Var) std.mem.Allocator
 /// caller, so a rejected contribution owns its diagnostic and poisons only its
 /// own expression; the result keeps the type its other contributions give it.
 fn unifyReturnContribution(self: *Self, expected: Var, actual: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
-    const result = try self.runUnify(expected, actual, env, unifyOptionsForContext(ctx, .write_no_report));
+    const result = try self.runUnify(expected, actual, env, &unifyOptionsForContext(ctx, .write_no_report));
     if (result.isAccepted()) return result;
     return .{ .problem = try self.appendTypeMismatch(expected, actual, self.mismatchContext(ctx, actual)) };
 }
@@ -51705,7 +51722,7 @@ fn projectTryReturnRow(self: *Self, tail: Var, env: *Env, region: Region) Alloca
 fn checkProjectedTryReturn(self: *Self, expected: Var, plan: TryReturnRows.Plan, row: Var, env: *Env, ctx: problem.Context) Allocator.Error!void {
     const region = self.cir.store.getExprRegion(plan.expr);
     const actual = try self.freshFromContent(try self.mkTryContent(plan.ok, row), env, region);
-    const result = try self.runUnify(expected, actual, env, unifyOptionsForContext(ctx, .write_no_report));
+    const result = try self.runUnify(expected, actual, env, &unifyOptionsForContext(ctx, .write_no_report));
     if (result.isAccepted()) return;
     // The projection is the contribution's heads over a fresh extension, which
     // the rejected relation may already have joined with the result's other
@@ -52643,7 +52660,7 @@ fn includeTryRowInLiveDestination(self: *Self, edge: DeferredTryRowEdge, env: *E
     const gathered = try self.gatherTryReturnRow(plan.err, true);
     if (rows.tags.items.len > 0) {
         const projection = try self.projectTryReturnRow(gathered.tail, env, self.cir.store.getExprRegion(plan.expr));
-        const result = try self.runUnify(live, projection.row, env, unifyOptionsForContext(edge.ctx, .write_no_report));
+        const result = try self.runUnify(live, projection.row, env, &unifyOptionsForContext(edge.ctx, .write_no_report));
         if (!result.isAccepted()) {
             // The report describes the contribution's own type, as an
             // undeferred projected contribution's does.
@@ -58042,7 +58059,7 @@ inline fn processDeferredDispatchEntryRelations(
                             method_var,
                             constraint.fn_var,
                             env,
-                            unifyOptionsForContext(fn_ctx, .write_no_report),
+                            &unifyOptionsForContext(fn_ctx, .write_no_report),
                         );
                     }
                     // A replayed edge's callable already is its method's
@@ -58053,7 +58070,7 @@ inline fn processDeferredDispatchEntryRelations(
                             method_var,
                             constraint.fn_var,
                             env,
-                            unifyOptionsForContext(fn_ctx, .poison_to_err),
+                            &unifyOptionsForContext(fn_ctx, .poison_to_err),
                         );
                     }
                     // This receiver's type is a default: a type the checker
@@ -59201,7 +59218,7 @@ fn mkDerivedComponentConstraint(
         env,
         region,
     );
-    _ = try self.runUnifyWithDispatchOwner(constrained_var, component_var, env, .{}, owner);
+    _ = try self.runUnifyWithDispatchOwner(constrained_var, component_var, env, &.{}, owner);
     try self.recordSchemeRequirementCandidate(component_var, constraint, .creation, null, false);
     try self.recordAmbiguityCandidate(component_var, .creation, constraintIntroExpr(constraint), position);
     return constraint_fn_var;
@@ -59949,7 +59966,7 @@ fn holdOnOpenRow(self: *Self, env: *Env, entry: DeferredConstraintCheck, row: Va
         held.receiver = .open_row_value;
         const range = try self.types.appendStaticDispatchConstraints(&.{held});
         const holder = try self.freshFromContent(.{ .flex = Flex{ .name = null, .constraints = range } }, env, self.getRegionAt(row));
-        _ = try self.runUnifyWithDispatchOwner(holder, row, env, .{}, .{ .recorded = entry.owner_group_index });
+        _ = try self.runUnifyWithDispatchOwner(holder, row, env, &.{}, .{ .recorded = entry.owner_group_index });
         try self.recordSchemeRequirementCandidate(row, held, .creation, null, false);
     }
     try self.open_row_holders.append(self.gpa, row);
@@ -63262,7 +63279,7 @@ fn relateDerivedDispatchOperand(
     actual: Var,
     report_mismatch: bool,
 ) Allocator.Error!bool {
-    const result = try self.runUnifyOftenRelated(expected, actual, env, .{ .on_mismatch = .write_no_report });
+    const result = try self.runUnifyOftenRelated(expected, actual, env, &.{ .on_mismatch = .write_no_report });
     if (!result.isProblem()) return true;
     if (!report_mismatch) return false;
     if (!try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, failure_expr)) {
@@ -63548,7 +63565,7 @@ fn relateDerivedCodecSignature(
     explicit_error_expr: ?CIR.Expr.Idx,
     owner_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!bool {
-    switch (try self.runUnify(derived_runtime_fn, required_runtime_fn, env, .{ .on_mismatch = .write_no_report })) {
+    switch (try self.runUnify(derived_runtime_fn, required_runtime_fn, env, &.{ .on_mismatch = .write_no_report })) {
         .unified => return true,
         // An erroneous type was already reported; only the dispatch is left
         // to retire.
@@ -65284,7 +65301,7 @@ fn constrainDerivedParserErrorEquality(
         }
     }
     const tags = self.scratch_tags.sliceFromStart(mark);
-    const result = try self.runUnify(parent_err_var, child_err_var, env, .{ .on_mismatch = .write_no_report });
+    const result = try self.runUnify(parent_err_var, child_err_var, env, &.{ .on_mismatch = .write_no_report });
     if (!result.isEstablished()) {
         try self.reportDerivedParserErrorRow(child_err_var, parent_err_var, constraint, failure_expr, region);
         return .reported_error;
@@ -66618,7 +66635,7 @@ fn validateDerivedCodecVariable(
     use.fn_name = method;
     use.fn_var = expected_fn;
     const use_callable = try self.whereMethodUseCallable(declared.fn_var, use, env);
-    switch (try self.runUnify(use_callable, expected_fn, env, .{ .on_mismatch = .write_no_report })) {
+    switch (try self.runUnify(use_callable, expected_fn, env, &.{ .on_mismatch = .write_no_report })) {
         .unified => {},
         .suppressed_by_error => return .reported_error,
         .mismatch => return try self.reportDerivedParseMissingMethodAt(var_, method, constraint, env, failure_expr),
@@ -67777,7 +67794,7 @@ test "a probe relates random small type pairs as a direct relation does, and a d
             var probe = probed.beginProbe(.discarded_var_update, &probed_solver);
             const probed_result = try probed.probeRelate(&probe, a[0], a[1], .{});
             try std.testing.expect(probe.repeated_label_row == null);
-            const direct_result = try direct.runUnify(a[0], a[1], &direct_solver, .{ .on_mismatch = .write_no_report });
+            const direct_result = try direct.runUnify(a[0], a[1], &direct_solver, &.{ .on_mismatch = .write_no_report });
             try std.testing.expectEqual(direct_result.isEstablished(), probed_result.isEstablished());
             if (probed_result.isEstablished()) {
                 try probed.probeKeep(&probe, a[1]);

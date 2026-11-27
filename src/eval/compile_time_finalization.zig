@@ -1684,6 +1684,17 @@ const BoxyLinkedImages = struct {
     providers: std.StringHashMapUnmanaged(usize) = .empty,
     function_metadata: std.AutoHashMapUnmanaged([32]u8, []const u8) = .empty,
     function_addresses: std.AutoHashMapUnmanaged(usize, FunctionOrigin) = .empty,
+    /// The constant stores of the modules whose objects are registered, by
+    /// image digest, and the stored images the loaded images' pool imports
+    /// name, placed once each (design.md "Constant Pool").
+    pool_index: ?check.ConstStore.ImageIndex = null,
+    pool: switch (boxy_object_code) {
+        .image => ?ImageLoader.Pool,
+        .pieces => void,
+    } = switch (boxy_object_code) {
+        .image => null,
+        .pieces => {},
+    },
 
     const FunctionOrigin = struct { owner: [32]u8, identity: lir.LIR.ProcIdentity };
 
@@ -1729,6 +1740,11 @@ const BoxyLinkedImages = struct {
             .image => image.unload(),
             .pieces => image.deinit(),
         };
+        switch (boxy_object_code) {
+            .image => if (self.pool) |*pool| pool.deinit(),
+            .pieces => {},
+        }
+        if (self.pool_index) |*index| index.deinit();
         self.images.deinit(self.allocator);
         self.code.deinit(self.allocator);
         switch (boxy_object_code) {
@@ -1752,6 +1768,26 @@ const BoxyLinkedImages = struct {
         while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
     }
 
+    /// Register the constant stores of `views`, the modules whose objects a
+    /// program links against, where the loaded images' pool imports are
+    /// found.
+    fn addStores(self: *BoxyLinkedImages, views: []const checked.ImportedModuleView) FinalizeError!void {
+        if (comptime boxy_object_code == .pieces) return;
+        self.lock();
+        defer self.mutex.unlock();
+        if (self.pool_index == null) self.pool_index = .init(self.allocator);
+        for (views) |view| try self.pool_index.?.addStore(view.const_store);
+    }
+
+    /// The stored image whose digest is `digest`, under the lock a load
+    /// holds.
+    fn findPoolImage(context: *anyopaque, digest: [32]u8) error{OutOfMemory}!?backend.dev.UnitImage.PoolImage {
+        const self: *BoxyLinkedImages = @ptrCast(@alignCast(context));
+        const index = if (self.pool_index) |*registered| registered else return null;
+        const image = try index.find(digest) orelse return null;
+        return .{ .bytes = image.bytes, .pointers = image.pointers, .alignment = image.alignment };
+    }
+
     /// Register imports-first producer records without mapping executable
     /// memory. Provider choice is independent of which worker requests it.
     fn prepare(self: *BoxyLinkedImages, objects: []const BoxyObject, timing: ?*Timing) FinalizeError!void {
@@ -1770,6 +1806,8 @@ const BoxyLinkedImages = struct {
             var dependencies = std.AutoArrayHashMapUnmanaged(usize, void).empty;
             defer dependencies.deinit(self.allocator);
             for (view.imports()) |import| {
+                // A stored image is the constant pool's, not an object's.
+                if (import.flags & backend.dev.UnitImage.import_pool != 0) continue;
                 const name = view.name(import.name);
                 if (backend.dev.HostSplice.hostFunction(name) != null) continue;
                 if (self.providers.get(name)) |provider| {
@@ -1877,7 +1915,8 @@ const BoxyLinkedImages = struct {
         const view = candidate.view;
         var diagnostic: ImageLoader.Diagnostic = .{};
         var binding_context = ImportContext{ .images = self, .provider = provider };
-        var image = ImageLoader.load(self.allocator, view, .{ .context = &binding_context, .resolve = resolveImport }, &diagnostic) catch |err| switch (err) {
+        if (self.pool == null) self.pool = .{ .gpa = self.allocator, .source = .{ .context = self, .find = findPoolImage } };
+        var image = ImageLoader.load(self.allocator, view, .{ .context = &binding_context, .resolve = resolveImport, .pool = &self.pool.? }, &diagnostic) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.FlushInstructionCacheFailed => return error.FlushInstructionCacheFailed,
             error.UndefinedImport => finalizationInvariantFmt("a cached Boxy module's image imports {s}, which nothing loaded defines", .{diagnostic.name}),
@@ -3114,6 +3153,7 @@ const ModuleEvaluation = struct {
             const source = shared.options.boxy_objects.?;
             if (try source.objects(source.context, module)) |set| {
                 const registration_started = Timing.startStep(shared.options.timing);
+                try shared.images.addStores(set.views);
                 try shared.images.prepare(set.objects, shared.options.timing);
                 Timing.finishStep(shared.options.timing, registration_started, .image_registration);
                 run_options.boxy_linked_images = shared.images;
@@ -3158,6 +3198,7 @@ const ModuleEvaluation = struct {
             if (self.links(shared)) {
                 const source = shared.options.boxy_objects.?;
                 if (try source.functions(source.context, self.artifact(shared))) |objects| {
+                    try shared.function_images.addStores(objects.views);
                     options.boxy_function_objects = objects;
                     options.boxy_linked_images = shared.function_images;
                     modules = .{ .root = checked.loweringViewWithRelations(self.artifact(shared), &.{}), .imports = objects.views };
@@ -8102,7 +8143,7 @@ const RootFailure = enum {
         return switch (payload) {
             .const_node => |node| switch (module.const_store.get(node)) {
                 .checked_error => .checked_error,
-                .image, .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .nominal, .fn_value, .boxy_fn => .crash,
+                .image, .pending, .list, .box, .tuple, .record, .crash, .tag, .nominal, .fn_value, .boxy_fn => .crash,
             },
             .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => .crash,
         };
@@ -8354,7 +8395,7 @@ fn completeRoot(
         .const_node => |node| switch (module.const_store.get(node)) {
             .image, .crash, .checked_error => false,
             .pending => unreachable, // A completed root's stored node is fully published.
-            .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value, .boxy_fn => true,
+            .list, .box, .tuple, .record, .tag, .nominal, .fn_value, .boxy_fn => true,
         },
         .pending, .unevaluated, .discarded, .expect, .runtime => false,
     };

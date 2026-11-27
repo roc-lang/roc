@@ -7109,20 +7109,18 @@ pub const Builder = struct {
         // A discriminant-only tag is a scalar value: its read is its
         // construction (design.md "Compile-Time Evaluation").
         const enum_tag = try self.storedEnumTag(source, node, raw_ty);
-        if (data != .scalar) if (self.program.stored_value_slots.get(key)) |slot| {
+        if (self.program.stored_value_slots.get(key)) |slot| {
             return self.pushValue(if (enum_tag) |name| try self.enumConstant(raw_ty, name, slot) else try self.staticRead(slot));
-        };
+        }
         // A value built from parts is remembered where its parts are
         // restored (`restorePartStep`), and a failed value has no slot.
         const remembered_here = switch (data) {
-            .image, .scalar, .zst, .str, .boxy_fn, .nominal, .fn_value => true,
+            .image, .boxy_fn, .nominal, .fn_value => true,
             .pending, .crash, .checked_error, .box, .tuple, .record, .tag, .list => false,
         };
         if (remembered_here) try self.push(.{ .remember_static_value = key });
         switch (data) {
             .pending => invariant("a stored constant was never filled"),
-            .scalar => |scalar| try self.restoreScalar(source, node, raw_ty, scalar),
-            .zst, .str => try self.pushValue(try self.storedDataLocal(source, node, raw_ty)),
             .crash => |message| {
                 if (root) |failed| {
                     // The value is a root's whose evaluation failed and was
@@ -7218,7 +7216,7 @@ pub const Builder = struct {
         const tag = while (true) switch (const_store.get(current)) {
             .nominal => |nominal| current = nominal.backing,
             .tag => |tag| break tag,
-            .image, .pending, .scalar, .zst, .str, .boxy_fn, .fn_value, .crash, .checked_error, .box, .tuple, .record, .list => return null,
+            .image, .pending, .boxy_fn, .fn_value, .crash, .checked_error, .box, .tuple, .record, .list => return null,
         };
         if (tag.payloads.len != 0) return null;
         return try self.enumTagOf(ty, tag.tag_name);
@@ -7254,17 +7252,12 @@ pub const Builder = struct {
         const key: lower.Program.StoredValueKey = .{ .module = source.module, .node = node, .ty = raw_ty };
         if (self.program.stored_value_slots.get(key)) |slot| return try self.static_parts.append(self.allocator, slot);
         const data = const_store.get(node);
-        // A value that is data alone is one slot, its image or frozen from
-        // the store through its type's const plan, however many values it
-        // holds.
+        // A value that is data alone is its image, one slot however many
+        // values it holds; a value stored as nodes holds a function.
         if (const_store.imageOf(node) != null) return try self.pushStoredDataPart(source, node, raw_ty);
         switch (data) {
-            .nominal, .box, .tuple, .record, .tag, .list => if (try self.program.storedDataAlone(source, node)) return try self.pushStoredDataPart(source, node, raw_ty),
-            .image, .pending, .scalar, .zst, .str, .crash, .checked_error, .boxy_fn, .fn_value => {},
-        }
-        switch (data) {
             .pending => invariant("a stored constant was never filled"),
-            .image, .scalar, .zst, .str => try self.pushStoredDataPart(source, node, raw_ty),
+            .image => try self.pushStoredDataPart(source, node, raw_ty),
             // A function value is built by its own restore, and a failed
             // value fails where it is restored: each is restored as a value,
             // whose slot is the part.
@@ -7343,7 +7336,9 @@ pub const Builder = struct {
                             self.tasks.appendAssumeCapacity(.{ .restore_part = .{ .source = source, .node = nodes[index], .ty = elem } });
                         }
                     },
-                    .empty, .packed_bytes => invariant("a stored list without item nodes is not data alone"),
+                    // An empty list of an open type (a part of a capture of
+                    // a polymorphic function) is frozen from its node.
+                    .empty => try self.pushStoredDataPart(source, node, raw_ty),
                 }
             },
         }
@@ -7421,10 +7416,6 @@ pub const Builder = struct {
         try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = slot } }, .next = undefined } });
         try self.constant_slots.put(self.allocator, local, slot);
         return local;
-    }
-
-    fn storedDataLocal(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, ty: TypeId) Allocator.Error!LocalId {
-        return self.staticRead(try self.storedDataSlot(source, node, ty));
     }
 
     fn storedDataSlot(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, ty: TypeId) Allocator.Error!LIR.StaticDataId {

@@ -1118,7 +1118,6 @@ fn constUnsigned(
     }
     const value = checked_module.const_store.get(node);
     if (value == .nominal) return constUnsigned(checked_module, value.nominal.backing, reason);
-    if (value == .scalar) return scalarUnsigned(value.scalar, reason);
     reason.* = .expected_unsigned_integer;
     return null;
 }

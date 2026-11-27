@@ -60,6 +60,12 @@ pub const HostSplice = if (builtin.os.tag == .freestanding) void else @import("H
 pub const UnitPieces = @import("UnitPieces.zig");
 /// One unit's machine code laid out for a fast dev link.
 pub const UnitImage = @import("UnitImage.zig");
+
+comptime {
+    // A unit image reads the pool names static data writes, without
+    // importing it (`UnitImage` builds on `std` alone).
+    std.debug.assert(std.mem.eql(u8, UnitImage.pool_symbol_prefix, @import("lir").Program.pool_image_symbol_prefix));
+}
 /// The perf map of the functions the compiler places in its own process.
 pub const PerfMap = @import("PerfMap.zig");
 /// Loads a unit image into this process: every 64-bit x86 or ARM host the

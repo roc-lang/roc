@@ -107,3 +107,26 @@ test "wide row growth: matching every tag of a closed union (#13311)" {
 test "wide row growth: coverage of one arm per constructor (#13311)" {
     try expectLinearStorage(.coverage_bytes);
 }
+
+/// The work relating requirement lists and judging ambiguity candidates does
+/// for `uses` interpolations of one value.
+fn interpolationWork(uses: usize) TestEnv.TestEnvError!usize {
+    var source = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer source.deinit();
+    const w = &source.writer;
+    try w.writeAll("greet : Str -> List(Str)\ngreet = |name| [\n");
+    for (0..uses) |i| try w.print("    \"line {d} for ${{name}}\",\n", .{i});
+    try w.writeAll("]\n");
+
+    var env = try TestEnv.init("Test", source.written());
+    defer env.deinit();
+    try env.assertNoErrors();
+    return env.checker.unify_scratch.test_constraint_reads + env.checker.test_ambiguity_candidate_visits;
+}
+
+test "many interpolations of one value relate their requirements in linear work (#13310)" {
+    const small = try interpolationWork(64);
+    const large = try interpolationWork(256);
+    if (large > 8 * small) std.debug.print("interpolation work: 64 uses: {d}; 256 uses: {d}\n", .{ small, large });
+    try std.testing.expect(large <= 8 * small);
+}

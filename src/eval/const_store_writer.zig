@@ -3,7 +3,8 @@
 //! built in memory from their checked expressions and from the stored values
 //! of the constants those read (design.md "Value-Form Roots"). A value that
 //! is data alone is stored as its image (design.md "Stored Images"); a value
-//! holding a function is stored as nodes by one plan-directed walk.
+//! holding a function is stored as nodes by one plan-directed walk, each of
+//! its parts that holds no function as an image of its own.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -122,8 +123,6 @@ pub const Writer = struct {
     checked_components: std.ArrayList(CIR.Expr.Idx) = .empty,
     erased_callable_resolver: ErasedCallableResolver,
     boxy_functions: ?BoxyFunctions = null,
-    product_plans: std.AutoHashMap(ProductPlanKey, ?lir.PackedData.Plan),
-    product_eligibility: collections.DenseMap(LirProgram.ConstPlanId, bool),
     /// Composites being stored, innermost last, and the shared stacks their
     /// component requests, nodes and capture types occupy runs of.
     store_frames: std.ArrayList(StoreFrame) = .empty,
@@ -132,8 +131,11 @@ pub const Writer = struct {
     store_capture_types: std.ArrayList(const_store.ConstTypeId) = .empty,
     /// Content digests of the program's layouts, for the images it stores.
     layout_digests: ?layout.Digests = null,
-
-    const ProductPlanKey = struct { plan: LirProgram.ConstPlanId, layout_idx: layout.Idx };
+    /// The function representation each plan can hold, if any
+    /// (`planFunctions`).
+    plan_functions: collections.DenseMap(LirProgram.ConstPlanId, ?base.SpecializationStrategy),
+    /// Scratch for the parts `valueHoldsFunction` has still to look at.
+    function_scan: std.ArrayList(ValueRequest) = .empty,
 
     pub fn init(
         allocator: Allocator,
@@ -158,8 +160,7 @@ pub const Writer = struct {
             .type_translation = .init(allocator),
             .stored_values = std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId).init(allocator),
             .erased_callable_resolver = .{},
-            .product_plans = std.AutoHashMap(ProductPlanKey, ?lir.PackedData.Plan).init(allocator),
-            .product_eligibility = collections.DenseMap(LirProgram.ConstPlanId, bool).init(allocator),
+            .plan_functions = collections.DenseMap(LirProgram.ConstPlanId, ?base.SpecializationStrategy).init(allocator),
         };
     }
 
@@ -219,7 +220,7 @@ pub const Writer = struct {
         defer self.allocator.free(described.captures);
         const requests_start = self.store_requests.items.len;
         for (described.captures) |capture| {
-            try self.store_requests.append(self.allocator, .{ .plan = capture.plan, .layout_idx = capture.layout_idx, .value = .{ .ptr = capture.ptr } });
+            try self.store_requests.append(self.allocator, .{ .plan = capture.plan, .layout_idx = capture.layout_idx, .ty = .{ .boxy = capture.ty }, .value = .{ .ptr = capture.ptr } });
         }
         try self.pushStoreFrame(.{ .boxy_fn = .{ .node = node, .recipe = described.recipe } }, requests_start, &.{});
     }
@@ -230,10 +231,8 @@ pub const Writer = struct {
         self.store_nodes.deinit(self.allocator);
         self.store_requests.deinit(self.allocator);
         self.store_frames.deinit(self.allocator);
-        var plans = self.product_plans.valueIterator();
-        while (plans.next()) |plan| if (plan.*) |*present| present.deinit();
-        self.product_plans.deinit();
-        self.product_eligibility.deinit();
+        self.plan_functions.deinit();
+        self.function_scan.deinit(self.allocator);
         self.checked_text.deinit(self.allocator);
         self.checked_components.deinit(self.allocator);
         self.stored_values.deinit();
@@ -258,11 +257,11 @@ pub const Writer = struct {
             .compile_time_constant, .repl_expr => if (try self.planFunctionStrategy(root.plan) == null)
                 .{ .const_node = try self.storeImage(root, try self.storeRootType(root), value) }
             else
-                .{ .const_node = try self.storeValue(root.plan, root.ret_layout, value) },
+                .{ .const_node = try self.storeValue(root.plan, root.ret_layout, .{ .stored = root.ret_type }, value) },
             .compile_time_callable => switch (plan) {
                 .fn_value => |set| .{ .fn_value = try self.storeFnValue(set, root.ret_layout, value) },
                 .erased_fn => |set| .{ .fn_value = try self.storeErasedFn(set, value) },
-                .boxy_fn => .{ .const_node = try self.storeValue(root.plan, root.ret_layout, value) },
+                .boxy_fn => .{ .const_node = try self.storeValue(root.plan, root.ret_layout, .{ .stored = root.ret_type }, value) },
                 .pending,
                 .layout_only,
                 .zst,
@@ -374,13 +373,27 @@ pub const Writer = struct {
         );
     }
 
-    /// One value to store or scan.
+    /// One value to store or scan, of type `ty`.
     const ValueRequest = struct {
         plan: LirProgram.ConstPlanId,
         layout_idx: layout.Idx,
+        ty: PartType,
         value: Value,
         storage: LirProgram.CaptureSlotStorage = .value,
     };
+
+    /// The type of a value being stored: one of the program's stored types,
+    /// or, for a capture of a `.boxy` function value, the capture's type in
+    /// the `.boxy` program (`postcheck.Boxy.StoredFn.Capture.ty`), which a
+    /// polymorphic function's capture may hold variables of in the types of
+    /// the functions it holds.
+    const PartType = union(enum) {
+        stored: const_store.ConstTypeId,
+        boxy: BoxyTypeId,
+    };
+
+    const BoxyTypeId = lir.CheckedPipeline.BoxyStoredFunctions.PartTypeId;
+    const PartStep = lir.CheckedPipeline.BoxyStoredFunctions.PartStep;
 
     const StoreFinish = union(enum) {
         list: struct { node: checked.ConstNodeId, capacity: u64 },
@@ -428,10 +441,11 @@ pub const Writer = struct {
         self: *Writer,
         plan_id: LirProgram.ConstPlanId,
         layout_idx: layout.Idx,
+        ty: PartType,
         value: Value,
     ) Error!checked.ConstNodeId {
         self.clearStoreStacks();
-        const node = try self.startStore(.{ .plan = plan_id, .layout_idx = layout_idx, .value = value });
+        const node = try self.startStore(.{ .plan = plan_id, .layout_idx = layout_idx, .ty = ty, .value = value });
         _ = try self.drainStore();
         return node;
     }
@@ -521,53 +535,51 @@ pub const Writer = struct {
         node: checked.ConstNodeId,
         request: ValueRequest,
     ) Error!void {
-        var layout_idx = request.layout_idx;
-        var part = request.value;
-        switch (request.storage) {
-            .value => {},
-            .recursive_box => {
-                const boxed = self.program.layouts.getLayout(layout_idx);
-                if (boxed.tag != .box) writerInvariant("recursive capture slot did not use box storage");
-                const payload = self.readBoxDataPointer(part) orelse
-                    writerInvariant("recursive capture slot had null payload pointer");
-                layout_idx = boxed.getIdx();
-                part = .{ .ptr = payload };
-            },
-        }
+        const located = self.locate(request);
+        const layout_idx = located.layout_idx;
+        const part = located.value;
+        // A part holding no function is data alone, which the store holds as
+        // its image (design.md "Stored Images"), when its layout is a
+        // function of its type alone: its plan holds no function, or holds
+        // `.boxy` functions, which every layout holds as erased callables
+        // (an `.lss` function's layout is its lambda set's, which its type
+        // does not decide), and its type is closed (a part of a `.boxy`
+        // capture of a polymorphic function may hold a variable in its
+        // functions' types).
+        const functions = try self.planFunctions(request.plan);
+        const imaged = functions != .lss and !try self.valueHoldsFunction(request) and self.partTypeIsClosed(request.ty);
+        if (imaged) return self.fillPartImage(node, request.plan, layout_idx, request.ty, part);
         const requests_start = self.store_requests.items.len;
         const children = &self.store_requests;
         const finish: StoreFinish = switch (self.constPlan(request.plan).*) {
             .pending => writerInvariant("pending const plan reached ConstStore writer"),
             .layout_only => writerInvariant("layout-only const plan reached ConstStore writer"),
-            .zst => return self.store.fill(node, .zst),
-            .scalar => return self.store.fill(node, .{ .scalar = self.storeScalar(layout_idx, part) }),
-            .str => return self.store.fill(node, try self.storeStr(part)),
+            .zst, .scalar, .str => writerInvariant("a value holding no function reached the node writer"),
             .list => |elem_plan| blk: {
-                if (try self.storeListLeaf(node, elem_plan, layout_idx, part)) return;
-                try self.appendListRequests(children, elem_plan, layout_idx, part);
+                try self.appendListRequests(children, elem_plan, layout_idx, part, request.ty);
                 break :blk .{ .list = .{ .node = node, .capacity = listCapacity(part) } };
             },
             .box => |elem_plan| blk: {
-                try self.appendBoxRequest(children, elem_plan, layout_idx, part);
+                try self.appendBoxRequest(children, elem_plan, layout_idx, part, request.ty);
                 break :blk .{ .box = node };
             },
             .tuple => |items| blk: {
-                try self.appendStructRequests(children, items, layout_idx, part);
+                try self.appendStructRequests(children, items, layout_idx, part, request.ty);
                 break :blk .{ .tuple = node };
             },
             .record => |fields| blk: {
-                try self.appendStructRequests(children, fields, layout_idx, part);
+                try self.appendStructRequests(children, fields, layout_idx, part, request.ty);
                 break :blk .{ .record = node };
             },
             .tag_union => |variants| blk: {
                 const tag_base = self.resolveTagBase(layout_idx, part);
                 const selected = self.selectTagVariant(variants, tag_base.layout_idx, tag_base.value);
                 const payload_layout = self.tagPayloadLayout(tag_base.layout_idx, selected.discriminant);
-                try self.appendTagPayloadRequests(children, selected.payloads, payload_layout, tag_base.value);
+                try self.appendTagPayloadRequests(children, selected.payloads, payload_layout, tag_base.value, request.ty, selected.discriminant);
                 break :blk .{ .tag = .{ .node = node, .name = selected.name } };
             },
             .named => |named| blk: {
-                try children.append(self.allocator, .{ .plan = named.backing, .layout_idx = layout_idx, .value = part });
+                try children.append(self.allocator, .{ .plan = named.backing, .layout_idx = layout_idx, .ty = try self.partTypeOf(request.ty, .nominal_backing), .value = part });
                 break :blk .{ .nominal = .{ .node = node, .plan = request.plan } };
             },
             .fn_value => |set| return self.pushFnValue(node, set, layout_idx, part),
@@ -575,6 +587,153 @@ pub const Writer = struct {
             .boxy_fn => return self.pushBoxyFn(node, part),
         };
         try self.pushStoreFrame(finish, requests_start, &.{});
+    }
+
+    /// Where `request`'s value is: a recursive capture slot holds a box of
+    /// it.
+    fn locate(self: *Writer, request: ValueRequest) struct { layout_idx: layout.Idx, value: Value } {
+        switch (request.storage) {
+            .value => return .{ .layout_idx = request.layout_idx, .value = request.value },
+            .recursive_box => {
+                const boxed = self.program.layouts.getLayout(request.layout_idx);
+                if (boxed.tag != .box) writerInvariant("recursive capture slot did not use box storage");
+                const payload = self.readBoxDataPointer(request.value) orelse
+                    writerInvariant("recursive capture slot had null payload pointer");
+                return .{ .layout_idx = boxed.getIdx(), .value = .{ .ptr = payload } };
+            },
+        }
+    }
+
+    /// Store `value` of `plan` at `layout_idx`, of the program's stored type
+    /// `ty`, as the image node `node` holds.
+    fn fillPartImage(self: *Writer, node: checked.ConstNodeId, plan: LirProgram.ConstPlanId, layout_idx: layout.Idx, ty: PartType, value: Value) Error!void {
+        var graph = NativeRootExport.ImageGraph{ .allocator = self.allocator, .program = self.program };
+        defer graph.deinit();
+        const image = try NativeRootExport.imageRoot(&graph, .{ .ret_layout = layout_idx, .plan = plan }, value);
+        const root_type = try self.storeType(switch (ty) {
+            .stored => |stored| stored,
+            .boxy => |boxy| try self.boxyFunctions().retained.storedType(self.boxyFunctions().result, boxy),
+        });
+        try self.store.fillImage(node, .{
+            .bytes = image.bytes,
+            .pointers = image.pointers,
+            .alignment = image.alignment,
+            .root_size = @intCast(graph.size(layout_idx)),
+            .root_type = root_type,
+            .layout_digest = try self.layoutDigest(layout_idx),
+            .type_digest = try self.store.type_store.identityDigest(self.allocator, self.typeNames(), root_type),
+        });
+    }
+
+    /// The function representation plan `id` can hold, if any
+    /// (`planFunctionStrategy`), memoized per plan.
+    fn planFunctions(self: *Writer, id: LirProgram.ConstPlanId) Allocator.Error!?base.SpecializationStrategy {
+        if (self.plan_functions.get(id)) |known| return known;
+        const functions = try self.planFunctionStrategy(id);
+        try self.plan_functions.put(id, functions);
+        return functions;
+    }
+
+    /// Whether plan `id` can hold a function.
+    fn planHoldsFunction(self: *Writer, id: LirProgram.ConstPlanId) Allocator.Error!bool {
+        return try self.planFunctions(id) != null;
+    }
+
+    /// Whether the value `start` names holds a function value: the parts
+    /// its plan can hold one in are looked at, each once, until one does.
+    fn valueHoldsFunction(self: *Writer, start: ValueRequest) Error!bool {
+        if (!try self.planHoldsFunction(start.plan)) return false;
+        const pending = &self.function_scan;
+        pending.clearRetainingCapacity();
+        try pending.append(self.allocator, start);
+        while (pending.pop()) |request| {
+            if (!try self.planHoldsFunction(request.plan)) continue;
+            const located = self.locate(request);
+            switch (self.constPlan(request.plan).*) {
+                .pending => writerInvariant("pending const plan reached ConstStore writer"),
+                .layout_only => writerInvariant("layout-only const plan reached ConstStore writer"),
+                .zst, .scalar, .str => {},
+                .fn_value, .erased_fn, .boxy_fn => return true,
+                .list => |elem_plan| try self.appendListRequests(pending, elem_plan, located.layout_idx, located.value, request.ty),
+                .box => |elem_plan| try self.appendBoxRequest(pending, elem_plan, located.layout_idx, located.value, request.ty),
+                .tuple, .record => |items| try self.appendStructRequests(pending, items, located.layout_idx, located.value, request.ty),
+                .tag_union => |variants| {
+                    const tag_base = self.resolveTagBase(located.layout_idx, located.value);
+                    const selected = self.selectTagVariant(variants, tag_base.layout_idx, tag_base.value);
+                    const payload_layout = self.tagPayloadLayout(tag_base.layout_idx, selected.discriminant);
+                    try self.appendTagPayloadRequests(pending, selected.payloads, payload_layout, tag_base.value, request.ty, selected.discriminant);
+                },
+                .named => |named| try pending.append(self.allocator, .{ .plan = named.backing, .layout_idx = located.layout_idx, .ty = try self.partTypeOf(request.ty, .nominal_backing), .value = located.value }),
+            }
+        }
+        return false;
+    }
+
+    fn boxyFunctions(self: *const Writer) BoxyFunctions {
+        return self.boxy_functions orelse writerInvariant("a `.boxy` capture reached a program that stores no function value");
+    }
+
+    /// Whether a part of type `ty` can be stored at its type: every stored
+    /// type is closed, and a `.boxy` capture's part is when its type holds
+    /// no variable.
+    fn partTypeIsClosed(self: *const Writer, ty: PartType) bool {
+        return switch (ty) {
+            .stored => true,
+            .boxy => |boxy| self.boxyFunctions().retained.typeIsClosed(self.boxyFunctions().result, boxy),
+        };
+    }
+
+    /// The type of the part `step` reaches of a value of type `ty`, as the
+    /// value's plan reaches the part's plan.
+    fn partTypeOf(self: *const Writer, ty: PartType, step: PartStep) Allocator.Error!PartType {
+        return switch (ty) {
+            .stored => |stored| .{ .stored = self.storedPartType(stored, step) },
+            .boxy => |boxy| .{ .boxy = try self.boxyFunctions().retained.partType(self.boxyFunctions().result, boxy, step) },
+        };
+    }
+
+    /// `partTypeOf` for one of the program's stored types.
+    fn storedPartType(self: *const Writer, ty: const_store.ConstTypeId, step: PartStep) const_store.ConstTypeId {
+        const types = &self.program.const_types;
+        if (step == .nominal_backing) {
+            var current = ty;
+            while (true) switch (types.get(current)) {
+                .named => |named| {
+                    const backing = (named.backing.get() orelse writerInvariant("a stored named type has no backing")).ty;
+                    if (named.kind != .alias) return backing;
+                    current = backing;
+                },
+                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => writerInvariant("a nominal plan's value has a type that is not named"),
+            };
+        }
+        // A plan other than a nominal's has its type's structure.
+        var structural = ty;
+        while (true) switch (types.get(structural)) {
+            .named => |named| structural = (named.backing.get() orelse writerInvariant("a stored named type has no backing")).ty,
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => break,
+        };
+        const content = types.get(structural);
+        return switch (step) {
+            .nominal_backing => unreachable, // handled above
+            .list_item => switch (content) {
+                .list => |item| item,
+                .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => writerInvariant("a list plan's value has a type that is not a list"),
+            },
+            .box_payload => switch (content) {
+                .box => |payload| payload,
+                .primitive, .named, .record, .tuple, .tag_union, .list, .func, .erased, .zst => writerInvariant("a box plan's value has a type that is not a box"),
+            },
+            .component => |index| switch (content) {
+                .tuple => |range| types.typeSpan(range)[index],
+                .record => |range| types.fieldSpan(range)[index].ty,
+                .primitive, .named, .tag_union, .list, .box, .func, .erased, .zst => writerInvariant("a product plan's value has a type that is not a product"),
+            },
+            // A plan's variants are its type's tags, in order.
+            .tag_payload => |payload| switch (content) {
+                .tag_union => |range| types.typeSpan(types.tagSpan(range)[payload.variant].payloads)[payload.index],
+                .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => writerInvariant("a tag union plan's value has a type that is not a tag union"),
+            },
+        };
     }
 
     /// Push the frame storing the requests appended to `store_requests`
@@ -698,42 +857,6 @@ pub const Writer = struct {
         return null;
     }
 
-    /// Stores a list whose elements need no nodes of their own (an empty,
-    /// packed-scalar, or packed-product list, discriminant-only tag unions
-    /// among a product's leaves); false when its elements are stored as
-    /// nodes.
-    fn storeListLeaf(
-        self: *Writer,
-        target_node: checked.ConstNodeId,
-        elem_plan: LirProgram.ConstPlanId,
-        layout_idx: layout.Idx,
-        part: Value,
-    ) Error!bool {
-        const layout_value = self.program.layouts.getLayout(layout_idx);
-        if (layout_value.tag != .list and layout_value.tag != .list_of_zst) {
-            writerInvariant("list const plan had non-list layout");
-        }
-        const roc_list: *const RocList = @ptrCast(@alignCast(part.ptr));
-        const len = roc_list.len();
-        const capacity = listCapacity(part);
-        if (len == 0) {
-            self.store.fill(target_node, .{ .list = .{ .items = .empty, .capacity = capacity } });
-            return true;
-        }
-        if (self.planIsScalar(elem_plan)) {
-            try self.storePackedList(target_node, layout_value, part, capacity);
-            return true;
-        }
-        const elem_layout = if (layout_value.tag == .list_of_zst) layout.Idx.zst else layout_value.getIdx();
-        if (try self.productPlan(elem_plan, elem_layout)) |plan| {
-            const memory_len = std.math.mul(usize, len, plan.memory_width) catch unreachable; // the list's elements occupy this many bytes of live memory
-            const memory = if (memory_len == 0) &.{} else roc_list.bytes.?[0..memory_len];
-            try self.storeProductList(target_node, elem_plan, elem_layout, plan, memory, len, capacity);
-            return true;
-        }
-        return false;
-    }
-
     /// The capacity the list at `value` was evaluated with, in items. A list
     /// of zero-sized items holds no allocation and records its capacity as a
     /// count alone.
@@ -748,19 +871,21 @@ pub const Writer = struct {
         elem_plan: LirProgram.ConstPlanId,
         layout_idx: layout.Idx,
         value: Value,
+        list_ty: PartType,
     ) Allocator.Error!void {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
+        const item_ty = try self.partTypeOf(list_ty, .list_item);
         try out.ensureUnusedCapacity(self.allocator, roc_list.len());
         if (layout_value.tag == .list_of_zst) {
-            for (0..roc_list.len()) |_| out.appendAssumeCapacity(.{ .plan = elem_plan, .layout_idx = .zst, .value = Value.zst });
+            for (0..roc_list.len()) |_| out.appendAssumeCapacity(.{ .plan = elem_plan, .layout_idx = .zst, .ty = item_ty, .value = Value.zst });
             return;
         }
         const elem_layout = layout_value.getIdx();
         const elem_size: usize = self.program.layouts.layoutSize(self.program.layouts.getLayout(elem_layout));
         if (roc_list.bytes) |bytes| {
             for (0..roc_list.len()) |index| {
-                out.appendAssumeCapacity(.{ .plan = elem_plan, .layout_idx = elem_layout, .value = .{ .ptr = bytes + index * elem_size } });
+                out.appendAssumeCapacity(.{ .plan = elem_plan, .layout_idx = elem_layout, .ty = item_ty, .value = .{ .ptr = bytes + index * elem_size } });
             }
         } else if (roc_list.len() != 0) {
             writerInvariant("non-empty list had null element pointer");
@@ -773,18 +898,21 @@ pub const Writer = struct {
         elem_plan: LirProgram.ConstPlanId,
         layout_idx: layout.Idx,
         value: Value,
+        box_ty: PartType,
     ) Allocator.Error!void {
         const layout_value = self.program.layouts.getLayout(layout_idx);
+        const payload_ty = try self.partTypeOf(box_ty, .box_payload);
         try out.append(self.allocator, switch (layout_value.tag) {
             .hole => writerInvariant("a demand hole reached a compile-time value"),
             .dynamic => writerInvariant("a dynamic value reached a compile-time value"),
-            .box_of_zst => .{ .plan = elem_plan, .layout_idx = .zst, .value = Value.zst },
+            .box_of_zst => .{ .plan = elem_plan, .layout_idx = .zst, .ty = payload_ty, .value = Value.zst },
             .box => .{
                 .plan = elem_plan,
                 .layout_idx = layout_value.getIdx(),
+                .ty = payload_ty,
                 .value = .{ .ptr = self.readBoxDataPointer(value) orelse writerInvariant("boxed value had null payload pointer") },
             },
-            .erased_callable => .{ .plan = elem_plan, .layout_idx = layout_idx, .value = value },
+            .erased_callable => .{ .plan = elem_plan, .layout_idx = layout_idx, .ty = payload_ty, .value = value },
             .scalar,
             .list,
             .list_of_zst,
@@ -805,6 +933,7 @@ pub const Writer = struct {
         plans: []const LirProgram.ConstPlanId,
         struct_layout: layout.Idx,
         struct_value: Value,
+        struct_ty: PartType,
     ) Allocator.Error!void {
         if (plans.len == 0) return;
         var layout_idx = struct_layout;
@@ -818,14 +947,14 @@ pub const Writer = struct {
         }
         try out.ensureUnusedCapacity(self.allocator, plans.len);
         if (layout_value.tag == .zst or layout_value.tag == .box_of_zst) {
-            for (plans) |component| out.appendAssumeCapacity(.{ .plan = component, .layout_idx = .zst, .value = Value.zst });
+            for (plans, 0..) |component, index| out.appendAssumeCapacity(.{ .plan = component, .layout_idx = .zst, .ty = try self.partTypeOf(struct_ty, .{ .component = @intCast(index) }), .value = Value.zst });
             return;
         }
         if (layout_value.tag != .struct_) writerInvariant("struct const plan had non-struct layout");
         for (plans, 0..) |component, index| {
             const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.getStruct().idx, @intCast(index));
             const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.getStruct().idx, @intCast(index));
-            out.appendAssumeCapacity(.{ .plan = component, .layout_idx = field_layout, .value = value.offset(offset) });
+            out.appendAssumeCapacity(.{ .plan = component, .layout_idx = field_layout, .ty = try self.partTypeOf(struct_ty, .{ .component = @intCast(index) }), .value = value.offset(offset) });
         }
     }
 
@@ -835,21 +964,24 @@ pub const Writer = struct {
         plans: []const LirProgram.ConstPlanId,
         payload_layout: layout.Idx,
         value: Value,
+        union_ty: PartType,
+        variant: u32,
     ) Allocator.Error!void {
         if (plans.len == 0) return;
         try out.ensureUnusedCapacity(self.allocator, plans.len);
         if (plans.len == 1) {
-            out.appendAssumeCapacity(.{ .plan = plans[0], .layout_idx = payload_layout, .value = value });
+            out.appendAssumeCapacity(.{ .plan = plans[0], .layout_idx = payload_layout, .ty = try self.partTypeOf(union_ty, .{ .tag_payload = .{ .variant = variant, .index = 0 } }), .value = value });
             return;
         }
         const layout_value = self.program.layouts.getLayout(payload_layout);
         if (layout_value.tag == .zst) {
-            for (plans) |plan| out.appendAssumeCapacity(.{ .plan = plan, .layout_idx = .zst, .value = Value.zst });
+            for (plans, 0..) |plan, index| out.appendAssumeCapacity(.{ .plan = plan, .layout_idx = .zst, .ty = try self.partTypeOf(union_ty, .{ .tag_payload = .{ .variant = variant, .index = @intCast(index) } }), .value = Value.zst });
         } else if (layout_value.tag == .struct_) {
             for (plans, 0..) |plan, index| {
+                const ty = try self.partTypeOf(union_ty, .{ .tag_payload = .{ .variant = variant, .index = @intCast(index) } });
                 const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.getStruct().idx, @intCast(index));
                 const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.getStruct().idx, @intCast(index));
-                out.appendAssumeCapacity(.{ .plan = plan, .layout_idx = field_layout, .value = value.offset(offset) });
+                out.appendAssumeCapacity(.{ .plan = plan, .layout_idx = field_layout, .ty = ty, .value = value.offset(offset) });
             }
         } else {
             writerInvariant("multi-payload tag did not use a struct payload layout");
@@ -867,62 +999,20 @@ pub const Writer = struct {
         try out.ensureUnusedCapacity(self.allocator, slots.len);
         const layout_value = self.program.layouts.getLayout(payload_layout);
         if (layout_value.tag == .zst) {
-            for (slots) |slot| out.appendAssumeCapacity(.{ .plan = slot.plan, .layout_idx = .zst, .value = Value.zst, .storage = slot.storage });
+            for (slots) |slot| out.appendAssumeCapacity(.{ .plan = slot.plan, .layout_idx = .zst, .ty = .{ .stored = slot.ty }, .value = Value.zst, .storage = slot.storage });
         } else if (layout_value.tag == .struct_) {
             for (slots) |slot| {
                 const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.getStruct().idx, slot.slot);
                 const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.getStruct().idx, slot.slot);
-                out.appendAssumeCapacity(.{ .plan = slot.plan, .layout_idx = field_layout, .value = payload_value.offset(offset), .storage = slot.storage });
+                out.appendAssumeCapacity(.{ .plan = slot.plan, .layout_idx = field_layout, .ty = .{ .stored = slot.ty }, .value = payload_value.offset(offset), .storage = slot.storage });
             }
         } else if (slots.len == 1) {
-            out.appendAssumeCapacity(.{ .plan = slots[0].plan, .layout_idx = payload_layout, .value = payload_value, .storage = slots[0].storage });
+            out.appendAssumeCapacity(.{ .plan = slots[0].plan, .layout_idx = payload_layout, .ty = .{ .stored = slots[0].ty }, .value = payload_value, .storage = slots[0].storage });
         } else {
             writerInvariant("multi-capture function did not use a struct capture layout");
         }
     }
 
-    fn storeScalar(self: *Writer, layout_idx: layout.Idx, value: Value) checked.ConstScalar {
-        const layout_value = self.program.layouts.getLayout(layout_idx);
-        if (layout_value.tag != .scalar) writerInvariant("scalar const plan had non-scalar layout");
-        const scalar = layout_value.getScalar();
-        return switch (scalar.tag) {
-            .str => writerInvariant("string scalar layout reached scalar const plan"),
-            .int => switch (scalar.getInt()) {
-                .u8 => .{ .u8 = value.read(u8) },
-                .i8 => .{ .i8 = value.read(i8) },
-                .u16 => .{ .u16 = value.read(u16) },
-                .i16 => .{ .i16 = value.read(i16) },
-                .u32 => .{ .u32 = value.read(u32) },
-                .i32 => .{ .i32 = value.read(i32) },
-                .u64 => .{ .u64 = value.read(u64) },
-                .i64 => .{ .i64 = value.read(i64) },
-                .u128 => .{ .u128 = value.read(u128) },
-                .i128 => .{ .i128 = value.read(i128) },
-            },
-            // A stored NaN is Roc's one NaN, whatever bits the evaluation
-            // produced.
-            .frac => switch (scalar.getFrac()) {
-                .f32 => .{ .f32_bits = builtins.float_bits.normalizeF32NanBits(@bitCast(value.read(f32))) },
-                .f64 => .{ .f64_bits = builtins.float_bits.normalizeF64NanBits(@bitCast(value.read(f64))) },
-                .dec => .{ .dec_bits = value.read(builtins.dec.RocDec).num },
-            },
-            .opaque_ptr => writerInvariant("opaque pointer scalar layout reached scalar const plan"),
-            .vector => .{ .u128 = value.read(u128) },
-        };
-    }
-
-    /// A string is stored as exactly its own bytes and the capacity it was
-    /// evaluated with. How the evaluator's allocations share bytes between
-    /// strings is runtime representation, which never enters the ConstStore;
-    /// equal bytes share one blob because `addBlobData` interns by content.
-    fn storeStr(self: *Writer, value: Value) Allocator.Error!checked.ConstValue {
-        const roc_str: *const RocStr = @ptrCast(@alignCast(value.ptr));
-        return .{ .str = .{ .bytes = try self.storeBytes(roc_str.asSlice()), .capacity = strCapacity(roc_str) } };
-    }
-
-    /// The capacity the string was evaluated with. One held inline in its
-    /// descriptor has no capacity of its own beyond its bytes, and neither
-    /// does a seamless slice, whose capacity is its window.
     fn strCapacity(roc_str: *const RocStr) u64 {
         if (roc_str.isSmallStr()) return roc_str.len();
         return roc_str.getCapacity();
@@ -1080,291 +1170,6 @@ pub const Writer = struct {
 
     fn storeBytes(self: *Writer, bytes: []const u8) Allocator.Error!const_store.ConstStr {
         return try self.store.addBlobData(bytes);
-    }
-
-    fn planIsProduct(self: *Writer, root: LirProgram.ConstPlanId) Allocator.Error!bool {
-        const Frame = struct {
-            id: LirProgram.ConstPlanId,
-            children: []const LirProgram.ConstPlanId,
-            index: usize = 0,
-            /// A tag union's variants, whose payloads are its components,
-            /// one variant's after another's.
-            variants: []const LirProgram.ConstTagVariant = &.{},
-            variant: usize = 0,
-        };
-        var frames = std.ArrayList(Frame).empty;
-        defer frames.deinit(self.allocator);
-        // The answer of the plan just entered or finished; null when entering
-        // it pushed a frame.
-        var answer = try self.enterProductPlan(&frames, root);
-        while (frames.items.len > 0) {
-            const top = &frames.items[frames.items.len - 1];
-            const failed = if (answer) |child_answer| !child_answer else false;
-            if (!failed and top.index == top.children.len and top.variant < top.variants.len) {
-                top.children = top.variants[top.variant].payloads;
-                top.index = 0;
-                top.variant += 1;
-                answer = null;
-                continue;
-            }
-            if (!failed and top.index < top.children.len) {
-                const child = top.children[top.index];
-                top.index += 1;
-                answer = try self.enterProductPlan(&frames, child);
-                continue;
-            }
-            const done = frames.pop().?;
-            try self.product_eligibility.put(done.id, !failed);
-            answer = !failed;
-        }
-        return answer.?;
-    }
-
-    /// Answers a plan whose eligibility is known or needs no components, and
-    /// pushes a frame for a plan whose components decide it.
-    fn enterProductPlan(self: *Writer, frames: anytype, id: LirProgram.ConstPlanId) Allocator.Error!?bool {
-        if (self.product_eligibility.get(id)) |result| return result;
-        // A cycle cannot be a fixed product. Recursive edges remain graph data.
-        try self.product_eligibility.put(id, false);
-        const raw = @backingInt(id);
-        if (raw >= self.program.const_plans.items.len) writerInvariant("const plan id is out of range");
-        const children: []const LirProgram.ConstPlanId = switch (self.program.const_plans.items[raw]) {
-            .scalar, .zst => {
-                try self.product_eligibility.put(id, true);
-                return true;
-            },
-            .named => |*named| (&named.backing)[0..1],
-            .record, .tuple => |children| children,
-            // A tag union's payloads are its components. Its layout decides
-            // whether it packs: only one whose payloads are all zero-sized
-            // is its discriminant alone (`productPlan`).
-            .tag_union => |variants| {
-                try frames.append(self.allocator, .{ .id = id, .children = &.{}, .variants = variants });
-                return null;
-            },
-            .pending, .layout_only => writerInvariant("product eligibility reached an unfinished const plan"),
-            .str, .list, .box, .fn_value, .erased_fn, .boxy_fn => return false,
-        };
-        try frames.append(self.allocator, .{ .id = id, .children = children });
-        return null;
-    }
-
-    fn productPlan(self: *Writer, id: LirProgram.ConstPlanId, idx: layout.Idx) Allocator.Error!?*const lir.PackedData.Plan {
-        const key = ProductPlanKey{ .plan = id, .layout_idx = idx };
-        if (self.product_plans.getPtr(key)) |entry| return if (entry.*) |*plan| plan else null;
-        const plan: ?lir.PackedData.Plan = if (try self.planIsProduct(id) and try lir.PackedData.Plan.layoutPacks(self.allocator, &self.program.layouts, idx))
-            try lir.PackedData.Plan.init(self.allocator, &self.program.layouts, idx)
-        else
-            null;
-        errdefer if (plan) |value| {
-            var owned = value;
-            owned.deinit();
-        };
-        try self.product_plans.put(key, plan);
-        return if (self.product_plans.getPtr(key).?.*) |*value| value else null;
-    }
-
-    /// Store a list of `len` products of plan `elem_plan` at `elem_layout`
-    /// whose elements lie in `memory` as the evaluation's memory holds them.
-    fn storeProductList(
-        self: *Writer,
-        node: checked.ConstNodeId,
-        elem_plan: LirProgram.ConstPlanId,
-        elem_layout: layout.Idx,
-        plan: *const lir.PackedData.Plan,
-        memory: []const u8,
-        len: usize,
-        capacity: u64,
-    ) Allocator.Error!void {
-        const byte_len = std.math.mul(usize, len, plan.packed_width) catch unreachable; // packed leaves are disjoint parts of an element, so this is at most memory_len
-        const data = if (plan.memoryIsCanonical(builtin.cpu.arch.endian()))
-            try self.store.addBlobData(memory)
-        else blk: {
-            plan.encode(try self.store.reserveBlobData(byte_len), memory, len, builtin.cpu.arch.endian());
-            break :blk try self.store.commitBlobData(byte_len);
-        };
-        if (builtin.mode == .debug) try self.assertPackedTags(elem_plan, elem_layout, plan, self.store.blobData(data), memory, len);
-        self.store.fill(node, .{ .list = .{ .items = .{ .packed_bytes = .{
-            .bytes = data,
-            .len = try checkedU32(len),
-            .element = null,
-            .product_width = plan.packed_width,
-        } }, .capacity = capacity } });
-    }
-
-    /// Every discriminant-only tag of the `len` products `memory` holds is
-    /// packed in `canonical` as the index, in byte-wise name order, of the
-    /// variant storing the item on its own selects (`selectTagVariant`).
-    fn assertPackedTags(
-        self: *Writer,
-        elem_plan: LirProgram.ConstPlanId,
-        elem_layout: layout.Idx,
-        plan: *const lir.PackedData.Plan,
-        canonical: []const u8,
-        memory: []const u8,
-        len: usize,
-    ) Allocator.Error!void {
-        if (plan.tags.items.len == 0) return;
-        const TagPart = struct { variants: []const LirProgram.ConstTagVariant, layout_idx: layout.Idx, offset: usize };
-        var tags = std.ArrayList(TagPart).empty;
-        defer tags.deinit(self.allocator);
-        // The plan's tag unions in the order the packing plan's leaves are:
-        // components in plan order, which is their fields' original order.
-        const Pending = struct { plan: LirProgram.ConstPlanId, layout_idx: layout.Idx, offset: usize };
-        var pending = std.ArrayList(Pending).empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, .{ .plan = elem_plan, .layout_idx = elem_layout, .offset = 0 });
-        while (pending.pop()) |part| {
-            const layout_value = self.program.layouts.getLayout(part.layout_idx);
-            if (layout_value.tag == .zst) continue;
-            switch (self.constPlan(part.plan).*) {
-                .scalar, .zst => {},
-                .named => |named| try pending.append(self.allocator, .{ .plan = named.backing, .layout_idx = part.layout_idx, .offset = part.offset }),
-                .tag_union => |variants| try tags.append(self.allocator, .{ .variants = variants, .layout_idx = part.layout_idx, .offset = part.offset }),
-                .tuple, .record => |components| {
-                    const struct_idx = layout_value.getStruct().idx;
-                    var index = components.len;
-                    while (index > 0) {
-                        index -= 1;
-                        try pending.append(self.allocator, .{
-                            .plan = components[index],
-                            .layout_idx = self.program.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(index)),
-                            .offset = part.offset + self.program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, @intCast(index)),
-                        });
-                    }
-                },
-                .pending, .layout_only, .str, .list, .box, .fn_value, .erased_fn, .boxy_fn => writerInvariant("a packed product plan holds a part other than a number, discriminant-only tag union, record, tuple or named type"),
-            }
-        }
-        std.debug.assert(tags.items.len == plan.tags.items.len);
-        for (tags.items, plan.tags.items) |tag, leaf| for (0..len) |item| {
-            const selected = self.selectTagVariant(tag.variants, tag.layout_idx, .{ .ptr = @constCast(memory[item * plan.memory_width + tag.offset ..].ptr) });
-            var rank: u64 = 0;
-            for (tag.variants) |variant| {
-                if (std.mem.order(u8, variant.name, selected.name) == .lt) rank += 1;
-            }
-            var index: u64 = 0;
-            for (canonical[item * plan.packed_width + leaf.packed_offset ..][0..leaf.width], 0..) |byte, shift| index |= @as(u64, byte) << @intCast(shift * 8);
-            std.debug.assert(index == rank);
-        };
-    }
-
-    fn planIsScalar(self: *const Writer, root: LirProgram.ConstPlanId) bool {
-        var plan_id = root;
-        while (true) return switch (self.constPlan(plan_id).*) {
-            .scalar => true,
-            .named => |named| {
-                plan_id = named.backing;
-                continue;
-            },
-            .pending,
-            .layout_only,
-            .zst,
-            .str,
-            .list,
-            .box,
-            .tuple,
-            .record,
-            .tag_union,
-            .fn_value,
-            .erased_fn,
-            .boxy_fn,
-            => false,
-        };
-    }
-
-    fn packedScalarForLayout(self: *const Writer, layout_idx: layout.Idx) ?const_store.ConstPackedScalar {
-        const layout_value = self.program.layouts.getLayout(layout_idx);
-        if (layout_value.tag != .scalar) return null;
-        const scalar = layout_value.getScalar();
-        return switch (scalar.tag) {
-            .str, .opaque_ptr => null,
-            .int => switch (scalar.getInt()) {
-                .u8 => .u8,
-                .i8 => .i8,
-                .u16 => .u16,
-                .i16 => .i16,
-                .u32 => .u32,
-                .i32 => .i32,
-                .u64 => .u64,
-                .i64 => .i64,
-                .u128 => .u128,
-                .i128 => .i128,
-            },
-            .frac => switch (scalar.getFrac()) {
-                .f32 => .f32,
-                .f64 => .f64,
-                .dec => .dec,
-            },
-            .vector => switch (scalar.getVector()) {
-                .u8x16 => .u8x16,
-                .i8x16 => .i8x16,
-                .u16x8 => .u16x8,
-                .i16x8 => .i16x8,
-                .u32x4 => .u32x4,
-                .i32x4 => .i32x4,
-                .u64x2 => .u64x2,
-                .i64x2 => .i64x2,
-            },
-        };
-    }
-
-    fn storePackedList(
-        self: *Writer,
-        target_node: checked.ConstNodeId,
-        list_layout: layout.Layout,
-        value: Value,
-        capacity: u64,
-    ) Error!void {
-        if (list_layout.tag != .list) writerInvariant("packed scalar list had non-list layout");
-        const elem_layout = list_layout.getIdx();
-        const element = self.packedScalarForLayout(elem_layout) orelse
-            writerInvariant("scalar const plan had a non-packable list element layout");
-        const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
-        if (roc_list.bytes == null and roc_list.len() != 0) {
-            writerInvariant("non-empty packed list had null element pointer");
-        }
-        self.store.fill(target_node, .{ .list = .{ .items = .{ .packed_bytes = .{
-            .bytes = try self.packMemory(elem_layout, element, roc_list.bytes, roc_list.len()),
-            .len = try checkedU32(roc_list.len()),
-            .element = element,
-        } }, .capacity = capacity } });
-    }
-
-    /// The interned packed bytes of the `len` scalars of `element` at
-    /// `elem_layout` that a list's memory at `source` holds.
-    fn packMemory(
-        self: *Writer,
-        elem_layout: layout.Idx,
-        element: const_store.ConstPackedScalar,
-        source: ?[*]const u8,
-        len: usize,
-    ) Allocator.Error!const_store.ConstStr {
-        const width: usize = element.byteWidth();
-        if (builtin.mode == .debug) std.debug.assert(self.program.layouts.layoutSize(self.program.layouts.getLayout(elem_layout)) == width);
-        const byte_len = std.math.mul(usize, len, width) catch
-            writerInvariant("packed list byte length overflowed");
-        const bytes = try self.store.reserveBlobData(byte_len);
-        if (source) |memory| switch (builtin.cpu.arch.endian()) {
-            .little => {
-                packMemoryScalars(element, bytes, memory[0..byte_len]);
-                // The list's bytes are what storing each item on its own
-                // writes.
-                if (builtin.mode == .debug) for (0..len) |index| {
-                    var item: [16]u8 = undefined;
-                    writePackedScalar(item[0..width], element, self.storeScalar(elem_layout, .{ .ptr = @constCast(memory + index * width) }));
-                    for (item[0..width], bytes[index * width ..][0..width]) |expected, stored| std.debug.assert(expected == stored);
-                };
-            },
-            // A big-endian program's memory holds no scalar wider than a
-            // byte as its packed little-endian bytes, so each item is
-            // packed on its own.
-            .big => for (0..len) |index| {
-                const scalar = self.storeScalar(elem_layout, .{ .ptr = @constCast(memory + index * width) });
-                writePackedScalar(bytes[index * width ..][0..width], element, scalar);
-            },
-        };
-        return try self.store.commitBlobData(byte_len);
     }
 
     fn selectFnVariant(
@@ -1548,19 +1353,6 @@ fn interpreterErasedCallable(_: ?*anyopaque, data_ptr: [*]u8) error{RuntimeError
         .proc = Interpreter.erasedCallableInterpreterProcId(data_ptr),
         .capture_ptr = Interpreter.erasedCallableInterpreterCaptureValuePtr(data_ptr),
     };
-}
-
-/// Pack the scalars of `element` that a little-endian program's memory holds
-/// in `source` into `out`, as `writePackedScalar` packs each one. Every
-/// packed scalar is its little-endian bytes, so the bytes are copied as they
-/// are, a float's with every NaN made Roc's one NaN as it is copied.
-fn packMemoryScalars(element: const_store.ConstPackedScalar, out: []u8, source: []const u8) void {
-    if (builtin.mode == .debug) std.debug.assert(builtin.cpu.arch.endian() == .little and out.len == source.len);
-    switch (element) {
-        .f32 => builtins.float_bits.copyNormalizingF32NanBits(out, source),
-        .f64 => builtins.float_bits.copyNormalizingF64NanBits(out, source),
-        .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => @memcpy(out, source),
-    }
 }
 
 /// A value-form root written as its image (`Writer.storeCheckedRoot`): each
@@ -1785,53 +1577,6 @@ const ValueFormImage = struct {
     const max_image_alignment = 16;
 };
 
-fn writePackedScalar(out: []u8, element: const_store.ConstPackedScalar, scalar: checked.ConstScalar) void {
-    if (out.len != element.byteWidth()) writerInvariant("packed scalar output width disagreed with its encoding");
-    switch (element) {
-        .u8 => out[0] = packedScalarValue(.u8, scalar, "packed U8 list element had different scalar data"),
-        .i8 => out[0] = @bitCast(packedScalarValue(.i8, scalar, "packed I8 list element had different scalar data")),
-        .u16 => base.byte_encoding.writeIntLittle(u16, out, packedScalarValue(.u16, scalar, "packed U16 list element had different scalar data")),
-        .i16 => base.byte_encoding.writeIntLittle(i16, out, packedScalarValue(.i16, scalar, "packed I16 list element had different scalar data")),
-        .u32 => base.byte_encoding.writeIntLittle(u32, out, packedScalarValue(.u32, scalar, "packed U32 list element had different scalar data")),
-        .i32 => base.byte_encoding.writeIntLittle(i32, out, packedScalarValue(.i32, scalar, "packed I32 list element had different scalar data")),
-        .u64 => base.byte_encoding.writeIntLittle(u64, out, packedScalarValue(.u64, scalar, "packed U64 list element had different scalar data")),
-        .i64 => base.byte_encoding.writeIntLittle(i64, out, packedScalarValue(.i64, scalar, "packed I64 list element had different scalar data")),
-        .u128 => writePackedU128(out, packedScalarValue(.u128, scalar, "packed U128 list element had different scalar data")),
-        .i128 => base.byte_encoding.writeIntLittle(i128, out, packedScalarValue(.i128, scalar, "packed I128 list element had different scalar data")),
-        .f32 => base.byte_encoding.writeIntLittle(u32, out, packedScalarValue(.f32_bits, scalar, "packed F32 list element had different scalar data")),
-        .f64 => base.byte_encoding.writeIntLittle(u64, out, packedScalarValue(.f64_bits, scalar, "packed F64 list element had different scalar data")),
-        .dec => base.byte_encoding.writeIntLittle(i128, out, packedScalarValue(.dec_bits, scalar, "packed Dec list element had different scalar data")),
-        .u8x16,
-        .i8x16,
-        .u16x8,
-        .i16x8,
-        .u32x4,
-        .i32x4,
-        .u64x2,
-        .i64x2,
-        => writePackedU128(out, packedScalarValue(.u128, scalar, "packed vector list element had different scalar data")),
-    }
-}
-
-fn packedScalarValue(
-    comptime tag: std.meta.Tag(checked.ConstScalar),
-    scalar: checked.ConstScalar,
-    comptime mismatch_message: []const u8,
-) @FieldType(checked.ConstScalar, @tagName(tag)) {
-    if (std.meta.activeTag(scalar) != tag) writerInvariant(mismatch_message);
-    return @field(scalar, @tagName(tag));
-}
-
-fn writePackedU128(out: []u8, value: u128) void {
-    base.byte_encoding.writeIntLittle(u128, out, value);
-}
-
-/// `value` as a ConstStore width. A value past it is a constant larger than
-/// the store holds, which the evaluated program could reach.
-fn checkedU32(value: usize) Allocator.Error!u32 {
-    return std.math.cast(u32, value) orelse error.OutOfMemory;
-}
-
 /// The segments of value-form string `expr`.
 fn checkedStrSegments(bodies: *const checked.CheckedBodies, expr: CIR.Expr.Idx) []const CIR.Expr.Idx {
     const data = bodies.exprData(checked.valueFormValueExpr(bodies, expr));
@@ -1960,13 +1705,6 @@ fn testConstRoot(plan: LirProgram.ConstPlanId, ret_layout: layout.Idx, ret_type:
         .ret_type = ret_type,
         .plan = plan,
     };
-}
-
-/// Store `value` of `plan` at `ret_layout` as nodes, as a part of a value
-/// holding a function is stored.
-fn testStoreNodes(writer: *Writer, plan: LirProgram.ConstPlanId, ret_layout: layout.Idx, value: Value) Error!checked.CompileTimeRootPayload {
-    writer.stored_values.clearRetainingCapacity();
-    return .{ .const_node = try writer.storeValue(plan, ret_layout, value) };
 }
 
 /// A stored type `ty` of `program`, for a test root.
@@ -2243,455 +1981,4 @@ test "const store writer boxy recipe ownership frees a failed popped frame only 
         try std.testing.expectEqual(freed + "child".len + "parent".len, tracking.freed_bytes);
     }
     try std.testing.expectEqual(tracking.allocated_bytes, tracking.freed_bytes);
-}
-
-test "packing a little-endian float list's memory matches packing each item" {
-    if (builtin.cpu.arch.endian() != .little) return error.SkipZigTest;
-    const f32_items = [_]u32{
-        0x7f80_0001, 0x7fa1_2345, 0x7fc0_0000, 0xff80_0001, 0xffc1_2345, 0xffff_ffff, 0x7f80_0000, 0xff80_0000,
-        0x0000_0000, 0x8000_0000, 0x0000_0001, 0x807f_ffff, 0x7f7f_ffff, 0x3f80_0000, 0xbf80_0000, 0x4049_0fdb,
-        0x7fbf_ffff, 0xff80_0002, 0x0040_0000, 0x8000_0001, 0x7fc0_0001, 0x4000_0000, 0xc000_0000,
-    };
-    var f32_memory: [f32_items.len * 4]u8 = undefined;
-    for (f32_items, 0..) |bits, index| std.mem.writeInt(u32, f32_memory[index * 4 ..][0..4], bits, .native);
-    var f32_packed: [f32_memory.len]u8 = undefined;
-    packMemoryScalars(.f32, &f32_packed, &f32_memory);
-    var f32_expected: [f32_memory.len]u8 = undefined;
-    for (f32_items, 0..) |bits, index| {
-        writePackedScalar(f32_expected[index * 4 ..][0..4], .f32, .{ .f32_bits = builtins.float_bits.normalizeF32NanBits(@bitCast(@as(f32, @bitCast(bits)))) });
-    }
-    try std.testing.expectEqualSlices(u8, &f32_expected, &f32_packed);
-
-    const f64_items = [_]u64{
-        0x7ff0_0000_0000_0001, 0x7ff1_2345_6789_abcd, 0x7ff8_0000_0000_0000, 0xfff0_0000_0000_0001,
-        0xfff9_2345_6789_abcd, 0xffff_ffff_ffff_ffff, 0x7ff0_0000_0000_0000, 0xfff0_0000_0000_0000,
-        0x0000_0000_0000_0000, 0x8000_0000_0000_0000, 0x0000_0000_0000_0001, 0x800f_ffff_ffff_ffff,
-        0x7fef_ffff_ffff_ffff, 0x3ff0_0000_0000_0000, 0xbff0_0000_0000_0000,
-    };
-    var f64_memory: [f64_items.len * 8]u8 = undefined;
-    for (f64_items, 0..) |bits, index| std.mem.writeInt(u64, f64_memory[index * 8 ..][0..8], bits, .native);
-    var f64_packed: [f64_memory.len]u8 = undefined;
-    packMemoryScalars(.f64, &f64_packed, &f64_memory);
-    var f64_expected: [f64_memory.len]u8 = undefined;
-    for (f64_items, 0..) |bits, index| {
-        writePackedScalar(f64_expected[index * 8 ..][0..8], .f64, .{ .f64_bits = builtins.float_bits.normalizeF64NanBits(@bitCast(@as(f64, @bitCast(bits)))) });
-    }
-    try std.testing.expectEqualSlices(u8, &f64_expected, &f64_packed);
-}
-
-test "const store writer stores an evaluated scalar list as storing each item would" {
-    const testing = std.testing;
-    if (builtin.cpu.arch.endian() != .little) return error.SkipZigTest;
-
-    var module_env = try can.ModuleEnv.init(testing.allocator, "");
-    defer module_env.deinit();
-    var artifact = try initTestArtifact(testing.allocator, &module_env);
-    defer deinitTestArtifact(&artifact, testing.allocator);
-    var program = try LirProgram.Result.init(testing.allocator, .u64);
-    defer program.deinit();
-    const scalar_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
-    try program.const_plans.append(testing.allocator, .scalar);
-    const list_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
-    try program.const_plans.append(testing.allocator, .{ .list = scalar_plan });
-
-    var writer = Writer.init(testing.allocator, &artifact, &program);
-    defer writer.deinit();
-
-    // 67 items cross every whole vector of the float packing and leave a
-    // partial one.
-    const max_items = 67;
-    var memory: [max_items * 16]u8 align(16) = undefined;
-    var prng = std.Random.DefaultPrng.init(0x5eed);
-    const elems = [_]layout.Idx{ .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 };
-    for (elems) |elem| {
-        const list_layout = try program.layouts.insertLayout(layout.Layout.list(elem));
-        const element = writer.packedScalarForLayout(elem).?;
-        const width: usize = element.byteWidth();
-        for ([_]usize{ 0, 1, max_items }) |len| {
-            prng.random().bytes(&memory);
-            // NaNs with payloads and signs, which a float list stores as
-            // Roc's one NaN.
-            for (0..len) |index| switch (element) {
-                .f32 => if (index % 3 == 0) std.mem.writeInt(u32, memory[index * 4 ..][0..4], 0xff80_0000 | @as(u32, @intCast(index + 1)), .little),
-                .f64 => if (index % 3 == 0) std.mem.writeInt(u64, memory[index * 8 ..][0..8], 0x7ff0_0000_0000_0000 | @as(u64, index + 1), .little),
-                .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => {},
-            };
-            var roc_list = RocList{
-                .bytes = &memory,
-                .length = len,
-                .capacity_or_alloc_ptr = RocList.encodeCapacity(max_items),
-            };
-            const stored = try testStoreNodes(&writer, list_plan, list_layout, .{ .ptr = @ptrCast(&roc_list) });
-            const list = artifact.const_store.get(stored.const_node).list;
-            try testing.expectEqual(@as(u64, max_items), list.capacity);
-            if (len == 0) {
-                try testing.expect(list.items == .empty);
-                continue;
-            }
-            const items = list.items.packed_bytes;
-            try testing.expectEqual(element, items.element.?);
-            try testing.expectEqual(len, items.len);
-            const blob = artifact.const_store.blobData(items.bytes);
-            try testing.expectEqual(len * width, blob.len);
-            for (0..len) |index| {
-                const item = try testStoreNodes(&writer, scalar_plan, elem, .{ .ptr = memory[index * width ..].ptr });
-                var expected: [16]u8 = undefined;
-                writePackedScalar(expected[0..width], element, artifact.const_store.get(item.const_node).scalar);
-                try testing.expectEqualSlices(u8, expected[0..width], blob[index * width ..][0..width]);
-            }
-            if (element == .f32 or element == .f64) {
-                // The first item is a NaN whose low byte Roc's one NaN
-                // clears.
-                try testing.expect(blob[0] != memory[0]);
-            } else {
-                try testing.expectEqualSlices(u8, memory[0 .. len * width], blob);
-            }
-        }
-    }
-}
-
-test "const store writer stores every NaN of an evaluated product list as Roc's one NaN" {
-    const testing = std.testing;
-    if (builtin.cpu.arch.endian() != .little) return error.SkipZigTest;
-
-    var module_env = try can.ModuleEnv.init(testing.allocator, "");
-    defer module_env.deinit();
-    var artifact = try initTestArtifact(testing.allocator, &module_env);
-    defer deinitTestArtifact(&artifact, testing.allocator);
-    var program = try LirProgram.Result.init(testing.allocator, .u64);
-    defer program.deinit();
-    const scalar_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
-    try program.const_plans.append(testing.allocator, .scalar);
-    const record_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
-    const children = try testing.allocator.dupe(LirProgram.ConstPlanId, &.{ scalar_plan, scalar_plan, scalar_plan });
-    program.const_plans.append(testing.allocator, .{ .record = children }) catch |err| {
-        testing.allocator.free(children);
-        return err;
-    };
-    const list_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
-    try program.const_plans.append(testing.allocator, .{ .list = record_plan });
-    const record_layout = try program.layouts.putStructFields(&.{
-        .{ .index = 0, .layout = .f64 },
-        .{ .index = 1, .layout = .f32 },
-        .{ .index = 2, .layout = .u32 },
-    });
-    const list_layout = try program.layouts.insertLayout(layout.Layout.list(record_layout));
-
-    var writer = Writer.init(testing.allocator, &artifact, &program);
-    defer writer.deinit();
-
-    const Item = extern struct { f64_bits: u64, f32_bits: u32, int: u32 };
-    var items = [_]Item{
-        .{ .f64_bits = 0xfff8_0000_0000_0000, .f32_bits = 0xffc0_0000, .int = 0x7fc0_0001 },
-        .{ .f64_bits = 0x7ff0_0000_0000_0001, .f32_bits = 0x7f80_0001, .int = 0xffff_ffff },
-        .{ .f64_bits = 0x8000_0000_0000_0000, .f32_bits = 0x7f80_0000, .int = 0 },
-    };
-    var roc_list = RocList{
-        .bytes = @ptrCast(&items),
-        .length = items.len,
-        .capacity_or_alloc_ptr = RocList.encodeCapacity(items.len),
-    };
-    const stored = try testStoreNodes(&writer, list_plan, list_layout, .{ .ptr = @ptrCast(&roc_list) });
-    const packed_items = artifact.const_store.get(stored.const_node).list.items.packed_bytes;
-    try testing.expectEqual(@as(?const_store.ConstPackedScalar, null), packed_items.element);
-    var expected: [items.len * 16]u8 = undefined;
-    for (items, 0..) |item, index| {
-        const canonical = expected[index * 16 ..][0..16];
-        std.mem.writeInt(u64, canonical[0..8], builtins.float_bits.normalizeF64NanBits(item.f64_bits), .little);
-        std.mem.writeInt(u32, canonical[8..12], builtins.float_bits.normalizeF32NanBits(item.f32_bits), .little);
-        std.mem.writeInt(u32, canonical[12..16], item.int, .little);
-    }
-    try testing.expectEqualSlices(u8, &expected, artifact.const_store.blobData(packed_items.bytes));
-}
-
-/// Append a plan of a union of the tags `names` with no payloads, which are
-/// in byte-wise name order, the order that assigns discriminants.
-fn appendTestTagPlan(program: *LirProgram.Result, names: []const []const u8) Allocator.Error!LirProgram.ConstPlanId {
-    const none = [_]LirProgram.ConstPlanId{};
-    var payloads: [300][]const LirProgram.ConstPlanId = undefined;
-    @memset(payloads[0..names.len], &none);
-    return appendTestTagPlanWithPayloads(program, names, payloads[0..names.len]);
-}
-
-/// Append a plan of a union of the tags `names`, which are in byte-wise name
-/// order, each with the payloads of its entry of `payloads`.
-fn appendTestTagPlanWithPayloads(program: *LirProgram.Result, names: []const []const u8, payloads: []const []const LirProgram.ConstPlanId) Allocator.Error!LirProgram.ConstPlanId {
-    const allocator = std.testing.allocator;
-    const variants = try allocator.alloc(LirProgram.ConstTagVariant, names.len);
-    var filled: usize = 0;
-    errdefer {
-        for (variants[0..filled]) |variant| {
-            allocator.free(variant.name);
-            allocator.free(variant.payloads);
-        }
-        allocator.free(variants);
-    }
-    for (variants, names, payloads, 0..) |*variant, name, variant_payloads, index| {
-        const owned = try allocator.dupe(u8, name);
-        errdefer allocator.free(owned);
-        variant.* = .{ .name = owned, .checked_name = undefined, .discriminant = @intCast(index), .payloads = try allocator.dupe(LirProgram.ConstPlanId, variant_payloads) };
-        filled += 1;
-    }
-    const id: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
-    try program.const_plans.append(allocator, .{ .tag_union = variants });
-    return id;
-}
-
-/// The index in `names` of the tag stored node `node` holds, through any
-/// nominal wrapping.
-fn testStoredTagIndex(store: *const const_store.ConstStore, node: checked.ConstNodeId, names: []const []const u8) error{TestUnexpectedResult}!usize {
-    var value = store.get(node);
-    while (value == .nominal) value = store.get(value.nominal.backing);
-    try std.testing.expect(value == .tag);
-    for (names, 0..) |name, index| {
-        if (std.mem.order(u8, name, value.tag.tag_name) == .eq) return index;
-    }
-    return error.TestUnexpectedResult;
-}
-
-/// The little-endian unsigned integer `bytes` hold.
-fn testLittleEndian(bytes: []const u8) u64 {
-    var value: u64 = 0;
-    for (bytes, 0..) |byte, shift| value |= @as(u64, byte) << @intCast(shift * 8);
-    return value;
-}
-
-test "const store writer packs an evaluated list of tags with zero-sized payloads as storing each item would" {
-    const testing = std.testing;
-    if (builtin.cpu.arch.endian() != .little) return error.SkipZigTest;
-
-    var module_env = try can.ModuleEnv.init(testing.allocator, "");
-    defer module_env.deinit();
-    var artifact = try initTestArtifact(testing.allocator, &module_env);
-    defer deinitTestArtifact(&artifact, testing.allocator);
-    var program = try LirProgram.Result.init(testing.allocator, .u64);
-    defer program.deinit();
-
-    var wide_names: [300][]const u8 = undefined;
-    var wide_text: [300][4]u8 = undefined;
-    for (&wide_names, &wide_text, 0..) |*name, *text, index| {
-        _ = try std.fmt.bufPrint(text, "T{d:0>3}", .{index});
-        name.* = text;
-    }
-    var wide_layouts: [300]layout.Idx = undefined;
-    @memset(&wide_layouts, .zst);
-
-    const bool_names = [_][]const u8{ "False", "True" };
-    const pair_names = [_][]const u8{ "No", "Yes" };
-    const color_names = [_][]const u8{ "Blue", "Cyan", "Green", "Magenta", "Red", "Yellow" };
-    const only_names = [_][]const u8{"Only"};
-
-    const bool_tags = try appendTestTagPlan(&program, &bool_names);
-    // `Bool` is a nominal type wrapping its tags.
-    const bool_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
-    try program.const_plans.append(testing.allocator, .{ .named = .{ .named_type = undefined, .backing = bool_tags } });
-    const pair_plan = try appendTestTagPlan(&program, &pair_names);
-    const color_plan = try appendTestTagPlan(&program, &color_names);
-    const wide_plan = try appendTestTagPlan(&program, &wide_names);
-    const only_plan = try appendTestTagPlan(&program, &only_names);
-    // Tags whose payloads are zero-sized: `[A({}), B]`, `[A, B({}), C({},
-    // {})]`, `[A([Only]), B]`, and a nominal type wrapping the first.
-    const unit_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
-    try program.const_plans.append(testing.allocator, .{ .record = try testing.allocator.alloc(LirProgram.ConstPlanId, 0) });
-    const unit_layout = try program.layouts.putStructFields(&.{});
-    const ab_names = [_][]const u8{ "A", "B" };
-    const abc_names = [_][]const u8{ "A", "B", "C" };
-    const unit_plan_payload = try appendTestTagPlanWithPayloads(&program, &ab_names, &.{ &.{unit_plan}, &.{} });
-    const mixed_plan = try appendTestTagPlanWithPayloads(&program, &abc_names, &.{ &.{}, &.{unit_plan}, &.{ unit_plan, unit_plan } });
-    const nested_plan = try appendTestTagPlanWithPayloads(&program, &ab_names, &.{ &.{only_plan}, &.{} });
-    const wrapped_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
-    try program.const_plans.append(testing.allocator, .{ .named = .{ .named_type = undefined, .backing = unit_plan_payload } });
-    const units_layout = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = unit_layout }, .{ .index = 1, .layout = unit_layout } });
-    const unit_payload_layout = try program.layouts.putTagUnion(&.{ unit_layout, .zst });
-
-    const Case = struct { names: []const []const u8, plan: LirProgram.ConstPlanId, tags: LirProgram.ConstPlanId, layout_idx: layout.Idx, width: usize };
-    const cases = [_]Case{
-        .{ .names = &bool_names, .plan = bool_plan, .tags = bool_tags, .layout_idx = .bool, .width = 1 },
-        .{ .names = &pair_names, .plan = pair_plan, .tags = pair_plan, .layout_idx = try program.layouts.putTagUnion(&.{ .zst, .zst }), .width = 1 },
-        .{ .names = &color_names, .plan = color_plan, .tags = color_plan, .layout_idx = try program.layouts.putTagUnion(wide_layouts[0..color_names.len]), .width = 1 },
-        // More tags than one byte numbers.
-        .{ .names = &wide_names, .plan = wide_plan, .tags = wide_plan, .layout_idx = try program.layouts.putTagUnion(&wide_layouts), .width = 2 },
-        // One tag: zero-sized items.
-        .{ .names = &only_names, .plan = only_plan, .tags = only_plan, .layout_idx = try program.layouts.putTagUnion(&.{.zst}), .width = 0 },
-        .{ .names = &ab_names, .plan = unit_plan_payload, .tags = unit_plan_payload, .layout_idx = unit_payload_layout, .width = 1 },
-        .{ .names = &abc_names, .plan = mixed_plan, .tags = mixed_plan, .layout_idx = try program.layouts.putTagUnion(&.{ .zst, unit_layout, units_layout }), .width = 1 },
-        .{ .names = &ab_names, .plan = nested_plan, .tags = nested_plan, .layout_idx = try program.layouts.putTagUnion(&.{ try program.layouts.putTagUnion(&.{.zst}), .zst }), .width = 1 },
-        .{ .names = &ab_names, .plan = wrapped_plan, .tags = unit_plan_payload, .layout_idx = unit_payload_layout, .width = 1 },
-    };
-
-    var writer = Writer.init(testing.allocator, &artifact, &program);
-    defer writer.deinit();
-
-    const max_items = 67;
-    var memory: [max_items * 2]u8 align(16) = undefined;
-    var prng = std.Random.DefaultPrng.init(0x7a65);
-    for (cases) |case| {
-        const list_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
-        try program.const_plans.append(testing.allocator, .{ .list = case.plan });
-        const list_layout = try program.layouts.insertLayout(if (case.width == 0) layout.Layout.listOfZst() else layout.Layout.list(case.layout_idx));
-        try testing.expectEqual(case.width, program.layouts.layoutSize(program.layouts.getLayout(case.layout_idx)));
-        for ([_]usize{ 0, 1, max_items }) |len| {
-            for (0..len) |index| {
-                const discriminant = prng.random().uintLessThan(usize, case.names.len);
-                for (0..case.width) |byte| memory[index * case.width + byte] = @truncate(discriminant >> @intCast(byte * 8));
-            }
-            var roc_list = RocList{
-                .bytes = if (case.width == 0) null else &memory,
-                .length = len,
-                .capacity_or_alloc_ptr = RocList.encodeCapacity(max_items),
-            };
-            const stored = try testStoreNodes(&writer, list_plan, list_layout, .{ .ptr = @ptrCast(&roc_list) });
-            const list = artifact.const_store.get(stored.const_node).list;
-            try testing.expectEqual(@as(u64, max_items), list.capacity);
-            if (len == 0) {
-                try testing.expect(list.items == .empty);
-                continue;
-            }
-            const items = list.items.packed_bytes;
-            try testing.expectEqual(@as(?const_store.ConstPackedScalar, null), items.element);
-            try testing.expectEqual(case.width, items.product_width);
-            try testing.expectEqual(len, items.len);
-            const blob = artifact.const_store.blobData(items.bytes);
-            try testing.expectEqual(len * case.width, blob.len);
-            for (0..len) |index| {
-                const item_value: Value = if (case.width == 0) Value.zst else .{ .ptr = memory[index * case.width ..].ptr };
-                const item = try testStoreNodes(&writer, case.tags, case.layout_idx, item_value);
-                const expected = try testStoredTagIndex(&artifact.const_store, item.const_node, case.names);
-                try testing.expectEqual(@as(u64, expected), testLittleEndian(blob[index * case.width ..][0..case.width]));
-            }
-        }
-    }
-}
-
-test "const store writer packs an evaluated list of records holding tags with zero-sized payloads as storing each item would" {
-    const testing = std.testing;
-    if (builtin.cpu.arch.endian() != .little) return error.SkipZigTest;
-
-    var module_env = try can.ModuleEnv.init(testing.allocator, "");
-    defer module_env.deinit();
-    var artifact = try initTestArtifact(testing.allocator, &module_env);
-    defer deinitTestArtifact(&artifact, testing.allocator);
-    var program = try LirProgram.Result.init(testing.allocator, .u64);
-    defer program.deinit();
-
-    const bool_names = [_][]const u8{ "False", "True" };
-    const color_names = [_][]const u8{ "Blue", "Green", "Red" };
-    const scalar_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
-    try program.const_plans.append(testing.allocator, .scalar);
-    const bool_tags = try appendTestTagPlan(&program, &bool_names);
-    const bool_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
-    try program.const_plans.append(testing.allocator, .{ .named = .{ .named_type = undefined, .backing = bool_tags } });
-    const unit_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
-    try program.const_plans.append(testing.allocator, .{ .record = try testing.allocator.alloc(LirProgram.ConstPlanId, 0) });
-    // `[Blue({}), Green, Red]`.
-    const color_plan = try appendTestTagPlanWithPayloads(&program, &color_names, &.{ &.{unit_plan}, &.{}, &.{} });
-    const record_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
-    const children = try testing.allocator.dupe(LirProgram.ConstPlanId, &.{ color_plan, scalar_plan, bool_plan });
-    program.const_plans.append(testing.allocator, .{ .record = children }) catch |err| {
-        testing.allocator.free(children);
-        return err;
-    };
-    const list_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
-    try program.const_plans.append(testing.allocator, .{ .list = record_plan });
-    const color_layout = try program.layouts.putTagUnion(&.{ try program.layouts.putStructFields(&.{}), .zst, .zst });
-    const record_layout = try program.layouts.putStructFields(&.{
-        .{ .index = 0, .layout = color_layout },
-        .{ .index = 1, .layout = .u32 },
-        .{ .index = 2, .layout = .bool },
-    });
-    const list_layout = try program.layouts.insertLayout(layout.Layout.list(record_layout));
-    const struct_idx = program.layouts.getLayout(record_layout).getStruct().idx;
-    const width: usize = program.layouts.layoutSize(program.layouts.getLayout(record_layout));
-    const offsets = [3]usize{
-        program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0),
-        program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1),
-        program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 2),
-    };
-
-    var writer = Writer.init(testing.allocator, &artifact, &program);
-    defer writer.deinit();
-
-    const max_items = 67;
-    var memory: [max_items * 8]u8 align(16) = undefined;
-    var prng = std.Random.DefaultPrng.init(0x7a66);
-    for ([_]usize{ 0, 1, max_items }) |len| {
-        // Padding bytes hold whatever the evaluation left there.
-        prng.random().bytes(&memory);
-        for (0..len) |index| {
-            const item = memory[index * width ..][0..width];
-            item[offsets[0]] = prng.random().uintLessThan(u8, color_names.len);
-            item[offsets[2]] = prng.random().uintLessThan(u8, bool_names.len);
-        }
-        var roc_list = RocList{
-            .bytes = &memory,
-            .length = len,
-            .capacity_or_alloc_ptr = RocList.encodeCapacity(len),
-        };
-        const stored = try testStoreNodes(&writer, list_plan, list_layout, .{ .ptr = @ptrCast(&roc_list) });
-        const list = artifact.const_store.get(stored.const_node).list;
-        if (len == 0) {
-            try testing.expect(list.items == .empty);
-            continue;
-        }
-        const items = list.items.packed_bytes;
-        try testing.expectEqual(@as(?const_store.ConstPackedScalar, null), items.element);
-        // The color, the U32 and the Bool, without padding.
-        try testing.expectEqual(@as(u32, 6), items.product_width);
-        const blob = artifact.const_store.blobData(items.bytes);
-        try testing.expectEqual(len * 6, blob.len);
-        for (0..len) |index| {
-            const item = try testStoreNodes(&writer, record_plan, record_layout, .{ .ptr = memory[index * width ..].ptr });
-            const fields = artifact.const_store.get(item.const_node).record;
-            const packed_item = blob[index * 6 ..][0..6];
-            try testing.expectEqual(@as(u64, try testStoredTagIndex(&artifact.const_store, fields[0], &color_names)), packed_item[0]);
-            try testing.expectEqual(artifact.const_store.get(fields[1]).scalar.u32, std.mem.readInt(u32, packed_item[1..5], .little));
-            try testing.expectEqual(@as(u64, try testStoredTagIndex(&artifact.const_store, fields[2], &bool_names)), packed_item[5]);
-        }
-    }
-}
-
-test "const store writer stores a list of tags with a payload that has bytes one node per item" {
-    const testing = std.testing;
-
-    var module_env = try can.ModuleEnv.init(testing.allocator, "");
-    defer module_env.deinit();
-    var artifact = try initTestArtifact(testing.allocator, &module_env);
-    defer deinitTestArtifact(&artifact, testing.allocator);
-    var program = try LirProgram.Result.init(testing.allocator, .u64);
-    defer program.deinit();
-
-    const scalar_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
-    try program.const_plans.append(testing.allocator, .scalar);
-    // `[A(U8), B]`.
-    const names = [_][]const u8{ "A", "B" };
-    const tag_plan = try appendTestTagPlanWithPayloads(&program, &names, &.{ &.{scalar_plan}, &.{} });
-    const list_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
-    try program.const_plans.append(testing.allocator, .{ .list = tag_plan });
-    const tag_layout = try program.layouts.putTagUnion(&.{ .u8, .zst });
-    const list_layout = try program.layouts.insertLayout(layout.Layout.list(tag_layout));
-    const data = program.layouts.getTagUnionData(program.layouts.getLayout(tag_layout).getTagUnion().idx);
-    const width: usize = program.layouts.layoutSize(program.layouts.getLayout(tag_layout));
-
-    var writer = Writer.init(testing.allocator, &artifact, &program);
-    defer writer.deinit();
-
-    const max_items = 67;
-    var memory: [max_items * 2]u8 align(16) = @splat(0);
-    for (0..max_items) |index| {
-        const item = memory[index * width ..].ptr;
-        data.writeDiscriminant(item, @intCast(index % 2), program.layouts.targetUsize());
-        item[0] = @truncate(index);
-    }
-    for ([_]usize{ 1, max_items }) |len| {
-        var roc_list = RocList{ .bytes = &memory, .length = len, .capacity_or_alloc_ptr = RocList.encodeCapacity(len) };
-        const stored = try testStoreNodes(&writer, list_plan, list_layout, .{ .ptr = @ptrCast(&roc_list) });
-        const items = artifact.const_store.get(stored.const_node).list.items;
-        try testing.expect(items == .nodes);
-        try testing.expectEqual(len, items.nodes.len);
-        for (items.nodes, 0..) |node, index| {
-            const tag = artifact.const_store.get(node).tag;
-            try testing.expectEqual(index % 2, try testStoredTagIndex(&artifact.const_store, node, &names));
-            try testing.expectEqual(@as(usize, if (index % 2 == 0) 1 else 0), tag.payloads.len);
-        }
-    }
 }

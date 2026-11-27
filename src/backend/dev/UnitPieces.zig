@@ -24,7 +24,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RUPC";
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 7;
+pub const format_version: u32 = 8;
 
 /// One source file the pieces' lines name, in the order the set indexes them.
 pub const SourceFile = struct {
@@ -483,6 +483,7 @@ fn writeData(writer: *Writer, data: []const CodeExcerpt.DataItem) Allocator.Erro
         try writer.word(item.alignment);
         try writer.word(item.symbol_offset);
         try writer.byte(@intFromBool(item.program_local_name));
+        try writer.byte(@intFromBool(item.pool_image));
         try writer.word(@intCast(item.relocations.len));
         for (item.relocations) |relocation| {
             try writer.word(relocation.offset);
@@ -511,6 +512,7 @@ fn readData(a: Allocator, reader: *Reader, text: DataText) ReadError![]CodeExcer
         const alignment = try reader.word();
         const symbol_offset = try reader.word();
         const program_local_name = try reader.flag();
+        const pool_image = try reader.flag();
         const relocations = try a.alloc(CodeExcerpt.DataRelocation, try reader.word());
         for (relocations) |*relocation| {
             const offset = try reader.word();
@@ -531,6 +533,7 @@ fn readData(a: Allocator, reader: *Reader, text: DataText) ReadError![]CodeExcer
             .alignment = alignment,
             .symbol_offset = symbol_offset,
             .program_local_name = program_local_name,
+            .pool_image = pool_image,
             .relocations = relocations,
         };
     }

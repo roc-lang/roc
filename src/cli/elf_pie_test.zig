@@ -125,6 +125,7 @@ test "ELF PIE prelink and patch relocate host app and provided pointers at start
                 .units = &.{.{ .view = view }},
                 .root = 0,
                 .host_required = &keep,
+                .pool = @import("unit_walk.zig").emptyPoolSource(),
             }, &output, null, &timing, &outcome);
             try output.publish(a);
             const exe = try tmp.dir.readFileAlloc(io, "program", a, .unlimited);

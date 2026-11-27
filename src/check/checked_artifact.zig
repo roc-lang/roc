@@ -8285,15 +8285,22 @@ fn ownerViewAndDeclForImportedNominal(
 /// from its owner view into `store`, and register it in the local declaration
 /// table. `appendCheckedNominalDeclarationFromPayload` deduplicates by content
 /// key and asserts equal-key-equal-content, so a redundant call is a no-op.
+/// Each declaration is projected as by a projector of its own; `pass_projector`
+/// is the one its pass reuses for every declaration it embeds.
 fn embedOneImportedNominalDecl(
     allocator: Allocator,
     store: *CheckedTypeStore,
     names: *canonical.CanonicalNameStore,
     owner_view: *const ImportedModuleView,
     owner_decl: CheckedNominalDeclaration,
+    pass_projector: *?CheckedTypeStoreImportProjector,
 ) Allocator.Error!void {
-    var projector = CheckedTypeStoreImportProjector.init(allocator, store, names, owner_view);
-    defer projector.deinit();
+    if (pass_projector.*) |*existing| {
+        existing.reset(owner_view);
+    } else {
+        pass_projector.* = CheckedTypeStoreImportProjector.init(allocator, store, names, owner_view);
+    }
+    const projector = &pass_projector.*.?;
 
     const local_root = try projector.project(owner_decl.declaration_root);
 
@@ -8331,10 +8338,15 @@ fn embedReachableImportedNominalDecls(
     source_vars: []const Var,
     first_payload: usize,
 ) Allocator.Error!void {
+    var projector: ?CheckedTypeStoreImportProjector = null;
+    defer if (projector) |*created| created.deinit();
+
     for (source_vars) |var_| {
-        const ty = type_ids.fromVar(var_);
-        if (store.payloadTag(ty) != .nominal) continue;
-        try embedImportedNominalDeclFor(allocator, store, names, imports, store.payload(ty).nominal.toBuild());
+        // Most reached nominal types name a declaration the store already
+        // holds, which the key alone answers.
+        const key = store.sealedSourceView().nominalKey(var_) orelse continue;
+        if (store.nominalDeclaration(key) != null) continue;
+        try embedImportedNominalDeclFor(allocator, store, names, imports, store.payload(type_ids.fromVar(var_)).nominal.toBuild(), &projector);
     }
     var i = first_payload;
     while (i < store.payloads.items().len) : (i += 1) {
@@ -8342,7 +8354,7 @@ fn embedReachableImportedNominalDecls(
         // pools that projection below can reallocate.
         const payload = store.payloads.items()[i];
         if (payload != .nominal) continue;
-        try embedImportedNominalDeclFor(allocator, store, names, imports, store.nominal_row_pool.items()[@backingInt(payload.nominal)]);
+        try embedImportedNominalDeclFor(allocator, store, names, imports, store.nominal_row_pool.items()[@backingInt(payload.nominal)], &projector);
     }
 }
 
@@ -8353,6 +8365,7 @@ fn embedImportedNominalDeclFor(
     names: *canonical.CanonicalNameStore,
     imports: CheckedImportViews,
     nominal: anytype,
+    pass_projector: *?CheckedTypeStoreImportProjector,
 ) Allocator.Error!void {
     {
         const origin_module = nominal.origin_module;
@@ -8386,7 +8399,7 @@ fn embedImportedNominalDeclFor(
                 => checkedArtifactInvariant("checked type publication could not embed reachable imported nominal declaration", .{}),
             };
 
-        try embedOneImportedNominalDecl(allocator, store, names, &owner.view, owner.decl);
+        try embedOneImportedNominalDecl(allocator, store, names, &owner.view, owner.decl, pass_projector);
     }
 }
 
@@ -24670,9 +24683,7 @@ fn copyPairingColumns(comptime T: type, source: T, allocator: Allocator) Allocat
         @memcpy(result, source);
         return result;
     } else if (comptime @typeInfo(T) == .@"struct") {
-        if (comptime @hasDecl(T, "copyForPairing")) {
-            return source.copyForPairing(allocator);
-        } else if (comptime @hasDecl(T, "fromBorrowedSlice") and @hasField(T, "length")) {
+        if (comptime @hasDecl(T, "fromBorrowedSlice") and @hasField(T, "length")) {
             artifact_serialize.assertRelocatablePod(std.meta.Child(T.Slice));
             return T.fromSlice(allocator, source.items());
         } else if (comptime @hasField(T, "items") and @hasField(T, "capacity")) {
@@ -36550,14 +36561,50 @@ const CheckedTypeProjectResults = struct {
     }
 };
 
+/// The target-store ids of the names of one imported module that a projector
+/// has remapped, by the module's own id for each. A name store only appends,
+/// so an id found here is the id interning the name's text again would return.
+const ImportedNameIds = struct {
+    type_names: collections.DenseMapUnmanaged(canonical.TypeNameId, canonical.TypeNameId) = .empty,
+    module_identities: collections.DenseMapUnmanaged(canonical.ModuleIdentityId, canonical.ModuleIdentityId) = .empty,
+    method_names: collections.DenseMapUnmanaged(canonical.MethodNameId, canonical.MethodNameId) = .empty,
+    record_fields: collections.DenseMapUnmanaged(canonical.RecordFieldLabelId, canonical.RecordFieldLabelId) = .empty,
+    tags: collections.DenseMapUnmanaged(canonical.TagLabelId, canonical.TagLabelId) = .empty,
+
+    fn deinit(self: *ImportedNameIds, allocator: Allocator) void {
+        self.tags.deinit(allocator);
+        self.record_fields.deinit(allocator);
+        self.method_names.deinit(allocator);
+        self.module_identities.deinit(allocator);
+        self.type_names.deinit(allocator);
+    }
+};
+
 const CheckedTypeStoreImportProjector = struct {
     allocator: Allocator,
     target_store: *CheckedTypeStore,
     target_names: *canonical.CanonicalNameStore,
     imported: ImportedModuleView,
     preserve_source_instance: bool,
-    active: collections.DenseMap(CheckedTypeId, CheckedTypeId),
-    projected: collections.DenseMap(CheckedTypeId, CheckedTypeId),
+    /// The target root of each imported type this projector has entered
+    /// since it was created or last reset.
+    entered: collections.DenseMap(CheckedTypeId, Entered),
+    /// The frames, ops, and op results of the projection in progress; empty
+    /// between projections, keeping its storage for the next.
+    run: Run = .{},
+    /// The remapped names of each module this projector has projected from,
+    /// by artifact key. Kept across `reset`, so a projector reused over many
+    /// projections interns each imported name once.
+    name_ids: std.AutoHashMapUnmanaged([32]u8, *ImportedNameIds) = .empty,
+    /// The entry of `name_ids` for `imported`, found on the first remap.
+    imported_name_ids: ?*ImportedNameIds = null,
+
+    const Entered = struct {
+        target: CheckedTypeId,
+        /// Whether the target root's payload is filled; until then the type
+        /// is still being projected.
+        filled: bool,
+    };
 
     fn init(
         allocator: Allocator,
@@ -36571,8 +36618,7 @@ const CheckedTypeStoreImportProjector = struct {
             .target_names = target_names,
             .imported = imported.*,
             .preserve_source_instance = false,
-            .active = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator),
-            .projected = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator),
+            .entered = collections.DenseMap(CheckedTypeId, Entered).init(allocator),
         };
     }
 
@@ -36591,17 +36637,37 @@ const CheckedTypeStoreImportProjector = struct {
         return projector;
     }
     fn deinit(self: *CheckedTypeStoreImportProjector) void {
-        self.projected.deinit();
-        self.active.deinit();
+        var name_ids = self.name_ids.valueIterator();
+        while (name_ids.next()) |ids| {
+            ids.*.deinit(self.allocator);
+            self.allocator.destroy(ids.*);
+        }
+        self.name_ids.deinit(self.allocator);
+        self.run.deinit(self.allocator);
+        self.entered.deinit();
     }
 
     /// Start projecting from `imported` as a fresh projector would, keeping
-    /// this one's map storage.
+    /// this one's storage and the names it has remapped.
     fn reset(self: *CheckedTypeStoreImportProjector, imported: *const ImportedModuleView) void {
         std.debug.assert(!self.preserve_source_instance);
         self.imported = imported.*;
-        self.projected.clearRetainingCapacity();
-        self.active.clearRetainingCapacity();
+        self.imported_name_ids = null;
+        self.entered.clearRetainingCapacity();
+    }
+
+    /// The remapped names of `imported`.
+    fn importedNameIds(self: *CheckedTypeStoreImportProjector) Allocator.Error!*ImportedNameIds {
+        if (self.imported_name_ids) |ids| return ids;
+        const slot = try self.name_ids.getOrPut(self.allocator, self.imported.key.bytes);
+        if (!slot.found_existing) {
+            errdefer self.name_ids.removeByPtr(slot.key_ptr);
+            const ids = try self.allocator.create(ImportedNameIds);
+            ids.* = .{};
+            slot.value_ptr.* = ids;
+        }
+        self.imported_name_ids = slot.value_ptr.*;
+        return slot.value_ptr.*;
     }
 
     /// A type whose payload is still being projected: its ops occupy
@@ -36646,15 +36712,23 @@ const CheckedTypeStoreImportProjector = struct {
             run.results.shrinkRetainingCapacity(frame.results_start);
             return frame;
         }
+
+        fn clear(run: *Run) void {
+            run.results.clearRetainingCapacity();
+            run.ops.clearRetainingCapacity();
+            run.frames.clearRetainingCapacity();
+        }
     };
 
     /// Project `ty` and everything it reaches. Each reserved type is an
     /// explicit frame whose ops run in order, so the depth of the projected
     /// graph never becomes native call depth.
     fn project(self: *CheckedTypeStoreImportProjector, ty: CheckedTypeId) Allocator.Error!CheckedTypeId {
-        var run: Run = .{};
-        defer run.deinit(self.allocator);
-        if (try self.enter(&run, ty)) |id| return id;
+        const run = &self.run;
+        std.debug.assert(run.frames.items.len == 0 and run.ops.items.len == 0 and run.results.items.len == 0);
+        // A projection that fails leaves its frames behind.
+        errdefer run.clear();
+        if (try self.enter(run, ty)) |id| return id;
 
         while (true) {
             const index = run.frames.items.len - 1;
@@ -36669,7 +36743,7 @@ const CheckedTypeStoreImportProjector = struct {
                 const op = run.ops.items[frame.next];
                 run.frames.items[index].next += 1;
                 const result: u32 = switch (op) {
-                    .child => |child| if (try self.enter(&run, child)) |id| @backingInt(id) else continue,
+                    .child => |child| if (try self.enter(run, child)) |id| @backingInt(id) else continue,
                     .type_name => |id| @backingInt(try self.remapTypeName(id)),
                     .module_identity => |id| @backingInt(try self.remapModuleIdentity(id)),
                     .method_name => |id| @backingInt(try self.remapMethodName(id)),
@@ -36707,8 +36781,7 @@ const CheckedTypeStoreImportProjector = struct {
     /// The projected id of `ty` when it needs no new root; otherwise reserve
     /// one and push its frame.
     fn enter(self: *CheckedTypeStoreImportProjector, run: *Run, ty: CheckedTypeId) Allocator.Error!?CheckedTypeId {
-        if (self.projected.get(ty)) |projected| return projected;
-        if (self.active.get(ty)) |reserved| return reserved;
+        if (self.entered.get(ty)) |entered| return entered.target;
 
         // An identity-free imported type projects to one root of the target
         // store however often it is projected.
@@ -36716,7 +36789,7 @@ const CheckedTypeStoreImportProjector = struct {
         const shared = !self.preserve_source_instance and !try self.imported.checked_types.rootHasIdentityVariables(ty);
         if (shared) {
             if (self.target_store.projected_imports.get(memo_key)) |existing| {
-                try self.projected.put(ty, existing);
+                try self.entered.put(ty, .{ .target = existing, .filled = true });
                 return existing;
             }
         }
@@ -36728,7 +36801,7 @@ const CheckedTypeStoreImportProjector = struct {
             .payload;
         const reserved = try self.target_store.reserveSyntheticTypeRootWithRecipe(self.allocator, recipe);
         if (shared) try self.target_store.projected_imports.put(self.allocator, memo_key, reserved);
-        try self.active.put(ty, reserved);
+        try self.entered.put(ty, .{ .target = reserved, .filled = false });
 
         const payload = self.imported.checked_types.payload(ty);
         try run.push(self.allocator, .{ .type_root = .{ .ty = ty, .reserved = reserved, .payload = payload } });
@@ -36834,8 +36907,7 @@ const CheckedTypeStoreImportProjector = struct {
             try self.target_store.declareIdentityInstance(self.allocator, reserved);
         }
         try self.target_store.fillSyntheticTypeRoot(self.allocator, reserved, payload);
-        _ = self.active.remove(ty);
-        try self.projected.put(ty, reserved);
+        self.entered.getPtr(ty).?.filled = true;
         if (source_payload != .nominal) return null;
 
         const nominal = source_payload.nominal;
@@ -36849,7 +36921,9 @@ const CheckedTypeStoreImportProjector = struct {
             if (self.imported.checked_types.nominalBackingTemplateForPayload(nominal) == null) return null;
             checkedArtifactInvariant("imported nominal projection could not find declaration backing", .{});
         };
-        if (self.active.contains(owner_decl.declaration_root)) return null;
+        if (self.entered.get(owner_decl.declaration_root)) |root| {
+            if (!root.filled) return null;
+        }
         return owner_decl;
     }
 
@@ -37061,35 +37135,55 @@ const CheckedTypeStoreImportProjector = struct {
         self: *CheckedTypeStoreImportProjector,
         id: canonical.ModuleIdentityId,
     ) Allocator.Error!canonical.ModuleIdentityId {
-        return try self.target_names.internModuleIdentity(self.imported.canonical_names.moduleIdentityBytes(id));
+        const ids = try self.importedNameIds();
+        if (ids.module_identities.get(id)) |target| return target;
+        const target = try self.target_names.internModuleIdentity(self.imported.canonical_names.moduleIdentityBytes(id));
+        try ids.module_identities.put(self.allocator, id, target);
+        return target;
     }
 
     fn remapTypeName(
         self: *CheckedTypeStoreImportProjector,
         id: canonical.TypeNameId,
     ) Allocator.Error!canonical.TypeNameId {
-        return try self.target_names.internTypeName(self.imported.canonical_names.typeNameText(id));
+        const ids = try self.importedNameIds();
+        if (ids.type_names.get(id)) |target| return target;
+        const target = try self.target_names.internTypeName(self.imported.canonical_names.typeNameText(id));
+        try ids.type_names.put(self.allocator, id, target);
+        return target;
     }
 
     fn remapMethodName(
         self: *CheckedTypeStoreImportProjector,
         id: canonical.MethodNameId,
     ) Allocator.Error!canonical.MethodNameId {
-        return try self.target_names.internMethodName(self.imported.canonical_names.methodNameText(id));
+        const ids = try self.importedNameIds();
+        if (ids.method_names.get(id)) |target| return target;
+        const target = try self.target_names.internMethodName(self.imported.canonical_names.methodNameText(id));
+        try ids.method_names.put(self.allocator, id, target);
+        return target;
     }
 
     fn remapRecordField(
         self: *CheckedTypeStoreImportProjector,
         id: canonical.RecordFieldLabelId,
     ) Allocator.Error!canonical.RecordFieldLabelId {
-        return try self.target_names.internRecordFieldLabel(self.imported.canonical_names.recordFieldLabelText(id));
+        const ids = try self.importedNameIds();
+        if (ids.record_fields.get(id)) |target| return target;
+        const target = try self.target_names.internRecordFieldLabel(self.imported.canonical_names.recordFieldLabelText(id));
+        try ids.record_fields.put(self.allocator, id, target);
+        return target;
     }
 
     fn remapTag(
         self: *CheckedTypeStoreImportProjector,
         id: canonical.TagLabelId,
     ) Allocator.Error!canonical.TagLabelId {
-        return try self.target_names.internTagLabel(self.imported.canonical_names.tagLabelText(id));
+        const ids = try self.importedNameIds();
+        if (ids.tags.get(id)) |target| return target;
+        const target = try self.target_names.internTagLabel(self.imported.canonical_names.tagLabelText(id));
+        try ids.tags.put(self.allocator, id, target);
+        return target;
     }
 };
 
@@ -39492,6 +39586,56 @@ test "relation projection preserves anonymous row identity and provenance" {
     try std.testing.expectEqual(RowDefault.empty_tag_union, projected_ext.flex.row_default.?);
 }
 
+test "a reused projector remaps each module's names through that module's name store" {
+    const allocator = std.testing.allocator;
+
+    var target_names = canonical.CanonicalNameStore.init(allocator);
+    defer target_names.deinit();
+    var target = CheckedTypeStore{};
+    defer target.deinit(allocator);
+
+    // Two modules whose first tag label has the same id and different text.
+    // Each union ends in a variable, so every projection builds it again.
+    const labels = [_][]const u8{ "First", "Second" };
+    var source_names: [labels.len]canonical.CanonicalNameStore = undefined;
+    var sources: [labels.len]CheckedTypeStore = @splat(.{});
+    var roots: [labels.len]CheckedTypeId = undefined;
+    var initialized: usize = 0;
+    defer for (source_names[0..initialized], sources[0..initialized]) |*names, *source| {
+        source.deinit(allocator);
+        names.deinit();
+    };
+    for (labels, &source_names, &sources, &roots) |label, *names, *source, *root| {
+        names.* = canonical.CanonicalNameStore.init(allocator);
+        initialized += 1;
+        const tail = try source.reserveSyntheticTypeRoot(allocator);
+        try testFillSyntheticVariableRoot(allocator, source, tail, .{ .flex = .{} });
+        root.* = try source.reserveSyntheticTypeRoot(allocator);
+        const tags = try allocator.alloc(CheckedTag, 1);
+        tags[0] = .{ .name = try names.internTagLabel(label), .args = &.{} };
+        try source.fillSyntheticTypeRoot(allocator, root.*, .{ .tag_union = .{ .tags = tags, .ext = tail } });
+    }
+
+    var views: [labels.len]ImportedModuleView = undefined;
+    for (&views, &source_names, &sources, 0..) |*imported, *names, *source, index| {
+        imported.* = testVisibilityImportedView(testCheckedModuleKey(@intCast(80 + index)), undefined, .{});
+        imported.canonical_names = names;
+        imported.checked_types = source.view();
+    }
+
+    var projector = CheckedTypeStoreImportProjector.init(allocator, &target, &target_names, &views[0]);
+    defer projector.deinit();
+    for (0..2) |_| {
+        for (&views, roots, labels) |*imported, root, label| {
+            projector.reset(imported);
+            const projected = target.payload(try projector.project(root));
+            if (projected != .tag_union) return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 1), projected.tag_union.tags.len());
+            try std.testing.expectEqualStrings(label, target_names.tagLabelText(projected.tag_union.tags.get(0).name));
+        }
+    }
+}
+
 test "source-instance projection does not coalesce a solved payload with an equal-key target root" {
     const allocator = std.testing.allocator;
 
@@ -40308,8 +40452,8 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     // an empty default container, which still serializes/relocates correctly.
     var const_store_src = ConstStore.init(gpa);
     defer const_store_src.deinit();
-    const c0 = try const_store_src.append(.{ .scalar = .{ .u64 = 7 } });
-    const c1 = try const_store_src.append(.{ .scalar = .{ .i32 = -3 } });
+    const c0 = try const_store_src.append(.{ .list = .{ .items = .empty, .capacity = 7 } });
+    const c1 = try const_store_src.append(.{ .list = .{ .items = .empty, .capacity = 3 } });
 
     var checked_types_src = CheckedTypeStore{};
     defer checked_types_src.deinit(gpa);
@@ -40416,8 +40560,8 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     try std.testing.expectEqual(ModuleEnv.ModuleKind.module, loaded.module_identity.kind);
 
     // const_store entries survive.
-    try std.testing.expectEqual(@as(u64, 7), loaded.const_store.get(c0).scalar.u64);
-    try std.testing.expectEqual(@as(i32, -3), loaded.const_store.get(c1).scalar.i32);
+    try std.testing.expectEqual(@as(u64, 7), loaded.const_store.get(c0).list.capacity);
+    try std.testing.expectEqual(@as(u64, 3), loaded.const_store.get(c1).list.capacity);
 
     // checked_types roots survive.
     try std.testing.expectEqual(@as(usize, 2), loaded.checked_types.roots.items().len);
@@ -40637,8 +40781,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x9B, 0xF2, 0x6E, 0x4E, 0x71, 0xED, 0x77, 0x8B, 0x27, 0x7D, 0x76, 0x1F, 0x32, 0x58, 0xF6, 0x07,
-        0x0F, 0x43, 0x3F, 0x87, 0xD1, 0xEF, 0x20, 0xC1, 0x9F, 0x9F, 0x9A, 0xED, 0x34, 0xC1, 0xC5, 0x1A,
+        0xA4, 0xA1, 0xE3, 0x91, 0x2F, 0x9D, 0x90, 0x78, 0x4E, 0xEC, 0x2E, 0xE7, 0x87, 0x01, 0x89, 0xA3,
+        0x9F, 0xF0, 0xFB, 0x2F, 0x36, 0x70, 0x10, 0xDD, 0x68, 0xDE, 0x76, 0x0D, 0x3F, 0xFD, 0x31, 0x92,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

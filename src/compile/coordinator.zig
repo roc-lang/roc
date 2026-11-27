@@ -5303,6 +5303,19 @@ pub const Coordinator = struct {
     }
 
     /// The digests of every checked module of this compilation, its link.
+    /// Register the constant store of every checked module of this build
+    /// with `index`, the images a link's constant pool places (design.md
+    /// "Constant Pool").
+    pub fn registerConstStores(self: *Coordinator, index: *check.ConstStore.ImageIndex) Allocator.Error!void {
+        try index.addStore(&self.builtin_modules.checked_artifact.const_store);
+        var packages = self.packages.iterator();
+        while (packages.next()) |package| {
+            for (package.value_ptr.*.modules.items) |*mod| {
+                if (mod.checkedArtifact()) |artifact| try index.addStore(&artifact.const_store);
+            }
+        }
+    }
+
     pub fn boxyLinkDigests(self: *Coordinator) Allocator.Error!boxy_interface.Digests {
         var artifacts = std.ArrayList(*const CheckedModuleArtifact).empty;
         defer artifacts.deinit(self.gpa);

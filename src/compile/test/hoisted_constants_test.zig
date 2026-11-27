@@ -3091,48 +3091,12 @@ fn scalarConstNodeI64(
     node: check.CheckedArtifact.ConstNodeId,
 ) HoistedConstantsTestError!i64 {
     // A number is data alone, stored as its image.
-    if (artifact.const_store.imageOf(node)) |image| {
-        const literal = artifact.const_store.imageLiteral(image) orelse return error.HoistedConstWasNotI64;
-        return switch (literal) {
-            .scalar => |scalar| if (scalar == .i64) scalar.i64 else error.HoistedConstWasNotI64,
-            .tag, .str => error.HoistedConstWasNotI64,
-        };
-    }
-    const value = artifact.const_store.get(node);
-    const actual = switch (value) {
-        .scalar => |scalar| switch (scalar) {
-            .i64 => |i| i,
-            .i8,
-            .i16,
-            .i32,
-            .i128,
-            .u8,
-            .u16,
-            .u32,
-            .u64,
-            .u128,
-            .f32_bits,
-            .f64_bits,
-            .dec_bits,
-            => return error.HoistedConstWasNotI64,
-        },
-        .pending,
-        .zst,
-        .str,
-        .list,
-        .box,
-        .tuple,
-        .record,
-        .crash,
-        .checked_error,
-        .tag,
-        .nominal,
-        .fn_value,
-        .image,
-        .boxy_fn,
-        => return error.HoistedConstWasNotScalar,
+    const image = artifact.const_store.imageOf(node) orelse return error.HoistedConstWasNotScalar;
+    const literal = artifact.const_store.imageLiteral(image) orelse return error.HoistedConstWasNotI64;
+    return switch (literal) {
+        .scalar => |scalar| if (scalar == .i64) scalar.i64 else error.HoistedConstWasNotI64,
+        .tag, .str => error.HoistedConstWasNotI64,
     };
-    return actual;
 }
 
 test "issue 9733: nested expect statements remain inline" {

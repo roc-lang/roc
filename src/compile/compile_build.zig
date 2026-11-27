@@ -3554,6 +3554,12 @@ pub const BuildEnv = struct {
         return artifacts.toOwnedSlice(allocator);
     }
 
+    /// Register the constant store of every checked module of this build
+    /// with `index` (`Coordinator.registerConstStores`).
+    pub fn registerConstStores(self: *BuildEnv, index: *check.ConstStore.ImageIndex) Allocator.Error!void {
+        try self.builtCoordinator().registerConstStores(index);
+    }
+
     /// The digests of every checked module of this build, its link.
     pub fn boxyLinkDigests(self: *BuildEnv) Allocator.Error!boxy_interface.Digests {
         return self.builtCoordinator().boxyLinkDigests();
