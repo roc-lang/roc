@@ -46,11 +46,14 @@ test "ELF PIE prelink and patch relocate host app and provided pointers at start
     const app_c = try std.fs.path.join(a, &.{ dir, "app.c" });
     const host_o = try std.fs.path.join(a, &.{ dir, "host.o" });
     const app_o = try std.fs.path.join(a, &.{ dir, "app.o" });
+    const empty_c = try std.fs.path.join(a, &.{ dir, "empty.c" });
+    const empty_o = try std.fs.path.join(a, &.{ dir, "empty.o" });
     const windows_o = try std.fs.path.join(a, &.{ dir, "windows.o" });
     const linked_host = try std.fs.path.join(a, &.{ dir, "linked_host" });
     const dest = try std.fs.path.join(a, &.{ dir, "program" });
     try tmp.dir.writeFile(io, .{ .sub_path = "host.c", .data = host_source });
     try tmp.dir.writeFile(io, .{ .sub_path = "app.c", .data = app_source });
+    try tmp.dir.writeFile(io, .{ .sub_path = "empty.c", .data = "" });
 
     var cli_io = cli.Io.create(io);
     var ctx = cli.CliCtx.init(std.testing.allocator, a, &cli_io, .build);
@@ -62,7 +65,8 @@ test "ELF PIE prelink and patch relocate host app and provided pointers at start
         const object = try tmp.dir.readFileAlloc(io, "app.o", a, .unlimited);
         const image = try backend.dev.UnitImage.build(a, &.{object}, .{ .keep_debug = false, .atoms = .whole });
         const view = try backend.dev.UnitImage.View.init(image);
-        const empty_object = try host_prelink.linkObject(a, arm64, &.{});
+        _ = try command(a, &.{ "zig", "cc", "-target", target, "-fno-asynchronous-unwind-tables", "-c", empty_c, "-o", empty_o });
+        const empty_object = try tmp.dir.readFileAlloc(io, "empty.o", a, .unlimited);
         const empty_image = try backend.dev.UnitImage.build(a, &.{empty_object}, .{ .keep_debug = false, .atoms = .whole });
         const support_view = try backend.dev.UnitImage.View.init(empty_image);
         const Case = struct { kind: host_prelink.Kind, musl_startup: bool = false };
@@ -132,6 +136,16 @@ test "ELF PIE prelink and patch relocate host app and provided pointers at start
             try std.testing.expectEqual(@as(u16, if (kind.positionIndependent()) 3 else 2), read16(exe, 16));
             if (kind != .shared) try std.testing.expect(read64(exe, 24) != 0);
             const phoff: usize = @intCast(read64(exe, 32));
+            // The table stays right after the ELF header, before every
+            // section, where `strip` and `objcopy` write it (#13567).
+            try std.testing.expectEqual(@as(usize, 64), phoff);
+            const table_end = phoff + @as(usize, read16(exe, 56)) * 56;
+            const shoff: usize = @intCast(read64(exe, 40));
+            for (1..read16(exe, 60)) |index| {
+                const sh = shoff + index * 64;
+                if (read64(exe, sh + 8) & 2 == 0) continue; // not SHF_ALLOC
+                try std.testing.expect(read64(exe, sh + 24) >= table_end);
+            }
             for (0..read16(exe, 56)) |index| {
                 const ph = phoff + index * 56;
                 // All test workflows are static: no PT_INTERP.
