@@ -97,6 +97,10 @@ pub const dev_diagnostics = @import("dev_diagnostics.zig");
 /// Settings only tests may change; production builds fix them at compile time.
 pub const TestSwitch = @import("test_switch.zig").TestSwitch;
 
+/// The compiler's allocator for requests of up to 32 KiB.
+pub const SmallBlockAllocator = @import("SmallBlockAllocator.zig");
+
+var default_small_blocks: SmallBlockAllocator = .init;
 var default_large_blocks: LargeBlockAllocator(defaultBackingGpa()) = .{};
 
 /// The Debug-build allocator wrapper that makes stale borrows fail; see
@@ -108,15 +112,16 @@ var default_stale_borrow: if (StaleBorrowAllocator.available) StaleBorrowAllocat
 
 fn defaultBackingGpa() std.mem.Allocator {
     if (builtin.link_libc and !builtin.target.abi.isMusl()) return std.heap.c_allocator;
-    return std.heap.smp_allocator;
+    return default_small_blocks.allocator();
 }
 
 /// The default general-purpose allocator for the current target (fast, not leak-checking).
-/// Large blocks are recycled by `LargeBlockAllocator`; everything else goes to libc's
-/// malloc (its ASan/Valgrind/LD_PRELOAD tooling, and on LLVM paths it's the allocator
-/// LLVM already uses)—except on musl, whose malloc is slow, where smp_allocator wins.
-/// Without libc it is smp_allocator, and wasm_allocator on freestanding. Debug builds
-/// off freestanding wrap it in `StaleBorrowAllocator`.
+/// Large blocks are recycled by `LargeBlockAllocator`. Smaller requests go to
+/// `SmallBlockAllocator` on targets without libc and on musl, whose malloc is
+/// slow; with any other libc they go to libc's malloc, so ASan, Valgrind and
+/// LD_PRELOAD tooling see them, and on LLVM paths the compiler shares the
+/// allocator LLVM already uses. Freestanding targets use wasm_allocator. Debug
+/// builds off freestanding wrap it in `StaleBorrowAllocator`.
 pub fn defaultGpa() std.mem.Allocator {
     if (builtin.target.os.tag == .freestanding) return std.heap.wasm_allocator;
     if (StaleBorrowAllocator.available) return default_stale_borrow.allocator();
@@ -129,6 +134,7 @@ test {
     std.testing.refAllDecls(ident);
     std.testing.refAllDecls(TextRankCache);
     std.testing.refAllDecls(@import("LargeBlockAllocator.zig"));
+    std.testing.refAllDecls(SmallBlockAllocator);
     std.testing.refAllDecls(cpu_count);
     std.testing.refAllDecls(dev_diagnostics);
     std.testing.refAllDecls(TypeDigestHasher);
