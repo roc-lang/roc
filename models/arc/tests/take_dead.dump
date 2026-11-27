@@ -1,0 +1,17 @@
+=== LIR <unnamed> (p0, identity=00, fingerprint=00, borrowed=0, ret_borrowed=false, unique=false) ===
+proc p0 args=[] ret=u64
+  l0:u64 = literal 1
+  l1:list#1 = list(l0)
+  l2:u64 = literal 5
+  l3:struct_#2 = struct(l1, l2)
+  l4:tag_union#3 = tag v0 d0 (l3)
+  l5:tag_union#3 = ref.local l4
+  l6:struct_#2 = ref.tag_payload_struct l5 v0 take
+  l7:list#1 = ref.field l6[0] take
+  decref l7 rc=concrete(decref,1) single_thread
+  l9:struct_#2 = ref.tag_payload_struct l4 v0
+  l10:list#1 = ref.field l9[0]
+  l12:u64 = literal 0
+  l11:u64 = low_level list_get_unsafe(l10, l12)
+  decref l4 rc=concrete(decref,3) single_thread
+  ret l11

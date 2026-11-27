@@ -1,0 +1,15 @@
+*** Demand-path fixed point (roc-lang/roc#12763, #12797): the current fold rule converges in one path per
+*** self-recursive type and never identifies parts of different types; the old rule does neither.
+load ../maude/paths.maude
+fmod PATHS-TEST is protecting DEMAND-12797 . protecting DEMAND-MUTUAL . endfm
+
+red run(new, 'Expr, exprGraph(1), 40) == out(0, 1, true) .
+red run(new, 'Expr, exprGraph(5), 40) == out(0, 1, true) .
+red run(old, 'Expr, exprGraph(2), 40) == out(3, 16, true) .
+red run(old, 'Expr, exprGraph(4), 40) == out(6, 1957, true) .
+red run(new, 'OptState, G12797, 30) == out(3, 4, true) .
+red badFolds(old, 'OptState, G12797, paths(old, 'OptState, G12797, 6)) == 1 .
+red badFolds(new, 'OptState, G12797, paths(new, 'OptState, G12797, 6)) == 0 .
+*** k mutually recursive types, each with a payload into every type: the current rule converges
+red run(new, 'T0, mutual(3), 40) == out(2, 5, true) .
+red run(new, 'T0, mutual(5), 40) == out(4, 65, true) .

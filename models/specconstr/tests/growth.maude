@@ -1,0 +1,41 @@
+*** Code growth: case-of-case with joins stays linear, the pre-fix copying rule (roc-lang/roc#10124) does not.
+load ../maude/pass.maude
+
+fmod GROWTH is
+  protecting SC-DRIVER .
+  op TYS : -> Prog .
+  eq TYS = ty('Bool, cd('True, tnil) ; cd('False, tnil)) ty('Nat, cd('Z, tnil) ; cd('S, tN('Nat))) .
+  var N : Nat .
+  *** chain(k): k sequential let-of-case dispatches; the True continuation is reached by two leaves
+  op chain : Nat -> Expr .
+  eq chain(0) = i(0) .
+  eq chain(s N) =
+     lt(qid("y" + string(N, 10)),
+        mt(v('x), (pc('Z, pnil) => tg('True, enil))
+                | (pc('S, pc('Z, pnil)) => tg('True, enil))
+                | (pc('S, pc('S, pw)) => tg('False, enil))),
+        mt(v(qid("y" + string(N, 10))),
+           (pc('True, pnil) => pr('add, (i(1), chain(N))))
+         | (pc('False, pnil) => pr('add, (i(2), chain(N)))))) .
+  op PC : Nat -> Prog .
+  eq PC(N) = TYS fn('f, ('x : tN('Nat)), tInt, chain(N)) .
+
+  *** a small body whose normalized output is large (inlining a known builder)
+  op PB : -> Prog .
+  eq PB = TYS
+    fn('step, ('x : tN('Nat), 'k : tInt), tInt,
+       mt(v('x), (pc('Z, pnil) => v('k))
+               | (pc('S, pv('m)) => pr('add, (cl('step, (v('m), pr('add, (v('k), i(1))))),
+                                             cl('step, (tg('S, v('m)), i(0))))))))
+    fn('top, ('k : tInt), tInt, cl('step, (tg('S, tg('S, tg('S, tg('Z, enil)))), v('k)))) .
+endfm
+
+*** current rule: output within 10% of the source at every chain length
+red size(sc(PC(3), noF)) * 10 <= size(PC(3)) * 11 .
+red size(sc(PC(7), noF)) * 10 <= size(PC(7)) * 11 .
+*** pre-fix rule: exponential (13115 nodes from 1652 at length 7)
+red size(sc(PC(7), 'B10124)) > size(PC(7)) * 7 .
+*** both rules keep meaning; the bug is growth only
+red passes(check(PC(4), noF, 'f, nats(4), 20)) .
+red passes(check(PC(4), 'B10124, 'f, nats(4), 20)) .
+red passes(check(PB, noF, 'top, ints(3), 40)) .
