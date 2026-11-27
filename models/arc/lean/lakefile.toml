@@ -1,0 +1,10 @@
+name = "rocarc"
+version = "0.1.0"
+defaultTargets = ["rocarc"]
+
+[[lean_lib]]
+name = "RocArc"
+
+[[lean_exe]]
+name = "rocarc"
+root = "Main"

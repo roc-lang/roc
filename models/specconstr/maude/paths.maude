@@ -1,0 +1,118 @@
+*** Inline-productivity demand paths (inline_crossing.zig): the read-set fixed point.
+*** Calibrates #12763 / #12797 (fixed by PR 12827 "Fold SpecConstr demand paths where a part's type repeats").
+***
+*** A demand path is a list of steps from a value to one of its parts.  The fixed point extends
+*** every path by every step the part's type offers and folds the result.  Two folding rules:
+***   old : fold where a tag-payload step label repeats  (pre-12827; labels only)
+***   new : fold where a part's type equals the type of a part above it (post-12827)
+fmod DEMAND-PATHS is
+  protecting NAT .
+  protecting QID .
+  protecting CONVERSION .
+
+  sorts Step Path PathSet Edge Graph Rule .
+  op stp : Qid Qid -> Step [ctor] .            *** (label, type of the part reached)
+  subsort Step < Path .
+  op eps : -> Path [ctor] .
+  op _._ : Path Path -> Path [ctor assoc id: eps] .
+  subsort Path < PathSet .
+  op empty : -> PathSet [ctor] .
+  op _;_ : PathSet PathSet -> PathSet [ctor assoc comm id: empty] .
+  eq PA ; PA = PA .
+  op ed : Qid Qid Qid -> Edge [ctor] .        *** type --label--> part type
+  subsort Edge < Graph .
+  op gnil : -> Graph [ctor] .
+  op __ : Graph Graph -> Graph [ctor assoc comm id: gnil] .
+  ops old new : -> Rule [ctor] .
+
+  vars PA PB PC : Path . vars PS PS2 : PathSet . vars L L2 T T2 R : Qid . var G : Graph . var RU : Rule . var N : Nat .
+
+  op typeAt : Qid Path -> Qid .
+  eq typeAt(R, eps) = R .
+  eq typeAt(R, PA . stp(L, T)) = T .
+
+  *** fold one path under a rule
+  op fold : Rule Qid Path -> Path .
+  *** old: a repeated payload label folds back to its first occurrence
+  ceq fold(old, R, PA . stp(L, T) . PB . stp(L, T2)) = fold(old, R, PA . stp(L, T)) if true .
+  *** new: a part whose type equals an ancestor part's type folds back to that ancestor
+  ceq fold(new, R, PA . PB . stp(L, T)) = fold(new, R, PA) if typeAt(R, PA) == T .
+  eq fold(RU, R, PA) = PA [owise] .
+
+  *** one round: extend every path by every edge out of its part's type
+  op extend : Rule Qid Graph PathSet -> PathSet .
+  op extend1 : Rule Qid Graph Path Graph -> PathSet .
+  eq extend(RU, R, G, empty) = empty .
+  eq extend(RU, R, G, PA ; PS) = extend1(RU, R, G, PA, G) ; extend(RU, R, G, PS) .
+  eq extend1(RU, R, G, PA, gnil) = PA .
+  eq extend1(RU, R, G, PA, ed(T, L, T2) G2) =
+     (if typeAt(R, PA) == T then fold(RU, R, PA . stp(L, T2)) else empty fi) ; extend1(RU, R, G, PA, G2) .
+  var G2 : Graph .
+
+  *** fixed point with a round bound; returns the number of paths and whether it converged
+  sort Out . op out : Nat Nat Bool -> Out [ctor] .   *** rounds, paths, converged?
+  op fix : Rule Qid Graph PathSet Nat Nat -> Out .
+  eq fix(RU, R, G, PS, N, 0) = out(N, card(PS), false) .
+  ceq fix(RU, R, G, PS, N, s K) =
+      if PS2 == PS then out(N, card(PS), true) else fix(RU, R, G, PS2, s N, K) fi
+    if PS2 := extend(RU, R, G, PS) .
+  var K : Nat .
+  op card : PathSet -> Nat .
+  eq card(empty) = 0 . eq card(PA ; PS) = s card(PS) .
+  op run : Rule Qid Graph Nat -> Out .
+  eq run(RU, R, G, K) = fix(RU, R, G, eps, 0, K) .
+
+  *** a path is type-valid if each step leaves the type the previous step reached
+  op valid : Qid Graph Path -> Bool .
+  eq valid(R, G, eps) = true .
+  eq valid(R, ed(R, L, T) G, stp(L, T) . PA) = valid(T, ed(R, L, T) G, PA) .
+  eq valid(R, G, PA) = false [owise] .
+  op invalidCount : Qid Graph PathSet -> Nat .
+  eq invalidCount(R, G, empty) = 0 .
+  eq invalidCount(R, G, PA ; PS) = (if valid(R, G, PA) then 0 else 1 fi) + invalidCount(R, G, PS) .
+  op paths : Rule Qid Graph Nat -> PathSet .
+  eq paths(RU, R, G, 0) = eps .
+  eq paths(RU, R, G, s K) = paths(RU, R, G, K) ; extend(RU, R, G, paths(RU, R, G, K)) .
+
+  *** #12763: Expr := [T0(Expr), T1(Expr, Expr), T2(Expr), T3(Expr, Expr), ...]: n self-recursive
+  *** variants, odd ones carrying two payloads (as in the issue's reproducer)
+  op exprGraph : Nat -> Graph .
+  eq exprGraph(0) = gnil .
+  eq exprGraph(s N) = ed('Expr, qid("T" + string(N, 10) + ".0"), 'Expr)
+                      (if N rem 2 == 1 then ed('Expr, qid("T" + string(N, 10) + ".1"), 'Expr) else gnil fi)
+                      exprGraph(N) .
+
+  *** folds that identify a part with a part of a different type (type-invalid placement)
+  op badFolds : Rule Qid Graph PathSet -> Nat .
+  op badFolds1 : Rule Qid Graph Path Graph -> Nat .
+  eq badFolds(RU, R, G, empty) = 0 .
+  eq badFolds(RU, R, G, PA ; PS) = badFolds1(RU, R, G, PA, G) + badFolds(RU, R, G, PS) .
+  eq badFolds1(RU, R, G, PA, gnil) = 0 .
+  eq badFolds1(RU, R, G, PA, ed(T, L, T2) G2) =
+     (if typeAt(R, PA) == T and typeAt(R, fold(RU, R, PA . stp(L, T2))) =/= T2 then 1 else 0 fi)
+     + badFolds1(RU, R, G, PA, G2) .
+endfm
+
+*** #12797: two unrelated types share the payload label Some; a record field links them
+fmod DEMAND-12797 is
+  protecting DEMAND-PATHS .
+  op G12797 : -> Graph .
+  *** State := { pending : OptCursor }, OptState := [Some(State), None], OptCursor := [Some(Cursor), None],
+  *** Cursor := { state : OptState }   (the field-only part of the cycle runs through records)
+  eq G12797 = ed('OptState, 'Some, 'State) ed('State, 'pending, 'OptCursor)
+              ed('OptCursor, 'Some, 'Cursor) ed('Cursor, 'state, 'OptState) .
+endfm
+
+*** k mutually recursive types, each with one payload into every type (current rule stress)
+fmod DEMAND-MUTUAL is
+  protecting DEMAND-PATHS .
+  op mutual : Nat -> Graph .
+  op mutual2 : Nat Nat -> Graph .
+  vars N K : Nat .
+  eq mutual(N) = mutual2(N, N) .
+  eq mutual2(0, K) = gnil .
+  eq mutual2(s N, K) = outs(N, K) mutual2(N, K) .
+  op outs : Nat Nat -> Graph .
+  eq outs(N, 0) = gnil .
+  eq outs(N, s K) = ed(qid("T" + string(N, 10)), qid("C" + string(N, 10) + "_" + string(K, 10)), qid("T" + string(K, 10))) outs(N, K) .
+endfm

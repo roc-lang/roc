@@ -1,0 +1,9 @@
+name = "RowsEvidence"
+defaultTargets = ["RowsEvidence", "rows-evidence"]
+
+[[lean_lib]]
+name = "RowsEvidence"
+
+[[lean_exe]]
+name = "rows-evidence"
+root = "Main"

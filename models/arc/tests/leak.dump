@@ -1,0 +1,12 @@
+=== LIR <unnamed> (p0, identity=00, fingerprint=00, borrowed=0, ret_borrowed=false, unique=false) ===
+proc p0 args=[] ret=u64
+  l0:u64 = literal 1
+  l1:list#1 = list(l0)
+  l2:list#1 = ref.local l1
+  incref l1 x1 rc=concrete(incref,1) single_thread
+  l3:u64 = literal 0
+  l4:u64 = literal 7
+  l5:list#1 = low_level list_set(l1, l3, l4)
+  l6:u64 = low_level list_get_unsafe(l2, l3)
+  decref l5 rc=concrete(decref,1) single_thread
+  ret l6
