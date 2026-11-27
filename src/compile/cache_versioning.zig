@@ -108,8 +108,12 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// of a stored value holding one is stored as an image of its own, no stored
 /// list is stored as packed bytes, and the `zst`, `scalar` and `str`
 /// constant store node forms, which no producer writes, are gone.
+/// Version 67 combines version 66 with these: a polymorphic constant's
+/// instance roots are evaluated by the compilation's own strategy, so a
+/// literal argument root records no function-holding flag, and a Solved
+/// program's data root is stored as an image at its declared rows' layout.
 /// Platform-pairing entries share it.
-const checked_envelope_version: u32 = 66;
+const checked_envelope_version: u32 = 67;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment. Version 5 rejects builtin-conflicting import
