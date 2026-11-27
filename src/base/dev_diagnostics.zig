@@ -88,6 +88,11 @@ pub const Var = enum {
     /// an evaluator completes, roots the checked-value writer completes, and
     /// value-form expressions their bodies keep.
     hoist_root_stats,
+    /// Write every Monotype Lifted program, after lifting and after
+    /// SpecConstr, into the named directory in the line format of
+    /// `postcheck/monotype_lifted/ir_export.zig`, one file per program and
+    /// stage. Not written on Windows.
+    lifted_ir_export,
     /// Print, for every module the type checker checks, how many of each
     /// probe site's probes were kept and how many were discarded.
     checker_speculation_stats,
@@ -119,6 +124,7 @@ pub const Var = enum {
             .range_prove_stats => "ROC_RANGE_PROVE_STATS",
             .trace_run_order => "ROC_TRACE_RUN_ORDER",
             .hoist_root_stats => "ROC_HOIST_ROOT_STATS",
+            .lifted_ir_export => "ROC_LIFTED_IR_EXPORT",
             .checker_speculation_stats => "ROC_CHECKER_SPECULATION_STATS",
         };
     }
