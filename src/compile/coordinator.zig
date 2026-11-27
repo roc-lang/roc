@@ -8534,6 +8534,7 @@ pub const Coordinator = struct {
                 checking_arena = arena;
                 checking_outcome = try check.CheckedReports.captureChecking(arena.allocator(), &typecheck_output.checker);
             }
+            try typecheck_output.checker.problems.releaseUnusedCapacity();
             const state = try result_alloc.create(messages.PendingEvaluationState);
             state.* = .{
                 .allocator = result_alloc,
@@ -9162,7 +9163,7 @@ fn compileAppRootIdentityExpecting(
     }
     var direct_required_call_count: usize = 0;
     for (root.resolved_value_refs.call_direct_targets.items()) |call| {
-        if (root.resolved_value_refs.records.items()[@backingInt(call.target)].ref == .platform_required_proc) {
+        if (root.resolved_value_refs.ref(call.target) == .platform_required_proc) {
             direct_required_call_count += 1;
         }
     }

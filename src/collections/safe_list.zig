@@ -463,6 +463,29 @@ pub fn SafeList(comptime T: type) type {
             self.capacity = @intCast(new_len);
         }
 
+        /// Move an owned list's items into an allocation that holds exactly
+        /// them, freeing the spare capacity. A borrowed list owns nothing to
+        /// release and is left as it is.
+        pub fn releaseUnusedCapacity(self: *SafeList(T), gpa: Allocator) Allocator.Error!void {
+            if (self.capacity == 0 or self.capacity == self.length) return;
+            const old_memory = self.ptr[0..self.capacity];
+            if (self.length == 0) {
+                gpa.free(old_memory);
+                self.* = .{};
+                return;
+            }
+            if (gpa.remap(old_memory, self.length)) |new_memory| {
+                self.ptr = new_memory.ptr;
+                self.capacity = self.length;
+                return;
+            }
+            const new_memory = try gpa.alloc(T, self.length);
+            @memcpy(new_memory, self.items());
+            gpa.free(old_memory);
+            self.ptr = new_memory.ptr;
+            self.capacity = self.length;
+        }
+
         /// Remove every item, keeping the capacity and so the list's ownership.
         pub fn clearRetainingCapacity(self: *SafeList(T)) void {
             self.shrinkRetainingCapacity(0);
@@ -980,6 +1003,19 @@ pub fn SafeMultiList(comptime T: type) type {
         /// Unsupported, for the same reason as `appendBounded`.
         pub fn insertBounded(_: *Self, _: usize, _: T) error{OutOfMemory}!void {
             @compileError("SafeMultiList does not support bounded inserts: a borrowed list must grow by copying.");
+        }
+
+        /// Move an owned list's rows into an allocation that holds exactly
+        /// them, freeing the spare capacity. A borrowed list owns nothing to
+        /// release and is left as it is.
+        pub fn releaseUnusedCapacity(self: *Self, gpa: Allocator) Allocator.Error!void {
+            if (self.isBorrowed() or self.capacity() == self.length) return;
+            if (self.length == 0) {
+                gpa.free(self.bytes[0 .. @as(usize, self.capacity()) * row_bytes]);
+                self.* = .{};
+                return;
+            }
+            try self.setOwnedCapacity(gpa, self.length);
         }
 
         /// Unsupported. Freeing spare capacity would hand borrowed memory to the

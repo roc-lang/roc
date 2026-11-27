@@ -532,7 +532,7 @@ const Builder = struct {
 
         const refs = view.resolved_value_refs;
         for (refs.template_refs.items()[template.resolved_value_refs.start..][0..template.resolved_value_refs.len]) |ref_id| {
-            const record = refs.records.items()[@backingInt(ref_id)];
+            const record = refs.get(ref_id);
             try self.addTypeEdge(node, view, record.checked_ty);
             switch (record.ref) {
                 .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| try self.addProcedureUse(node, use),

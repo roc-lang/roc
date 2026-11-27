@@ -68,6 +68,20 @@ pub const Store = struct {
     /// rather than part of the entry's identity.
     unreproducible_reports: bool = false,
 
+    /// Move the lists into allocations that hold exactly their entries. A
+    /// list that grows again afterwards, as compile-time evaluation's reports
+    /// make it, regrows from its length.
+    pub fn releaseUnusedCapacity(self: *Self) Allocator.Error!void {
+        try self.problems.shrinkAndFreePrecise(self.gpa, self.problems.items.len);
+        try self.pending_static_exhaustiveness.shrinkAndFreePrecise(self.gpa, self.pending_static_exhaustiveness.items.len);
+        var strings = self.extra_strings_backing.moveToUnmanaged();
+        defer self.extra_strings_backing = strings.toManaged(self.gpa);
+        try strings.shrinkAndFreePrecise(self.gpa, strings.items.len);
+        var missing = self.missing_patterns_backing.moveToUnmanaged();
+        defer self.missing_patterns_backing = missing.toManaged(self.gpa);
+        try missing.shrinkAndFreePrecise(self.gpa, missing.items.len);
+    }
+
     /// Allocation-free empty store, including after ownership transfer.
     pub fn initEmpty(gpa: Allocator) Self {
         return .{

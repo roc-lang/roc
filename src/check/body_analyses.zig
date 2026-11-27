@@ -2824,7 +2824,8 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: *const CheckedBodies) 
     var shapes = try SourceCallShapes.collect(allocator, bodies);
     defer shapes.deinit(allocator);
     const callees = &shapes.callees;
-    for (refs.records.items()) |record| {
+    var resolved_refs_4 = refs.iterator();
+    while (resolved_refs_4.next()) |record| {
         const procedure = switch (record.ref) {
             .top_level_proc, .promoted_top_level_proc => |procedure| procedure,
             .platform_required_proc => |required| required.procedure,
