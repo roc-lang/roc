@@ -1271,6 +1271,55 @@ test "range prove persisted merge facts only weaken and admit endpoints once" {
     }
 }
 
+test "range prove boundSumRoots deduplicates gathered facts across refreshes, truncations, and stamp wraparound" {
+    const testing = std.testing;
+    var pass = Pass.init(testing.allocator);
+    defer pass.deinit();
+
+    const a: NodeId = 0;
+    const b: NodeId = 1;
+    const sum_root: NodeId = 2;
+    try pass.nodes.append(testing.allocator, .{ .root = a, .off_lo = 0, .off_hi = 0, .lo = 0, .hi = 100 });
+    try pass.nodes.append(testing.allocator, .{ .root = b, .off_lo = 0, .off_hi = 0, .lo = 0, .hi = 10 });
+    try pass.nodes.append(testing.allocator, .{ .root = sum_root, .off_lo = 0, .off_hi = 0, .lo = 0, .hi = 200 });
+    try pass.sums.append(testing.allocator, .{ .root = sum_root, .a = a, .b = b });
+    try pass.refresh_set.append(testing.allocator, 0);
+
+    // First refresh: a fact between two closure roots is visited from both ends
+    // and gathered once.
+    try pass.pushFact(.{ .a = a, .b = b, .c = 5, .origin = .meet });
+    try pass.boundSumRoots();
+    try testing.expectEqual(@as(u32, 1), pass.edge_gather_stamp);
+    try testing.expectEqual(@as(usize, 1), pass.closure_facts.items.len);
+    try testing.expectEqual(@as(i128, 15), pass.closure_bounds.items[pass.closure_positions.get(a).?].hi);
+    try testing.expectEqual(@as(i128, 25), pass.closure_bounds.items[pass.closure_positions.get(sum_root).?].hi);
+    try testing.expectEqual(@as(u32, 1), pass.edge_gather_marks.items[0]);
+
+    // Truncate and replace fact 0, then grow past the previous mark length.
+    pass.truncateFacts(0);
+    try pass.pushFact(.{ .a = a, .b = b, .c = 2, .origin = .meet });
+    try pass.pushFact(.{ .a = sum_root, .b = a, .c = 4, .origin = .meet });
+    try pass.boundSumRoots();
+    try testing.expectEqual(@as(u32, 2), pass.edge_gather_stamp);
+    try testing.expectEqual(@as(usize, 2), pass.closure_facts.items.len);
+    try testing.expectEqual(@as(i128, 12), pass.closure_bounds.items[pass.closure_positions.get(a).?].hi);
+    try testing.expectEqual(@as(i128, 16), pass.closure_bounds.items[pass.closure_positions.get(sum_root).?].hi);
+
+    // Stamp wraparound clears stale marks (including slots beyond current facts)
+    // before restarting at stamp 1 so live facts are still gathered.
+    pass.truncateFacts(1);
+    pass.edge_gather_marks.items[0] = 1;
+    pass.edge_gather_marks.items[1] = 1;
+    pass.edge_gather_stamp = std.math.maxInt(u32);
+    try pass.boundSumRoots();
+    try testing.expectEqual(@as(u32, 1), pass.edge_gather_stamp);
+    try testing.expectEqual(@as(usize, 1), pass.closure_facts.items.len);
+    try testing.expectEqual(@as(u32, 1), pass.edge_gather_marks.items[0]);
+    try testing.expectEqual(@as(u32, 0), pass.edge_gather_marks.items[1]);
+    try testing.expectEqual(@as(i128, 12), pass.closure_bounds.items[pass.closure_positions.get(a).?].hi);
+    try testing.expectEqual(@as(i128, 22), pass.closure_bounds.items[pass.closure_positions.get(sum_root).?].hi);
+}
+
 /// One symbolic value. A node is either a root (its own `root`, carrying
 /// inclusive unsigned bounds in `lo`/`hi`) or a bounded affine offset from a
 /// root: control reaching the defining statement guarantees
@@ -2001,8 +2050,10 @@ const Pass = struct {
     /// Debug builds only: the closure's bounds relaxed without skipping, to
     /// check `closure_bounds` against.
     closure_check: std.ArrayList(RootBounds) = .empty,
-    /// Per path fact, whether `boundSumRoots` has gathered it.
-    edge_gathered: std.ArrayList(bool),
+    /// Per path fact, the `edge_gather_stamp` under which `boundSumRoots`
+    /// gathered it.
+    edge_gather_marks: std.ArrayList(u32),
+    edge_gather_stamp: u32 = 0,
     /// Whether the last `relaxFrom` reached a root `sum_heads` lists.
     reached_sum_end: bool = false,
     refreshing_sums: bool = false,
@@ -2210,7 +2261,7 @@ const Pass = struct {
             .refresh_set = .empty,
             .refresh_marks = .empty,
             .closure_positions = collections.DenseMap(NodeId, u32).init(allocator),
-            .edge_gathered = .empty,
+            .edge_gather_marks = .empty,
             .sums = .empty,
             .path_value_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
             .path_len_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
@@ -2300,7 +2351,8 @@ const Pass = struct {
         self.closure_bounds.clearRetainingCapacity();
         self.closure_facts.clearRetainingCapacity();
         self.closure_sums.clearRetainingCapacity();
-        self.edge_gathered.clearRetainingCapacity();
+        self.edge_gather_marks.clearRetainingCapacity();
+        self.edge_gather_stamp = 0;
         self.reached_sum_end = false;
         self.refreshing_sums = false;
         self.current_region = null;
@@ -2385,7 +2437,7 @@ const Pass = struct {
         self.closure_facts.deinit(self.allocator);
         self.closure_sums.deinit(self.allocator);
         self.closure_check.deinit(self.allocator);
-        self.edge_gathered.deinit(self.allocator);
+        self.edge_gather_marks.deinit(self.allocator);
         self.sums.deinit(self.allocator);
         self.path_value_roots.deinit();
         self.path_len_roots.deinit();
@@ -2454,6 +2506,7 @@ const Pass = struct {
         self.sum_roots.clearRetainingCapacity();
         self.sums.clearRetainingCapacity();
         self.refresh_marks.clearRetainingCapacity();
+        self.edge_gather_marks.clearRetainingCapacity();
         self.sum_heads.reset();
         self.path_value_roots.clearRetainingCapacity();
         self.path_len_roots.clearRetainingCapacity();
@@ -2753,8 +2806,14 @@ const Pass = struct {
         self.closure_facts.clearRetainingCapacity();
         self.closure_sums.clearRetainingCapacity();
         self.query_queue.clearRetainingCapacity();
-        self.edge_gathered.clearRetainingCapacity();
-        try self.edge_gathered.appendNTimes(self.allocator, false, self.facts.items.len);
+        self.edge_gather_stamp +%= 1;
+        if (self.edge_gather_stamp == 0) {
+            @memset(self.edge_gather_marks.items, 0);
+            self.edge_gather_stamp = 1;
+        }
+        if (self.edge_gather_marks.items.len < self.facts.items.len) {
+            try self.edge_gather_marks.appendNTimes(self.allocator, 0, self.facts.items.len - self.edge_gather_marks.items.len);
+        }
         for (self.refresh_set.items) |index| {
             const sum = self.sums.items[index];
             const root = try self.closurePosition(sum.root);
@@ -2786,8 +2845,8 @@ const Pass = struct {
                     };
                     // A fact between two closure roots is met from both
                     // ends and gathered once.
-                    if (!self.edge_gathered.items[fact_index]) {
-                        self.edge_gathered.items[fact_index] = true;
+                    if (self.edge_gather_marks.items[fact_index] != self.edge_gather_stamp) {
+                        self.edge_gather_marks.items[fact_index] = self.edge_gather_stamp;
                         try self.closure_facts.append(self.allocator, switch (direction) {
                             .forward => .{ .a = next, .b = other, .c = fact.c, .assumed = fact.assumed },
                             .backward => .{ .a = other, .b = next, .c = fact.c, .assumed = fact.assumed },
