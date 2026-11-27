@@ -20012,9 +20012,11 @@ host allocation and free operations.
 - Every memo is a hash map keyed by checked identity (type, expression,
   template, derivation). Linear scans over program-sized tables are forbidden.
 - A worker's body converts its checked types in one environment per scope
-  (`Program.scopeEnv`), whose variables are indexed: a lambda whose scope adds
-  no variable shares its creator's, and conversions in it are remembered per
-  checked type and environment, so a nest of lambdas converts each type once.
+  (`Program.scopeEnv`). A scope indexes only its own variables, which can be
+  sparse across the module's checked type ids, and a repeated variable names
+  its first position in the scope. A lambda whose scope adds no variable shares
+  its creator's environment. Conversions are remembered per checked type and
+  environment, so a nest of lambdas converts each type once.
 - Lowering is iterative under the Stack Safety rules: explicit frames and work
   stacks, no recursion over source structure.
 - The lowerer emits no conversions between representations of one type, no
