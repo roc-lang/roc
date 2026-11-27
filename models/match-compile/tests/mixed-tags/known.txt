@@ -1,0 +1,7 @@
+# #13427: every .boxy config panics in the Debug ARC certifier
+interp
+test
+dev
+speed
+wasm-dev
+wasm-speed
