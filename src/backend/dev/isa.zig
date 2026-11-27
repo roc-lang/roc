@@ -67,6 +67,14 @@ pub const Abi = enum {
         };
     }
 
+    /// The number of bits in one word of the code this ABI emits: a pointer,
+    /// a length, a size, an address.
+    pub fn ptrBitWidth(self: Abi) u16 {
+        return switch (self) {
+            .x86_64_sysv, .x86_64_windows, .aarch64_aapcs, .aarch64_apple, .aarch64_windows => 64,
+        };
+    }
+
     pub fn isWindows(self: Abi) bool {
         return switch (self) {
             .x86_64_windows, .aarch64_windows => true,

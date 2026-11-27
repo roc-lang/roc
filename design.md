@@ -31143,6 +31143,56 @@ generator that read anything else about its target at compile time would be
 instantiated once per `RocTarget` again, and each instantiation is compiled
 into every binary that contains the backend.
 
+The shared driver is written for every word size, which is part of the `Abi`
+(`Abi.ptrBitWidth`; the driver asserts an 8-byte word until a 32-bit
+instruction set has a code generator), and names each register width by the
+kind of value, from `backend/dev/widths.zig`: `word_width` for a target word
+(pointers, lengths, sizes, addresses), `wide64_width` for a value that is 64
+bits on every target (U64, I64, F64 bits, an i128 or Dec half), and
+`scalar_width` for an integer or bit pattern of up to 8 bytes held in one
+register whose width follows its layout. Shared code never writes `.w64`, which
+names no kind of value. `ci/zig_lints.zig` rejects a `.w64` outside code for
+one instruction set: a `switch (isa)` arm, the code after a `switch (isa)` that
+only one instruction set reaches, an `if` on a `comptime switch (isa)` that is
+true for one instruction set, a function on the lint's list of
+single-instruction-set functions, or a test. A width follows the kind of value,
+never an immediate's numeric value: a small U64 is still 64 bits. Every helper
+that works on a register says how wide the register is. Most take a `comptime
+width: widths.RegisterWidth` argument, so a call without one does not compile.
+The rest have the width in their name (`emitLoadW8`), or always use the word
+width because they work on addresses (`emitLeaStack`). A `u64` or `i64`
+argument to a C function is passed with a `…Wide64` builder method. In debug
+builds, each call checks its arguments against the function's parameters: there
+must be one argument per parameter, and the `…Wide64` arguments must sit
+exactly at the `u64` and `i64` parameters. A struct that the generated code
+shares with the runtime, such as a request it passes to a builtin, is laid out
+at the target's pointer width by the runtime's own target-width function where
+it has one, such as
+`native_callable.pendingByteSize`, and otherwise by
+`boxy_runtime.desc.externLayout`; never by `@offsetOf` or `@sizeOf`, which
+describe the compiler's own machine. Word sizes and register bit counts use
+`target_ptr_size`, `word_bits` or `scalar_bits`, never a literal 8 or 64. A
+64-bit value's own size stays 8. Stack argument slots stay 8 bytes until the
+32-bit calling convention. On a 4-byte-word target `wide64_width` and
+`scalar_width` are compile errors, and a 32-bit instruction set's
+`RegisterWidth` has no `w64` member, so a stray `.w64` is one too, until the
+driver routes those values through register pairs.
+
+Outside code for one instruction set, the driver reads every register that
+plays a fixed role from the instruction set's `Emit(target).CC`, never from a
+`switch (isa)`: the argument registers (`PARAM_REGS`, `FLOAT_PARAM_REGS`), the
+frame, stack and scratch registers (`BASE_PTR`, `STACK_PTR`, `SCRATCH_REG`),
+the C and Roc return registers (`RETURN_REGS`, `ROC_RET_REGS`), the register
+that holds an immediate result stored through the hidden return pointer
+(`RET_PTR_COPY_REG`), the tail-call registers (`TAIL_CALL_TARGET_REG`,
+`TAIL_CALL_DELTA_REG`), the caller's stack-argument base and the incoming
+stack-argument offset (`CALLER_STACK_ARG_BASE_REG`,
+`INCOMING_STACK_ARG_BASE_OFFSET`), and the callee-saved registers the entry
+code keeps the result and `RocOps` pointers in (`RESULT_PTR_SAVE_REG`,
+`ROC_OPS_SAVE_REG`). A new instruction set supplies its roles by defining its
+`CC`. The entry wrappers keep their own registers, because there the roles
+differ from the `CC` names.
+
 An explicit reference-count statement on a stack value computes the value's
 address directly into the helper's first argument register and loads an
 incref's count directly into the second; neither passes through a frame slot.
