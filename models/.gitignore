@@ -1,0 +1,9 @@
+# Everything a model run produces goes under its own out/ directory.
+out/
+# Lean build caches. Lake regenerates its manifest on every build.
+.lake/
+lake-manifest.json
+# Python bytecode.
+__pycache__/
+# The root .gitignore ignores files without an extension; keep the Lean toolchain pin.
+!lean-toolchain
