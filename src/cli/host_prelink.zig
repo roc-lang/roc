@@ -12,11 +12,8 @@
 //! window per symbol (`provideAddress`), so the host's references to the app
 //! resolve at prelink time to bytes each build fills in: a jump to the entry
 //! wrapper for a procedure, the value's bytes for a data symbol. It also
-//! reserves, in the host's first loadable segment, room for a larger copy of
-//! the program header table, which the post-processing moves there with
-//! spare entries for the app's segments. The table keeps the distance from
-//! its file offset to its address that the first segment has, so every
-//! kernel computes `AT_PHDR` for it correctly.
+//! carries note sections that make LLD write spare program header entries,
+//! which the post-processing keeps for the app's segments (`spare_notes`).
 //! PIE executables and shared libraries instead use section-backed windows
 //! (`linkPositionIndependentObject`): an absolute symbol cannot follow the
 //! load base. Their records retain runtime relocation metadata separately
@@ -81,10 +78,18 @@ pub const app_base: u64 = 0x4000_0000;
 /// window is never written beyond its contents, so unused room costs no
 /// file bytes.
 pub const provide_window: u64 = 64 * 1024;
-/// Program header entries the reserved table holds.
-pub const phdr_capacity: u32 = 32;
-/// Spare program header entries kept for the app's segments; two are used.
-pub const spare_phdrs: u32 = 4;
+/// Note sections the generated object carries so that the host's program
+/// header table has entries for the app's segments. The table must stay
+/// where LLD writes it, right after the ELF header: `strip` and `objcopy`
+/// rewrite it there, and when it no longer fits before the first section
+/// they shift sections away from their addresses (#13567). LLD gives each
+/// run of contiguous notes with one alignment a PT_NOTE, so the notes
+/// alternate 4- and 8-byte alignment and every one but the first and last
+/// gets an entry of its own, which `finish` keeps for the app. Four notes
+/// guarantee the two entries the app needs.
+pub const spare_notes: u32 = 4;
+/// The program header entries the app's segments take: code and data.
+const app_phdrs: u32 = 2;
 
 const phdr_size = 56;
 const page_size = 4096;
@@ -95,18 +100,45 @@ pub fn provideAddress(index: usize) u64 {
     return app_base + @as(u64, index) * provide_window;
 }
 
-const reserve_section_name = ".roc_phdrs";
+const spare_note_prefix = ".note.roc.";
+/// The spare notes' section names, each null-terminated and of one length.
+const spare_note_names = blk: {
+    std.debug.assert(spare_notes <= 10);
+    var names: []const u8 = "";
+    for (0..spare_notes) |index| names = names ++ std.fmt.comptimePrint("{s}{d}\x00", .{ spare_note_prefix, index });
+    break :blk names;
+};
+/// A spare note's contents: a note named "Roc" with no descriptor.
+const spare_note = [_]u8{ 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'R', 'o', 'c', 0 };
 
-/// The generated object of a host link: the reserved program header table
-/// and an absolute definition of every name in `provides`, which must be
-/// sorted and distinct. `arm64` selects the AArch64 machine over x86_64.
+/// A section header of a generated object.
+const ObjectSection = struct { name: u32, type: u32, flags: u64, offset: u64, size: u64, link: u32, info: u32, addralign: u64, entsize: u64 };
+
+/// Append the spare notes to a generated object and return their section
+/// headers. `names` is the offset of `spare_note_names` in the object's
+/// section name table.
+fn appendSpareNotes(allocator: Allocator, out: *std.ArrayList(u8), names: u32) Allocator.Error![spare_notes]ObjectSection {
+    var headers: [spare_notes]ObjectSection = undefined;
+    for (&headers, 0..) |*header, index| {
+        const alignment: u64 = if (index % 2 == 0) 4 else 8;
+        while (out.items.len % alignment != 0) try out.append(allocator, 0);
+        const name_size: u32 = spare_note_prefix.len + 2;
+        const name = names + @as(u32, @intCast(index)) * name_size;
+        header.* = .{ .name = name, .type = SHT_NOTE, .flags = SHF_ALLOC | SHF_GNU_RETAIN, .offset = out.items.len, .size = spare_note.len, .link = 0, .info = 0, .addralign = alignment, .entsize = 0 };
+        try out.appendSlice(allocator, &spare_note);
+    }
+    return headers;
+}
+
+/// The generated object of a host link: the spare notes and an absolute
+/// definition of every name in `provides`, which must be sorted and
+/// distinct. `arm64` selects the AArch64 machine over x86_64.
 pub fn linkObject(allocator: Allocator, arm64: bool, provides: []const []const u8) Allocator.Error![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     try out.appendNTimes(allocator, 0, 64);
-    const reserve_offset = out.items.len;
-    const reserve_size = phdr_capacity * phdr_size;
-    try out.appendNTimes(allocator, 0, reserve_size);
+    const name_notes = 1;
+    const notes = try appendSpareNotes(allocator, &out, name_notes);
 
     var strtab: std.ArrayList(u8) = .empty;
     defer strtab.deinit(allocator);
@@ -127,20 +159,17 @@ pub fn linkObject(allocator: Allocator, arm64: bool, provides: []const []const u
     const symtab_size = out.items.len - symtab_offset;
     const strtab_offset = out.items.len;
     try out.appendSlice(allocator, strtab.items);
-    const shstrtab = "\x00" ++ reserve_section_name ++ "\x00.symtab\x00.strtab\x00.shstrtab\x00";
-    const name_reserve = 1;
-    const name_symtab = name_reserve + reserve_section_name.len + 1;
+    const shstrtab = "\x00" ++ spare_note_names ++ ".symtab\x00.strtab\x00.shstrtab\x00";
+    const name_symtab = name_notes + spare_note_names.len;
     const name_strtab = name_symtab + ".symtab".len + 1;
     const name_shstrtab = name_strtab + ".strtab".len + 1;
     const shstrtab_offset = out.items.len;
     try out.appendSlice(allocator, shstrtab);
     while (out.items.len % 8 != 0) try out.append(allocator, 0);
     const shoff = out.items.len;
-    const ObjectHeader = struct { name: u32, type: u32, flags: u64, offset: u64, size: u64, link: u32, info: u32, addralign: u64, entsize: u64 };
-    const headers = [_]ObjectHeader{
-        std.mem.zeroes(ObjectHeader),
-        .{ .name = name_reserve, .type = SHT_PROGBITS, .flags = SHF_ALLOC | SHF_GNU_RETAIN, .offset = reserve_offset, .size = reserve_size, .link = 0, .info = 0, .addralign = 8, .entsize = 0 },
-        .{ .name = name_symtab, .type = SHT_SYMTAB, .flags = 0, .offset = symtab_offset, .size = symtab_size, .link = 3, .info = 1, .addralign = 8, .entsize = 24 },
+    const strtab_index = 1 + spare_notes + 1;
+    const headers = [_]ObjectSection{std.mem.zeroes(ObjectSection)} ++ notes ++ [_]ObjectSection{
+        .{ .name = name_symtab, .type = SHT_SYMTAB, .flags = 0, .offset = symtab_offset, .size = symtab_size, .link = strtab_index, .info = 1, .addralign = 8, .entsize = 24 },
         .{ .name = name_strtab, .type = SHT_STRTAB, .flags = 0, .offset = strtab_offset, .size = strtab.items.len, .link = 0, .info = 0, .addralign = 1, .entsize = 0 },
         .{ .name = name_shstrtab, .type = SHT_STRTAB, .flags = 0, .offset = shstrtab_offset, .size = shstrtab.len, .link = 0, .info = 0, .addralign = 1, .entsize = 0 },
     };
@@ -179,11 +208,11 @@ const procedure_section_name = ".rocprov";
 /// The section of a position-independent host's value windows.
 const value_section_name = ".rocprovd";
 
-/// The generated object of a position-independent host link: the reserved program
-/// header table, a window section defining each provide (`provides`, sorted
-/// and distinct, with their layouts), as a Mach-O or COFF host's object
-/// does, and one absolute word against the reserve, whose relocation gives
-/// the image a dynamic relocation table for the patch link to extend.
+/// The generated object of a position-independent host link: the spare
+/// notes, a window section defining each provide (`provides`, sorted and
+/// distinct, with their layouts), as a Mach-O or COFF host's object does,
+/// and one absolute word against the first note, whose relocation gives the
+/// image a dynamic relocation table for the patch link to extend.
 /// `arm64` selects the AArch64 machine over x86_64.
 pub fn linkPositionIndependentObject(allocator: Allocator, arm64: bool, provides: []const Provide) Allocator.Error![]u8 {
     var procedure_size: u64 = 0;
@@ -195,9 +224,13 @@ pub fn linkPositionIndependentObject(allocator: Allocator, arm64: bool, provides
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     try out.appendNTimes(allocator, 0, 64);
-    const reserve_offset = out.items.len;
-    const reserve_size = phdr_capacity * phdr_size;
-    try out.appendNTimes(allocator, 0, reserve_size);
+    const name_notes = 1;
+    const notes = try appendSpareNotes(allocator, &out, name_notes);
+    // Section indices after the notes, which start at 1.
+    const procedure_index = 1 + spare_notes;
+    const value_index = procedure_index + 1;
+    const anchor_index = value_index + 1;
+    const symtab_index = anchor_index + 2;
     while (out.items.len % 16 != 0) try out.append(allocator, 0);
     const procedure_offset = out.items.len;
     if (arm64) {
@@ -218,8 +251,8 @@ pub fn linkPositionIndependentObject(allocator: Allocator, arm64: bool, provides
     try out.appendNTimes(allocator, 0, 8);
     const rela_offset = out.items.len;
     {
-        // The anchor word: the reserve's address, through the reserve's
-        // section symbol (index 1).
+        // The anchor word: the first note's address, through its section
+        // symbol (index 1).
         var entry: [24]u8 = @splat(0);
         const r_type: u64 = if (arm64) R_AARCH64_ABS64 else R_X86_64_64;
         std.mem.writeInt(u64, entry[8..16], (@as(u64, 1) << 32) | r_type, .little);
@@ -248,13 +281,13 @@ pub fn linkPositionIndependentObject(allocator: Allocator, arm64: bool, provides
         switch (provide.kind) {
             .procedure => {
                 entry[4] = (STB_GLOBAL << 4) | STT_FUNC;
-                std.mem.writeInt(u16, entry[6..8], 2, .little);
+                std.mem.writeInt(u16, entry[6..8], procedure_index, .little);
                 std.mem.writeInt(u64, entry[8..16], procedure_at, .little);
                 procedure_at += size;
             },
             .data => {
                 entry[4] = (STB_GLOBAL << 4) | STT_OBJECT;
-                std.mem.writeInt(u16, entry[6..8], 3, .little);
+                std.mem.writeInt(u16, entry[6..8], value_index, .little);
                 std.mem.writeInt(u64, entry[8..16], value_at, .little);
                 value_at += size;
             },
@@ -265,9 +298,8 @@ pub fn linkPositionIndependentObject(allocator: Allocator, arm64: bool, provides
     const symtab_size = out.items.len - symtab_offset;
     const strtab_offset = out.items.len;
     try out.appendSlice(allocator, strtab.items);
-    const shstrtab = "\x00" ++ reserve_section_name ++ "\x00" ++ procedure_section_name ++ "\x00" ++ value_section_name ++ "\x00.rocanchor\x00.rela.rocanchor\x00.symtab\x00.strtab\x00.shstrtab\x00";
-    const name_reserve = 1;
-    const name_procedures = name_reserve + reserve_section_name.len + 1;
+    const shstrtab = "\x00" ++ spare_note_names ++ procedure_section_name ++ "\x00" ++ value_section_name ++ "\x00.rocanchor\x00.rela.rocanchor\x00.symtab\x00.strtab\x00.shstrtab\x00";
+    const name_procedures = name_notes + spare_note_names.len;
     const name_values = name_procedures + procedure_section_name.len + 1;
     const name_anchor = name_values + value_section_name.len + 1;
     const name_rela = name_anchor + ".rocanchor".len + 1;
@@ -278,16 +310,12 @@ pub fn linkPositionIndependentObject(allocator: Allocator, arm64: bool, provides
     try out.appendSlice(allocator, shstrtab);
     while (out.items.len % 8 != 0) try out.append(allocator, 0);
     const shoff = out.items.len;
-    const ObjectHeader = struct { name: u32, type: u32, flags: u64, offset: u64, size: u64, link: u32, info: u32, addralign: u64, entsize: u64 };
-    const symtab_index = 6;
-    const headers = [_]ObjectHeader{
-        std.mem.zeroes(ObjectHeader),
-        .{ .name = name_reserve, .type = SHT_PROGBITS, .flags = SHF_ALLOC | SHF_GNU_RETAIN, .offset = reserve_offset, .size = reserve_size, .link = 0, .info = 0, .addralign = 8, .entsize = 0 },
+    const headers = [_]ObjectSection{std.mem.zeroes(ObjectSection)} ++ notes ++ [_]ObjectSection{
         .{ .name = name_procedures, .type = SHT_PROGBITS, .flags = SHF_ALLOC | SHF_EXECINSTR | SHF_GNU_RETAIN, .offset = procedure_offset, .size = procedure_size, .link = 0, .info = 0, .addralign = window_align, .entsize = 0 },
         .{ .name = name_values, .type = SHT_PROGBITS, .flags = SHF_ALLOC | SHF_WRITE | SHF_GNU_RETAIN, .offset = value_offset, .size = value_size, .link = 0, .info = 0, .addralign = window_align, .entsize = 0 },
         .{ .name = name_anchor, .type = SHT_PROGBITS, .flags = SHF_ALLOC | SHF_WRITE | SHF_GNU_RETAIN, .offset = anchor_offset, .size = 8, .link = 0, .info = 0, .addralign = 8, .entsize = 0 },
-        .{ .name = name_rela, .type = SHT_RELA, .flags = SHF_INFO_LINK, .offset = rela_offset, .size = 24, .link = symtab_index, .info = 4, .addralign = 8, .entsize = 24 },
-        .{ .name = name_symtab, .type = SHT_SYMTAB, .flags = 0, .offset = symtab_offset, .size = symtab_size, .link = 7, .info = 2, .addralign = 8, .entsize = 24 },
+        .{ .name = name_rela, .type = SHT_RELA, .flags = SHF_INFO_LINK, .offset = rela_offset, .size = 24, .link = symtab_index, .info = anchor_index, .addralign = 8, .entsize = 24 },
+        .{ .name = name_symtab, .type = SHT_SYMTAB, .flags = 0, .offset = symtab_offset, .size = symtab_size, .link = symtab_index + 1, .info = 2, .addralign = 8, .entsize = 24 },
         .{ .name = name_strtab, .type = SHT_STRTAB, .flags = 0, .offset = strtab_offset, .size = strtab.items.len, .link = 0, .info = 0, .addralign = 1, .entsize = 0 },
         .{ .name = name_shstrtab, .type = SHT_STRTAB, .flags = 0, .offset = shstrtab_offset, .size = shstrtab.len, .link = 0, .info = 0, .addralign = 1, .entsize = 0 },
     };
@@ -361,8 +389,7 @@ pub fn key(input: KeyInput) [32]u8 {
     hashU64(&hasher, input.record_version);
     hashU64(&hasher, app_base);
     hashU64(&hasher, provide_window);
-    hashU64(&hasher, phdr_capacity);
-    hashU64(&hasher, spare_phdrs);
+    hashU64(&hasher, spare_notes);
     hashBytes(&hasher, input.target);
     hashBytes(&hasher, input.link_abi);
     hashList(&hasher, input.provides);
@@ -404,7 +431,7 @@ fn hashList(hasher: *std.crypto.hash.sha2.Sha256, list: []const []const u8) void
 }
 
 /// The record format; bumped whenever `finish`'s output changes.
-pub const format_version: u32 = 6;
+pub const format_version: u32 = 7;
 const magic = "RHST".*;
 /// The offset of the host's bytes in a record, so they can be copied by
 /// file range from a page boundary.
@@ -502,11 +529,9 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
     const shstrndx = readU16(exe, 62);
     if (phentsize != phdr_size or shentsize != 64 or shstrndx >= shnum) return error.UnexpectedHostLayout;
     if (phoff + @as(u64, phnum) * phdr_size > exe.len or shoff + @as(u64, shnum) * 64 > exe.len) return error.UnexpectedHostLayout;
-    if (phnum + spare_phdrs > phdr_capacity) return error.UnexpectedHostLayout;
 
-    // The first loadable segment maps file offset 0; the reserved table
-    // must keep its distance from offset to address.
-    var first_delta: ?u64 = null;
+    // A loadable segment maps file offset 0, and so the program header table.
+    var maps_headers = false;
     var host_end: u64 = 0;
     var dynamic: ?[2]u64 = null;
     for (0..phnum) |index| {
@@ -516,15 +541,17 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
         const offset = readU64(exe, at + 8);
         const vaddr = readU64(exe, at + 16);
         const memsz = readU64(exe, at + 40);
-        if (offset == 0 and first_delta == null) first_delta = vaddr;
+        if (offset == 0) maps_headers = true;
         host_end = @max(host_end, vaddr + memsz);
     }
-    const delta = first_delta orelse return error.UnexpectedHostLayout;
+    if (!maps_headers) return error.UnexpectedHostLayout;
     if (host_end > app_base) return error.HostTooLarge;
 
     const names_header: usize = @intCast(shoff + @as(u64, shstrndx) * 64);
     const names = sliceAt(exe, readU64(exe, names_header + 24), readU64(exe, names_header + 32)) orelse return error.UnexpectedHostLayout;
-    var reserve_offset: ?u64 = null;
+    // The spare notes' file ranges.
+    var notes: [spare_notes][2]u64 = undefined;
+    var note_count: usize = 0;
     var build_id_offset: u64 = 0;
     var build_id_size: u32 = 0;
     var symtab_index: u32 = 0;
@@ -541,9 +568,10 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
         const addr = readU64(exe, at + 16);
         const offset = readU64(exe, at + 24);
         const size = readU64(exe, at + 32);
-        if (std.mem.eql(u8, name, reserve_section_name)) {
-            if (size != phdr_capacity * phdr_size or addr != offset + delta) return error.UnexpectedHostLayout;
-            reserve_offset = offset;
+        if (section_type == SHT_NOTE and std.mem.startsWith(u8, name, spare_note_prefix)) {
+            if (note_count == spare_notes) return error.UnexpectedHostLayout;
+            notes[note_count] = .{ offset, size };
+            note_count += 1;
         } else if (std.mem.eql(u8, name, procedure_section_name)) {
             procedure_section = .{ addr, offset };
         } else if (std.mem.eql(u8, name, value_section_name)) {
@@ -567,25 +595,25 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
             debug_indices[2] = @intCast(index);
         }
     }
-    const table_offset = reserve_offset orelse return error.UnexpectedHostLayout;
     if (build_id_size == 0) return error.UnexpectedHostLayout;
 
-    // Move the program header table into the reserved space, with spares.
-    const new_phnum = phnum + spare_phdrs;
-    const table = exe[@intCast(table_offset)..][0 .. new_phnum * phdr_size];
-    @memmove(table[0 .. phnum * phdr_size], exe[@intCast(phoff)..][0 .. phnum * phdr_size]);
-    @memset(table[phnum * phdr_size ..], 0);
+    // Each PT_NOTE of exactly one spare note becomes a spare entry for the
+    // app's segments: empty, and after every other entry, so the app's
+    // loadable segments follow the host's in address order. The table stays
+    // where it is.
+    const table = exe[@intCast(phoff)..][0 .. @as(usize, phnum) * phdr_size];
+    var first_spare: u32 = 0;
     for (0..phnum) |index| {
         const entry = table[index * phdr_size ..][0..phdr_size];
-        if (readU32(entry, 0) != PT_PHDR) continue;
-        std.mem.writeInt(u64, entry[8..16], table_offset, .little);
-        std.mem.writeInt(u64, entry[16..24], table_offset + delta, .little);
-        std.mem.writeInt(u64, entry[24..32], table_offset + delta, .little);
-        std.mem.writeInt(u64, entry[32..40], new_phnum * phdr_size, .little);
-        std.mem.writeInt(u64, entry[40..48], new_phnum * phdr_size, .little);
+        const spare = readU32(entry, 0) == PT_NOTE and for (notes[0..note_count]) |note| {
+            if (readU64(entry, 8) == note[0] and readU64(entry, 32) == note[1]) break true;
+        } else false;
+        if (spare) continue;
+        @memmove(table[first_spare * phdr_size ..][0..phdr_size], entry);
+        first_spare += 1;
     }
-    std.mem.writeInt(u64, exe[32..40], table_offset, .little);
-    std.mem.writeInt(u16, exe[56..58], @intCast(new_phnum), .little);
+    if (phnum - first_spare < app_phdrs) return error.UnexpectedHostLayout;
+    @memset(table[first_spare * phdr_size ..], 0);
 
     // The address of every kept symbol the host defines: a global or weak
     // definition, or a hidden one LLD bound locally in the executable.
@@ -745,9 +773,9 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
         .host_offset = host_offset,
         .host_size = host_len,
         .host_end_vaddr = host_end,
-        .phdr_offset = table_offset,
-        .phnum = new_phnum,
-        .first_spare = phnum,
+        .phdr_offset = phoff,
+        .phnum = phnum,
+        .first_spare = first_spare,
         .build_id_offset = build_id_offset,
         .build_id_size = build_id_size,
         .shnum = shnum,
@@ -984,7 +1012,7 @@ fn readU64(bytes: []const u8, at: usize) u64 {
 }
 
 const PT_LOAD = 1;
-const PT_PHDR = 6;
+const PT_NOTE = 4;
 const ET_REL = 1;
 const ET_EXEC = 2;
 const ET_DYN = 3;
@@ -1002,6 +1030,7 @@ const SHT_PROGBITS = 1;
 const SHT_SYMTAB = 2;
 const SHT_STRTAB = 3;
 const SHT_RELA = 4;
+const SHT_NOTE = 7;
 const SHT_NOBITS = 8;
 const R_X86_64_64 = 1;
 const R_AARCH64_ABS64 = 257;
@@ -1022,14 +1051,39 @@ const STT_FUNC = 2;
 const STT_SECTION = 3;
 const STV_HIDDEN = 2;
 
+/// The header offset of the generated object's section named `wanted`.
+fn testSection(object: []const u8, wanted: []const u8) error{TestUnexpectedResult}!usize {
+    const shoff = readU64(object, 40);
+    const names_at: usize = @intCast(shoff + @as(u64, readU16(object, 62)) * 64);
+    const names = object[@intCast(readU64(object, names_at + 24))..];
+    for (0..readU16(object, 60)) |index| {
+        const at: usize = @intCast(shoff + index * 64);
+        if (std.mem.eql(u8, std.mem.sliceTo(names[readU32(object, at)..], 0), wanted)) return at;
+    }
+    return error.TestUnexpectedResult;
+}
+
+/// The generated object carries the spare notes first, alternating 4- and
+/// 8-byte alignment, so LLD writes program header entries for them.
+fn expectSpareNotes(object: []const u8) error{ TestUnexpectedResult, TestExpectedEqual }!void {
+    const shoff = readU64(object, 40);
+    inline for (0..spare_notes) |index| {
+        const at = try testSection(object, std.fmt.comptimePrint("{s}{d}", .{ spare_note_prefix, index }));
+        try std.testing.expectEqual(shoff + (1 + index) * 64, at);
+        try std.testing.expectEqual(@as(u32, SHT_NOTE), readU32(object, at + 4));
+        try std.testing.expectEqual(@as(u64, SHF_ALLOC | SHF_GNU_RETAIN), readU64(object, at + 8));
+        try std.testing.expectEqual(@as(u64, if (index % 2 == 0) 4 else 8), readU64(object, at + 48));
+        try std.testing.expectEqualSlices(u8, &spare_note, object[@intCast(readU64(object, at + 24))..][0..@intCast(readU64(object, at + 32))]);
+    }
+}
+
 test "the host link object defines each provide at its window" {
     const allocator = std.testing.allocator;
     const object = try linkObject(allocator, false, &.{ "roc_answer", "roc_main" });
     defer allocator.free(object);
     try std.testing.expectEqual(@as(u16, EM_X86_64), readU16(object, 18));
-    try std.testing.expectEqual(@as(u16, 5), readU16(object, 60));
-    const shoff = readU64(object, 40);
-    const symtab: usize = @intCast(shoff + 2 * 64);
+    try expectSpareNotes(object);
+    const symtab = try testSection(object, ".symtab");
     const entries = object[@intCast(readU64(object, symtab + 24))..][0..@intCast(readU64(object, symtab + 32))];
     try std.testing.expectEqual(@as(usize, 3 * 24), entries.len);
     try std.testing.expectEqual(provideAddress(1), readU64(entries, 2 * 24 + 8));
@@ -1041,7 +1095,6 @@ test "the host link object defines each provide at its window" {
 }
 
 test "a position-independent host object defines section windows and anchors a relocation" {
-    const UnitImage = @import("backend").dev.UnitImage;
     const allocator = std.testing.allocator;
     for ([_]bool{ false, true }) |arm64| {
         const object = try linkPositionIndependentObject(allocator, arm64, &.{
@@ -1050,21 +1103,34 @@ test "a position-independent host object defines section windows and anchors a r
         });
         defer allocator.free(object);
         try std.testing.expectEqual(@as(u16, if (arm64) EM_AARCH64 else EM_X86_64), readU16(object, 18));
-        // The object is an ELF relocatable the image converter reads: the
-        // windows are its exports, the anchor its one absolute word.
-        const image = try UnitImage.build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .whole });
-        defer allocator.free(image);
-        const view = try UnitImage.View.init(image);
-        const main_window = view.findExport("roc_main").?;
-        try std.testing.expectEqual(@backingInt(UnitImage.SymbolType.func), main_window.type);
-        try std.testing.expectEqual(@as(u32, procedure_window), main_window.size);
-        const config_window = view.findExport("roc_config").?;
-        try std.testing.expectEqual(@backingInt(UnitImage.Region.data), config_window.region);
-        try std.testing.expectEqual(@as(u32, 32), config_window.size);
-        try std.testing.expectEqual(@as(usize, 0), view.imports().len);
-        const sites = view.localSites();
-        try std.testing.expectEqual(@as(usize, 1), sites.len);
-        try std.testing.expectEqual(@backingInt(UnitImage.SiteKind.abs64), sites[0].kind);
+        try expectSpareNotes(object);
+        const shoff = readU64(object, 40);
+        const procedures = try testSection(object, procedure_section_name);
+        const values = try testSection(object, value_section_name);
+        try std.testing.expectEqual(procedure_window, readU64(object, procedures + 32));
+        try std.testing.expectEqual(@as(u64, 32), readU64(object, values + 32));
+        // Each window is its provide's symbol, sized to the window.
+        const symtab = try testSection(object, ".symtab");
+        const symbols = object[@intCast(readU64(object, symtab + 24))..][0..@intCast(readU64(object, symtab + 32))];
+        try std.testing.expectEqual(@as(usize, 4 * 24), symbols.len);
+        const Expected = struct { section: usize, type: u8, size: u64 };
+        for ([_]Expected{
+            .{ .section = values, .type = STT_OBJECT, .size = 32 },
+            .{ .section = procedures, .type = STT_FUNC, .size = procedure_window },
+        }, 2..) |expected, index| {
+            const entry = symbols[index * 24 ..][0..24];
+            try std.testing.expectEqual(expected.type, entry[4] & 0xf);
+            try std.testing.expectEqual(@as(u64, (expected.section - shoff) / 64), readU16(entry, 6));
+            try std.testing.expectEqual(expected.size, readU64(entry, 16));
+        }
+        // The anchor is one absolute word against the first note's section
+        // symbol.
+        try std.testing.expectEqual(@as(u16, 1), readU16(symbols, 24 + 6));
+        const rela = try testSection(object, ".rela.rocanchor");
+        try std.testing.expectEqual(@as(u64, 24), readU64(object, rela + 32));
+        const info = readU64(object, @intCast(readU64(object, rela + 24) + 8));
+        const r_type: u64 = if (arm64) R_AARCH64_ABS64 else R_X86_64_64;
+        try std.testing.expectEqual((@as(u64, 1) << 32) | r_type, info);
     }
 }
 

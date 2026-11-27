@@ -34239,9 +34239,10 @@ long jump and a value's layout size of writable data, where the pointers in
 the copied value can be relocated; which provides are procedures and how
 large the values are is part of the host's key, read from the program's
 images, so those hosts' lookups wait for them and nothing is ever too large.
-The object also reserves what the patch link appends: in an ELF host room
-in the host's first segment for a program header table with spare entries, on macOS
-a header pad for the app's segment load commands; on Windows the prelink's
+The object also reserves what the patch link appends: in an ELF host spare
+program header entries, which LLD writes for note sections in the object,
+so the table stays right after the ELF header where `strip` and `objcopy`
+keep it; on macOS a header pad for the app's segment load commands; on Windows the prelink's
 page file alignment leaves the header page room for the app's section
 headers. The host link keeps exactly the symbols the app region may import:
 the platform's hosted symbols, the fixed runtime set and the support image's
