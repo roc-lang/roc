@@ -28254,7 +28254,11 @@ its plan requests no variant. A variant reads its base procedure's prepared
 source, so a wave holds base owners or variants, never both, and every base
 wave precedes every variant wave. The wave then reserves its variants in owner
 order, emits the owners whose plans requested any in a second run, and
-appends every shard in owner order. A source's prepared data and an owner's
+appends every shard in owner order: the coordinator reserves each shard's rows
+in owner order, which fixes every identity it is given, and one more ordered
+run writes the reserved rows, each item writing only its own shard's. A
+failure after any shard is reserved writes every reserved shard before it is
+reported, so no reserved row is left unwritten. A source's prepared data and an owner's
 plan live only as long as an emission reads them: an owner frees its plan as
 soon as its shard is emitted, a base owner's task frees its source once the
 owner is emitted, a variant wave first prepares, in one ordered run, each
@@ -29812,19 +29816,26 @@ the base solver's combined definition and use constraints. Direct calls establis
 directed signature dependencies between components rather than merging a call
 graph into one ownership domain.
 
-Every component begins dirty. A dirty component is reseeded and solved against
+Components are settled callees first. A component's level is one more than the
+highest level among the components its procedures call, and components that
+call each other share a level; the levels are settled in ascending order, so a
+component is first analyzed against the final signatures of everything it
+calls outside its own level and is analyzed again only when a signature of its
+own level changes. Every component of a level begins that level dirty. A dirty
+component is reseeded and solved against
 a frozen signature/return-row snapshot; independent components may run on
 workers with private compact domains and query state. The coordinator commits
 results in deterministic procedure order after the wave drains and dirties
-callers only when signature bits or return-row contents change. Moving an
+callers of the same level only when signature bits or return-row contents
+change. Moving an
 unchanged row to a different table offset does not change its contents. Clean
 component results remain valid while those inputs stay fixed; newly discovered
 return capabilities must not inherit a stale poisoned lattice verdict.
 
 A consuming-use proof is reused only while its exact
 consumption inventory is unchanged; holder-adding uses remain
-signature-dependent. Committed takes still require their own settlement, and
-every component starts that settlement dirty. Only the converged result
+signature-dependent. ARC insertion settles once, after its takes are
+committed and against them. Only the converged result
 outlives reusable analysis scratch. The whole-program analysis remains a test
 oracle, not a production replay or fallback.
 
@@ -29914,8 +29925,9 @@ the per-field propagation. A complete aggregate field read whose root's ownershi
 place is used after it is such an occurrence, since emission retains the
 projected value right after the read (see the place rule under field takes);
 the analysis reads that decision rather than re-deriving it. Takes are decided
-after the borrow modes, so the solver settles without
-them and emission re-derives uniqueness against the committed takes, settling
+after the borrow modes, and nothing between the mode solve and emission reads a
+uniqueness verdict, so uniqueness is settled exactly once, after the takes are
+committed and against them, settling
 the unique-return bits and the per-field unique-return mask of each signature
 to a fixpoint; a caller taking a field out of a callee's dying `Try` record
 result thus holds the callee's fresh birth, and a caller taking back a

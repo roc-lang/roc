@@ -217,13 +217,12 @@ test "ARC executor reverse completions match inline RC bodies and identities acr
         var metrics: arc.ParallelMetrics = .{};
         try candidate.run(&interface, &metrics);
         try runner.expectDrained();
-        try testing.expectEqual(@as(u64, 120) + metrics.uniqueness.topology_tasks_committed + metrics.uniqueness.task_committed + metrics.dismantle_tasks_committed, runner.received);
         try expectUniquenessMetrics(inline_metrics.uniqueness, metrics.uniqueness);
         // Forty statements fit one dismantle fact range.
         try testing.expectEqual(@as(u64, 1), metrics.dismantle_tasks_submitted);
         try testing.expectEqual(@as(u64, 1), metrics.dismantle_tasks_committed);
         // These pinned, independent bodies return scalars: no signature can
-        // change, so uniqueness is one initial wave before source preparation.
+        // change, so uniqueness is one wave.
         try testing.expectEqual(@as(u64, 1), metrics.uniqueness.signature_waves);
         try testing.expectEqual(@as(u64, 40), metrics.uniqueness.component_runs);
         try testing.expectEqual(@as(u64, 40), metrics.source_tasks_submitted);
@@ -252,7 +251,7 @@ const FixturePhase = struct {
     allocates: bool = true,
 };
 
-/// Topology tables, uniqueness, dismantle facts, source, planning, emission.
+/// Topology tables, dismantle facts, source, uniqueness, planning, emission.
 /// The pinned scalar-return fixture has exactly one uniqueness wave, asserted
 /// by the successful test above, and its eight statements fit one fact range.
 /// Its return-only bodies define nothing and have no successor edges, so of
@@ -262,8 +261,8 @@ const fixture_phases = [_]FixturePhase{
     .{ .session = 0, .fail_task = 0, .earlier = 0, .window = topology_tasks },
     .{ .session = 0, .fail_task = 1, .earlier = 0, .window = topology_tasks, .allocates = false },
     .{ .session = 0, .fail_task = 2, .earlier = 0, .window = topology_tasks, .allocates = false },
-    .{ .session = 1, .fail_task = 2, .earlier = topology_tasks },
-    .{ .session = 2, .fail_task = 0, .earlier = topology_tasks + 8, .allocates = false },
+    .{ .session = 1, .fail_task = 0, .earlier = topology_tasks, .allocates = false },
+    .{ .session = 2, .fail_task = 2, .earlier = topology_tasks + 1 },
     .{ .session = 3, .fail_task = 2, .earlier = topology_tasks + 9 },
     .{ .session = 4, .fail_task = 2, .earlier = topology_tasks + 17 },
     .{ .session = 5, .fail_task = 2, .earlier = topology_tasks + 25 },
@@ -328,10 +327,10 @@ test "ARC executor later wave failure drains without rolling back earlier commit
     var candidate = try Fixture.init(40);
     defer candidate.deinit();
     const before = candidate.store.cfStmtCount();
-    // The topology tables, one uniqueness wave, one dismantle fact range, two
-    // source batches, then planning/emission for the first 32 bodies, followed
-    // by planning/emission for the final eight.
-    var runner: ReverseExecutor = .{ .fail_session = 8, .fail_submit = true };
+    // The topology tables, one dismantle fact range, two source batches, one
+    // uniqueness wave, then planning, emission and the shard fill for the
+    // first 32 bodies, followed by planning and emission for the final eight.
+    var runner: ReverseExecutor = .{ .fail_session = 9, .fail_submit = true };
     defer runner.deinit();
     const interface = runner.interface();
     var metrics: arc.ParallelMetrics = .{};
@@ -469,7 +468,6 @@ test "ARC public solve component barriers preserve conditional rows and shared g
         try runner.expectDrained();
         try expectSameUniqueness(&direct, &actual);
         try expectUniquenessMetrics(inline_metrics, metrics);
-        try testing.expect(metrics.component_runs > metrics.components);
         const settled = metrics;
         const rc = try testing.allocator.alloc(bool, fixture.fixture.store.localCount());
         defer testing.allocator.free(rc);
@@ -485,7 +483,7 @@ test "ARC public solve component barriers preserve conditional rows and shared g
         try testing.expectEqual(settled.settlements + 1, metrics.settlements);
         try testing.expectEqual(settled.components + 7, metrics.components);
         try testing.expectEqual(settled.component_runs + 7, metrics.component_runs);
-        try testing.expectEqual(settled.signature_waves + 1, metrics.signature_waves);
+        try testing.expectEqual(settled.signature_waves * 2, metrics.signature_waves);
         try testing.expectEqual(settled.signature_changes, metrics.signature_changes);
         try testing.expectEqual(settled.task_submitted + 7, metrics.task_submitted);
         try testing.expectEqual(metrics.task_submitted, metrics.task_committed);

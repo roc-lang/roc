@@ -877,6 +877,31 @@ pub fn appendBodyShardWithJoinRelocation(
     frame_locals: LocalSpan,
     relocation: ?JoinPointRelocation,
 ) AppendBodyError!AppendedBody {
+    const reserved = try self.reserveBodyShard(shard, root, frame_locals, relocation);
+    self.fillReservedBodyShard(reserved);
+    return reserved.appended;
+}
+
+/// A body shard whose coordinator identities are assigned and whose rows are
+/// reserved but not yet written (`fillReservedBodyShard`).
+pub const ReservedBodyShard = struct {
+    shard: BodyShard,
+    source_prefix: BodyPrefix,
+    appended: AppendedBody,
+};
+
+/// Assign one body suffix its coordinator identities and reserve its rows,
+/// appending its strings. All capacity is acquired before any logical
+/// mutation, so allocation failure leaves destination lengths and contents
+/// unchanged. The reserved rows hold nothing until `fillReservedBodyShard`
+/// writes them.
+pub fn reserveBodyShard(
+    self: *Self,
+    shard: BodyShard,
+    root: ?CFStmtId,
+    frame_locals: LocalSpan,
+    relocation: ?JoinPointRelocation,
+) AppendBodyError!ReservedBodyShard {
     const source = shard.store;
     const prefix = shard.prefix;
     const source_prefix: BodyPrefix = if (source.body_coordinator != null)
@@ -960,46 +985,27 @@ pub fn appendBodyShardWithJoinRelocation(
         ));
         self.string_builder.registerExistingAssumeCapacity(&self.strings, destination_id);
     }
-    for (source.inline_scopes.unsafeRawItemsForView()[source_prefix.inline_scopes..]) |item| {
-        self.inline_scopes.appendAssumeCapacity(
-            relocateBodyValue(InlineScope, item, prefix, bases),
-        );
+    self.inline_scopes.addManyUninitializedAssumeCapacity(source.inline_scopes.len() - source_prefix.inline_scopes);
+    self.local_ids.addManyUninitializedAssumeCapacity(source.local_ids.len() - source_prefix.local_ids);
+    self.u64s.addManyUninitializedAssumeCapacity(source.u64s.len() - source_prefix.u64s);
+    self.u32s.addManyUninitializedAssumeCapacity(source.u32s.len() - source_prefix.u32s);
+    self.erased_call_arg_plans.addManyUninitializedAssumeCapacity(source.erased_call_arg_plans.len() - source_prefix.erased_call_arg_plans);
+    inline for (0..stmt_row_column_count) |column| {
+        self.stmt_rows[column].addManyUninitializedAssumeCapacity(source.stmt_rows[column].len() - source_prefix.stmt_rows[column]);
     }
-    const local_ids = source.local_ids.unsafeRawItemsForView();
-    for (local_ids[source_prefix.local_ids..]) |item| self.local_ids.appendAssumeCapacity(relocateBodyValue(LocalId, item, prefix, bases));
-    self.u64s.appendSliceAssumeCapacity(source.u64s.unsafeRawItemsForView()[source_prefix.u64s..]);
-    self.u32s.appendSliceAssumeCapacity(source.u32s.unsafeRawItemsForView()[source_prefix.u32s..]);
-    for (source.erased_call_arg_plans.unsafeRawItemsForView()[source_prefix.erased_call_arg_plans..]) |item| self.erased_call_arg_plans.appendAssumeCapacity(relocateBodyValue(ErasedCallArgsPlan, item, prefix, bases));
-    inline for (stmt_row_types, 0..) |Row, column| {
-        for (source.stmt_rows[column].unsafeRawItemsForView()[source_prefix.stmt_rows[column]..]) |item| {
-            self.stmt_rows[column].appendAssumeCapacity(relocateBodyValue(Row, item, prefix, bases));
-        }
-    }
-    for (source.locals.unsafeRawItemsForView()[source_prefix.locals..]) |item| self.locals.appendAssumeCapacity(relocateBodyValue(StoredLocal, item, prefix, bases));
-    for (source.local_names.unsafeRawItemsForView()[source_prefix.locals..]) |name| {
-        self.local_names.appendAssumeCapacity(relocateBodyValue(base.StringLiteral.Idx, name, prefix, bases));
-    }
-    for (source.cf_switch_branches.unsafeRawItemsForView()[source_prefix.cf_switch_branches..]) |item| self.cf_switch_branches.appendAssumeCapacity(relocateBodyValue(CFSwitchBranch, item, prefix, bases));
-    for (source.str_match_steps.unsafeRawItemsForView()[source_prefix.str_match_steps..]) |item| self.str_match_steps.appendAssumeCapacity(relocateBodyValue(StrMatchStep, item, prefix, bases));
-    for (source.str_match_arms.unsafeRawItemsForView()[source_prefix.str_match_arms..]) |item| self.str_match_arms.appendAssumeCapacity(relocateBodyValue(StrMatchArm, item, prefix, bases));
-    for (source.join_points.unsafeRawItemsForView()[source_prefix.join_points..]) |item| self.join_points.appendAssumeCapacity(relocateBodyValue(JoinPoint, item, prefix, bases));
-    for (source.cf_stmts.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |item| self.cf_stmts.appendAssumeCapacity(relocateBodyValue(CFStmt, item, prefix, bases));
-    self.stmt_sources.appendSliceAssumeCapacity(source.stmt_sources.unsafeRawItemsForView()[source_prefix.stmt_sources..]);
-    for (source.cf_stmt_sources.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |source_id| {
-        self.cf_stmt_sources.appendAssumeCapacity(relocateBodyValue(StmtSourceId, source_id, prefix, bases));
-    }
-    for (source.cf_stmt_inline_scopes.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |scope| {
-        self.cf_stmt_inline_scopes.appendAssumeCapacity(
-            relocateBodyValue(InlineScopeId, scope, prefix, bases),
-        );
-    }
-    for (source.cf_stmt_origin_kinds.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |kind| {
-        self.cf_stmt_origin_kinds.appendAssumeCapacity(
-            relocateBodyValue(StoredOriginKind, kind, prefix, bases),
-        );
-    }
+    self.locals.addManyUninitializedAssumeCapacity(local_len);
+    self.local_names.addManyUninitializedAssumeCapacity(local_len);
+    self.cf_switch_branches.addManyUninitializedAssumeCapacity(source.cf_switch_branches.len() - source_prefix.cf_switch_branches);
+    self.str_match_steps.addManyUninitializedAssumeCapacity(source.str_match_steps.len() - source_prefix.str_match_steps);
+    self.str_match_arms.addManyUninitializedAssumeCapacity(source.str_match_arms.len() - source_prefix.str_match_arms);
+    self.join_points.addManyUninitializedAssumeCapacity(source.join_points.len() - source_prefix.join_points);
+    self.cf_stmts.addManyUninitializedAssumeCapacity(stmt_len);
+    self.stmt_sources.addManyUninitializedAssumeCapacity(source.stmt_sources.len() - source_prefix.stmt_sources);
+    self.cf_stmt_sources.addManyUninitializedAssumeCapacity(stmt_len);
+    self.cf_stmt_inline_scopes.addManyUninitializedAssumeCapacity(stmt_len);
+    self.cf_stmt_origin_kinds.addManyUninitializedAssumeCapacity(stmt_len);
 
-    return .{
+    return .{ .shard = shard, .source_prefix = source_prefix, .appended = .{
         .relocation = bases,
         .root = if (root) |id| relocateBodyValue(CFStmtId, id, prefix, bases) else null,
         .frame_locals = relocateBodyValue(LocalSpan, frame_locals, prefix, bases),
@@ -1009,7 +1015,67 @@ pub fn appendBodyShardWithJoinRelocation(
             .str_match_arms = .{ .start = bases.str_match_arms, .len = @intCast(source.str_match_arms.len() - source_prefix.str_match_arms) },
             .join_points = .{ .start = bases.join_points, .len = @intCast(source.join_points.len() - source_prefix.join_points) },
         },
-    };
+    } };
+}
+
+/// Write the rows of a reserved body shard. The rows of different reserved
+/// shards are disjoint, so once every shard of a batch is reserved their
+/// fills may run on different threads; nothing may read the rows or grow the
+/// store until every fill has returned.
+pub fn fillReservedBodyShard(self: *Self, reserved: ReservedBodyShard) void {
+    const source = reserved.shard.store;
+    const prefix = reserved.shard.prefix;
+    const source_prefix = reserved.source_prefix;
+    const bases = reserved.appended.relocation;
+    for (source.inline_scopes.unsafeRawItemsForView()[source_prefix.inline_scopes..], self.inline_scopes.unsafeRawItemsMutForStore()[bases.inline_scopes..][0 .. source.inline_scopes.len() - source_prefix.inline_scopes]) |item, *slot| {
+        slot.* = relocateBodyValue(InlineScope, item, prefix, bases);
+    }
+    for (source.local_ids.unsafeRawItemsForView()[source_prefix.local_ids..], self.local_ids.unsafeRawItemsMutForStore()[bases.local_ids..][0 .. source.local_ids.len() - source_prefix.local_ids]) |item, *slot| {
+        slot.* = relocateBodyValue(LocalId, item, prefix, bases);
+    }
+    @memcpy(self.u64s.unsafeRawItemsMutForStore()[bases.u64s..][0 .. source.u64s.len() - source_prefix.u64s], source.u64s.unsafeRawItemsForView()[source_prefix.u64s..]);
+    @memcpy(self.u32s.unsafeRawItemsMutForStore()[bases.u32s..][0 .. source.u32s.len() - source_prefix.u32s], source.u32s.unsafeRawItemsForView()[source_prefix.u32s..]);
+    for (source.erased_call_arg_plans.unsafeRawItemsForView()[source_prefix.erased_call_arg_plans..], self.erased_call_arg_plans.unsafeRawItemsMutForStore()[bases.erased_call_arg_plans..][0 .. source.erased_call_arg_plans.len() - source_prefix.erased_call_arg_plans]) |item, *slot| {
+        slot.* = relocateBodyValue(ErasedCallArgsPlan, item, prefix, bases);
+    }
+    inline for (stmt_row_types, 0..) |Row, column| {
+        for (source.stmt_rows[column].unsafeRawItemsForView()[source_prefix.stmt_rows[column]..], self.stmt_rows[column].unsafeRawItemsMutForStore()[bases.stmt_rows[column]..][0 .. source.stmt_rows[column].len() - source_prefix.stmt_rows[column]]) |item, *slot| {
+            slot.* = relocateBodyValue(Row, item, prefix, bases);
+        }
+    }
+    const local_len = source.locals.len() - source_prefix.locals;
+    for (source.locals.unsafeRawItemsForView()[source_prefix.locals..], self.locals.unsafeRawItemsMutForStore()[bases.locals..][0..local_len]) |item, *slot| {
+        slot.* = relocateBodyValue(StoredLocal, item, prefix, bases);
+    }
+    for (source.local_names.unsafeRawItemsForView()[source_prefix.locals..], self.local_names.unsafeRawItemsMutForStore()[bases.locals..][0..local_len]) |name, *slot| {
+        slot.* = relocateBodyValue(base.StringLiteral.Idx, name, prefix, bases);
+    }
+    for (source.cf_switch_branches.unsafeRawItemsForView()[source_prefix.cf_switch_branches..], self.cf_switch_branches.unsafeRawItemsMutForStore()[bases.cf_switch_branches..][0 .. source.cf_switch_branches.len() - source_prefix.cf_switch_branches]) |item, *slot| {
+        slot.* = relocateBodyValue(CFSwitchBranch, item, prefix, bases);
+    }
+    for (source.str_match_steps.unsafeRawItemsForView()[source_prefix.str_match_steps..], self.str_match_steps.unsafeRawItemsMutForStore()[bases.str_match_steps..][0 .. source.str_match_steps.len() - source_prefix.str_match_steps]) |item, *slot| {
+        slot.* = relocateBodyValue(StrMatchStep, item, prefix, bases);
+    }
+    for (source.str_match_arms.unsafeRawItemsForView()[source_prefix.str_match_arms..], self.str_match_arms.unsafeRawItemsMutForStore()[bases.str_match_arms..][0 .. source.str_match_arms.len() - source_prefix.str_match_arms]) |item, *slot| {
+        slot.* = relocateBodyValue(StrMatchArm, item, prefix, bases);
+    }
+    for (source.join_points.unsafeRawItemsForView()[source_prefix.join_points..], self.join_points.unsafeRawItemsMutForStore()[bases.join_points..][0 .. source.join_points.len() - source_prefix.join_points]) |item, *slot| {
+        slot.* = relocateBodyValue(JoinPoint, item, prefix, bases);
+    }
+    const stmt_len = source.cf_stmts.len() - source_prefix.cf_stmts;
+    for (source.cf_stmts.unsafeRawItemsForView()[source_prefix.cf_stmts..], self.cf_stmts.unsafeRawItemsMutForStore()[bases.cf_stmts..][0..stmt_len]) |item, *slot| {
+        slot.* = relocateBodyValue(CFStmt, item, prefix, bases);
+    }
+    @memcpy(self.stmt_sources.unsafeRawItemsMutForStore()[bases.stmt_sources..][0 .. source.stmt_sources.len() - source_prefix.stmt_sources], source.stmt_sources.unsafeRawItemsForView()[source_prefix.stmt_sources..]);
+    for (source.cf_stmt_sources.unsafeRawItemsForView()[source_prefix.cf_stmts..], self.cf_stmt_sources.unsafeRawItemsMutForStore()[bases.cf_stmts..][0..stmt_len]) |source_id, *slot| {
+        slot.* = relocateBodyValue(StmtSourceId, source_id, prefix, bases);
+    }
+    for (source.cf_stmt_inline_scopes.unsafeRawItemsForView()[source_prefix.cf_stmts..], self.cf_stmt_inline_scopes.unsafeRawItemsMutForStore()[bases.cf_stmts..][0..stmt_len]) |scope, *slot| {
+        slot.* = relocateBodyValue(InlineScopeId, scope, prefix, bases);
+    }
+    for (source.cf_stmt_origin_kinds.unsafeRawItemsForView()[source_prefix.cf_stmts..], self.cf_stmt_origin_kinds.unsafeRawItemsMutForStore()[bases.cf_stmts..][0..stmt_len]) |kind, *slot| {
+        slot.* = relocateBodyValue(StoredOriginKind, kind, prefix, bases);
+    }
 }
 
 /// Guarded immutable span borrow for a named `LirStore` backing list.

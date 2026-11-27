@@ -122,6 +122,13 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
             self.bumpIfMoved(old);
         }
 
+        /// Extend the list by `count` rows within its reserved capacity,
+        /// leaving them for the caller to write before anything reads them.
+        pub fn addManyUninitializedAssumeCapacity(self: *Self, count: usize) void {
+            std.debug.assert(self.__guarded_backing.capacity - self.__guarded_backing.length >= count);
+            self.__guarded_backing.length += @intCast(count);
+        }
+
         pub fn appendSliceAssumeCapacity(self: *Self, values: []const T) void {
             _ = self.__guarded_backing.appendSliceAssumeCapacity(values);
         }

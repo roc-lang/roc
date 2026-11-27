@@ -103,6 +103,11 @@ pub const UniquenessMetrics = struct {
 pub const UniquenessOptions = struct {
     /// Settle the uniqueness analysis. Off, every mutation retains its runtime check.
     prove: bool = true,
+    /// Whether `solveWithOptions` settles uniqueness (against no takes) before
+    /// it returns. A caller that settles once itself, against the takes it
+    /// commits after the solve, turns this off; the solution still carries
+    /// the structure a settlement needs.
+    settle_in_solve: bool = true,
     executor: ?*const task_executor.Executor = null,
     metrics: ?*UniquenessMetrics = null,
 };
@@ -1393,7 +1398,7 @@ pub fn solveWithOptions(
     solution.proc_statements.items = try allocator.dupe(LIR.CFStmtId, solver.proc_stmts.items.items);
     if (options.prove) {
         solution.uniqueness_structure = try UniquenessStructure.build(allocator, store, rc_local, solution.proc_statements, &solver.proc_returns, options.executor, options.metrics);
-        try settleUniquenessWithOptions(allocator, store, layouts, rc_local, &solution, .none, consume_dead_boxes, options);
+        if (options.settle_in_solve) try settleUniquenessWithOptions(allocator, store, layouts, rc_local, &solution, .none, consume_dead_boxes, options);
     }
     try computeOutcomeRestitution(allocator, store, layouts, rc_local, consume_dead_boxes, &solution, &solver.proc_stmts);
 
@@ -4655,15 +4660,6 @@ fn settleUniqueOrigins(
             if (self.value) |value| self.value = if (b.isSet(index)) value | c[index] else null;
         }
 
-        fn fromConstant(self: *@This()) void {
-            self.any = true;
-        }
-
-        fn veto(self: *@This()) void {
-            self.any = true;
-            self.value = null;
-        }
-
         fn fromSlot(self: *@This(), m: []const u64, fc: *const FieldConds, container: u32, field: u32) void {
             self.any = true;
             const bit = @as(u64, 1) << @as(u6, @intCast(field));
@@ -4695,50 +4691,77 @@ fn settleUniqueOrigins(
             mask_queued.unset(container);
             // Containers without tracked field origins keep an empty mask.
             const base = field_conds.base[container].get() orelse continue;
-            var meets: [64]Meet = @splat(Meet{});
             var dead: u64 = dead_masks[container];
             var changed = false;
+            // Per field: whether any input feeds it, whether some input is
+            // unborn, and (for the fields in `joined`) the union of its born
+            // inputs' conditions. A field is born when it has an input and
+            // none is unborn; an untouched born field has the empty condition.
+            var fed: u64 = 0;
+            var unborn: u64 = 0;
+            var joined: u64 = 0;
+            var field_values: [64]arc_sig.ParamMask = undefined;
             for (store_inputs.row(container)) |edge_index| {
                 const edge = field_edges.stores[edge_index];
-                meets[edge.field].fromLocal(born, conds, edge.source);
-                if (destroyed.isSet(edge.source)) dead |= @as(u64, 1) << @as(u6, @intCast(edge.field));
+                const bit = @as(u64, 1) << @as(u6, @intCast(edge.field));
+                fed |= bit;
+                if (born.isSet(edge.source)) {
+                    if ((joined & bit) == 0) {
+                        joined |= bit;
+                        field_values[edge.field] = 0;
+                    }
+                    field_values[edge.field] |= conds[edge.source];
+                } else unborn |= bit;
+                if (destroyed.isSet(edge.source)) dead |= bit;
             }
             for (mask_alias_inputs.row(container)) |edge_index| {
                 const source = field_edges.aliases[edge_index].source;
-                for (0..64) |field| {
-                    meets[field].fromSlot(masks, field_conds, source, @intCast(field));
+                // A viewed container feeds every field, born only where its
+                // own mask is.
+                fed = std.math.maxInt(u64);
+                unborn |= ~masks[source];
+                var bits = masks[source] & ~unborn;
+                while (bits != 0) : (bits &= bits - 1) {
+                    const field: u32 = @ctz(bits);
+                    const bit = @as(u64, 1) << @as(u6, @intCast(field));
+                    if ((joined & bit) == 0) {
+                        joined |= bit;
+                        field_values[field] = 0;
+                    }
+                    field_values[field] |= field_conds.get(source, field);
                 }
                 dead |= dead_masks[source];
             }
             for (seed_inputs.row(container)) |seed_index| {
                 const seed = field_edges.seeds[seed_index];
-                for (0..64) |field| {
-                    const bit = @as(u64, 1) << @as(u6, @intCast(field));
-                    if ((seed.mask & bit) != 0) {
-                        meets[field].fromConstant();
-                    } else if ((seed.vetoed & bit) != 0) {
-                        meets[field].veto();
-                    }
-                }
+                fed |= seed.mask | seed.vetoed;
+                unborn |= seed.vetoed & ~seed.mask;
             }
             for (call_inputs.row(container)) |edge_index| {
                 const edge = field_edges.calls[edge_index];
                 if (edge.field == arc_sig.RetCondition.whole_value) continue;
-                const meet = &meets[edge.field];
+                const bit = @as(u64, 1) << @as(u6, @intCast(edge.field));
                 for (field_edges.call_args[edge.args_start..][0..edge.args_len]) |arg| {
-                    meet.fromLocal(born, conds, arg);
-                    if (destroyed.isSet(arg)) dead |= @as(u64, 1) << @as(u6, @intCast(edge.field));
+                    fed |= bit;
+                    if (born.isSet(arg)) {
+                        if ((joined & bit) == 0) {
+                            joined |= bit;
+                            field_values[edge.field] = 0;
+                        }
+                        field_values[edge.field] |= conds[arg];
+                    } else unborn |= bit;
+                    if (destroyed.isSet(arg)) dead |= bit;
                 }
             }
-            var mask: u64 = 0;
             if (dead != dead_masks[container]) changed = true;
-            for (meets, 0..) |meet, field| {
-                if (!meet.isBorn()) continue;
-                const bit = @as(u64, 1) << @as(u6, @intCast(field));
-                mask |= bit;
+            const mask = fed & ~unborn;
+            var born_fields = mask;
+            while (born_fields != 0) : (born_fields &= born_fields - 1) {
+                const field: u32 = @ctz(born_fields);
+                const value: arc_sig.ParamMask = if ((joined & (@as(u64, 1) << @as(u6, @intCast(field)))) != 0) field_values[field] else 0;
                 const slot = base + field;
-                if (field_conds.conds[slot] != meet.value.?) {
-                    field_conds.conds[slot] = meet.value.?;
+                if (field_conds.conds[slot] != value) {
+                    field_conds.conds[slot] = value;
                     changed = true;
                 }
             }
@@ -5504,13 +5527,16 @@ fn runUniquenessTasks(
 /// is the row's parameters, or, when empty, the unconditional bit. Returned
 /// aggregates get the same per field. Rows only ever gain parts or lose
 /// parameters between iterations, since a new row adds edges and adds no
-/// contradiction, so the loop terminates. The solver settles without takes
-/// and emission settles again against the committed takes; both leave the
-/// verdict, the per-local conditions, and the per-proc seed masks in the
+/// contradiction, so the loop terminates. ARC insertion settles once, against
+/// the takes it committed; a solve that settles itself
+/// (`UniquenessOptions.settle_in_solve`) does so without takes. Either leaves
+/// the verdict, the per-local conditions, and the per-proc seed masks in the
 /// solution.
 ///
 /// Exact ownership components run against frozen signatures in deterministic
-/// waves. Only callers of semantically changed signatures enter the next wave.
+/// waves, callees before their callers. Within a group of mutually calling
+/// components, only callers of semantically changed signatures enter the next
+/// wave.
 /// Every invocation starts all components afresh, including post-take
 /// settlement; only the store-shaped structure is retained between them.
 pub fn settleUniquenessWithOptions(
@@ -5549,7 +5575,7 @@ pub fn settleUniquenessWithOptions(
         component.result = null;
     };
     const contexts = try arena.alloc(UniquenessComponentTask, components.len);
-    var dirty = try std.bit_set.DynamicBitSetUnmanaged.initFull(arena, components.len);
+    var dirty = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(arena, components.len);
     // Inline runs give each component the transient storage a worker's task
     // scratch would.
     var inline_scratch = collections.SingleThreadArena.init(allocator);
@@ -5563,85 +5589,136 @@ pub fn settleUniquenessWithOptions(
     var flat_rows = std.ArrayList(arc_sig.RetCondition).empty;
     defer flat_rows.deinit(allocator);
     var table_published = false;
-    while (dirty.count() != 0) {
-        metrics.signature_waves += 1;
-        if (builtin.is_test) uniqueness_analysis_rounds += 1;
-        var count: usize = 0;
-        var iter = dirty.iterator(.{});
-        while (iter.next()) |id| {
-            const component = &components[id];
-            // Rows in proc_rows are replaced below before publishing; workers
-            // read the frozen global row table, never another owner's scratch.
-            contexts[count] = .{
-                .store = store,
-                .layouts = layouts,
-                .rc_local = rc_local,
-                .solution = solution,
-                .takes = takes,
-                .consume_dead_boxes = consume_dead_boxes,
-                .component = component,
-                .topology = topology,
-                .domain = .{
-                    .local_to_dense = local_to_dense,
-                    .count = component.locals.len,
-                    .locals = component.locals,
-                    .procs = component.procs,
-                    .owners = local_owner,
-                    .component = @intCast(id),
-                },
-                .stmt_to_dense = stmt_to_dense,
-                .stmt_owner = stmt_owner,
-                .proc_stmts = proc_stmts,
-                .returns = returns,
-            };
-            count += 1;
-        }
-        dirty.setRangeValue(.{ .start = 0, .end = components.len }, false);
-        if (options.executor) |executor| {
-            try runUniquenessTasks(contexts[0..count], executor, metrics);
-        } else {
-            for (contexts[0..count]) |*context| {
-                defer context.countWork(metrics);
-                defer _ = inline_scratch.reset(.retain_capacity);
-                try context.execute(allocator, inline_scratch.allocator());
+    // Components are analyzed callees first: a component's level is one more
+    // than the highest level among the components it calls, and components
+    // that call each other share a level. Every component of a level sees the
+    // final signatures of the levels below it, so it is re-analyzed only when
+    // a signature of its own level changes.
+    const component_level = try arena.alloc(u32, components.len);
+    var level_count: u32 = 0;
+    {
+        var level_memory = std.heap.ArenaAllocator.init(allocator);
+        defer level_memory.deinit();
+        const level_arena = level_memory.allocator();
+        const caller_starts = try level_arena.alloc(u32, components.len + 1);
+        @memset(caller_starts, 0);
+        for (proc_component, 0..) |component, proc| caller_starts[component + 1] += @intCast(callers.of(proc).len);
+        for (1..caller_starts.len) |index| caller_starts[index] += caller_starts[index - 1];
+        const caller_components = try level_arena.alloc(u32, caller_starts[components.len]);
+        const fill = try level_arena.dupe(u32, caller_starts[0..components.len]);
+        for (proc_component, 0..) |component, proc| {
+            for (callers.of(proc)) |caller| {
+                caller_components[fill[component]] = proc_component[caller];
+                fill[component] += 1;
             }
         }
-        for (contexts[0..count]) |context| if (context.failed) return error.OutOfMemory;
-        // The first wave publishes the table in its flattened order; a later
-        // wave republishes it only when a row changed.
-        var rows_changed = !table_published;
-        table_published = true;
-        for (contexts[0..count]) |context| {
-            const result = context.component.result.?;
-            if (options.executor != null) metrics.task_committed += 1;
-            for (context.component.procs, result.updates) |proc, update| {
-                const old = solution.sigs[proc];
-                // Caller uniqueness variants depend on callee seed masks.
-                const row_changed = !sameRetConditions(solution.sigTable().retConditionsOf(old), update.rows);
-                rows_changed = rows_changed or row_changed;
-                const changed = old.read_only_params != update.sig.read_only_params or
-                    old.ret_unique != update.sig.ret_unique or old.ret_unique_fields != update.sig.ret_unique_fields or
-                    solution.unique_seed_masks[proc] != update.seeds or row_changed;
-                solution.sigs[proc].read_only_params = update.sig.read_only_params;
-                solution.sigs[proc].ret_unique = update.sig.ret_unique;
-                solution.sigs[proc].ret_unique_fields = update.sig.ret_unique_fields;
-                solution.unique_seed_masks[proc] = update.seeds;
-                proc_rows[proc] = update.rows;
-                if (changed) {
-                    metrics.signature_changes += 1;
-                    for (callers.of(proc)) |caller| dirty.set(proc_component[caller]);
+        const callees = try collections.csr.transpose(level_arena, caller_starts, caller_components);
+        // Groups of mutually calling components; a caller's group is never
+        // numbered below its callee's.
+        const groups = try collections.scc.compute(level_arena, caller_starts, caller_components, callees.starts, callees.targets);
+        const group_level = try level_arena.alloc(u32, groups.count());
+        @memset(group_level, 0);
+        for (0..groups.count()) |group| {
+            level_count = @max(level_count, group_level[group] + 1);
+            for (groups.membersOf(group)) |component| {
+                component_level[component] = group_level[group];
+                for (caller_components[caller_starts[component]..caller_starts[component + 1]]) |caller_component| {
+                    const caller_group = groups.component_of[caller_component];
+                    if (caller_group != group) group_level[caller_group] = @max(group_level[caller_group], group_level[group] + 1);
                 }
             }
         }
-        if (!rows_changed) continue;
-        flat_rows.clearRetainingCapacity();
-        for (proc_rows, solution.sigs) |row, *sig| {
-            sig.ret_conditions = .{ .start = @intCast(flat_rows.items.len), .len = @intCast(row.len) };
-            try flat_rows.appendSlice(allocator, row);
+    }
+    var level: u32 = 0;
+    while (level < level_count) : (level += 1) {
+        for (component_level, 0..) |component_level_value, id| dirty.setValue(id, component_level_value == level);
+        while (dirty.count() != 0) {
+            metrics.signature_waves += 1;
+            if (builtin.is_test) uniqueness_analysis_rounds += 1;
+            var count: usize = 0;
+            var iter = dirty.iterator(.{});
+            while (iter.next()) |id| {
+                const component = &components[id];
+                // Rows in proc_rows are replaced below before publishing; workers
+                // read the frozen global row table, never another owner's scratch.
+                contexts[count] = .{
+                    .store = store,
+                    .layouts = layouts,
+                    .rc_local = rc_local,
+                    .solution = solution,
+                    .takes = takes,
+                    .consume_dead_boxes = consume_dead_boxes,
+                    .component = component,
+                    .topology = topology,
+                    .domain = .{
+                        .local_to_dense = local_to_dense,
+                        .count = component.locals.len,
+                        .locals = component.locals,
+                        .procs = component.procs,
+                        .owners = local_owner,
+                        .component = @intCast(id),
+                    },
+                    .stmt_to_dense = stmt_to_dense,
+                    .stmt_owner = stmt_owner,
+                    .proc_stmts = proc_stmts,
+                    .returns = returns,
+                };
+                count += 1;
+            }
+            dirty.setRangeValue(.{ .start = 0, .end = components.len }, false);
+            if (options.executor) |executor| {
+                try runUniquenessTasks(contexts[0..count], executor, metrics);
+            } else {
+                for (contexts[0..count]) |*context| {
+                    defer context.countWork(metrics);
+                    // The previous component's transient storage dies here,
+                    // keeping its capacity for this one.
+                    _ = inline_scratch.reset(.retain_capacity);
+                    try context.execute(allocator, inline_scratch.allocator());
+                }
+            }
+            for (contexts[0..count]) |context| if (context.failed) return error.OutOfMemory;
+            // The first wave publishes the table in its flattened order; a later
+            // wave republishes it only when a row changed.
+            var rows_changed = !table_published;
+            table_published = true;
+            for (contexts[0..count]) |context| {
+                const result = context.component.result.?;
+                if (options.executor != null) metrics.task_committed += 1;
+                for (context.component.procs, result.updates) |proc, update| {
+                    const old = solution.sigs[proc];
+                    // Caller uniqueness variants depend on callee seed masks.
+                    const row_changed = !sameRetConditions(solution.sigTable().retConditionsOf(old), update.rows);
+                    rows_changed = rows_changed or row_changed;
+                    const changed = old.read_only_params != update.sig.read_only_params or
+                        old.ret_unique != update.sig.ret_unique or old.ret_unique_fields != update.sig.ret_unique_fields or
+                        solution.unique_seed_masks[proc] != update.seeds or row_changed;
+                    solution.sigs[proc].read_only_params = update.sig.read_only_params;
+                    solution.sigs[proc].ret_unique = update.sig.ret_unique;
+                    solution.sigs[proc].ret_unique_fields = update.sig.ret_unique_fields;
+                    solution.unique_seed_masks[proc] = update.seeds;
+                    proc_rows[proc] = update.rows;
+                    if (changed) {
+                        metrics.signature_changes += 1;
+                        // A caller outside this level is analyzed later,
+                        // against this procedure's final signature.
+                        for (callers.of(proc)) |caller| {
+                            const caller_component = proc_component[caller];
+                            if (component_level[caller_component] == level) dirty.set(caller_component);
+                        }
+                    }
+                }
+            }
+            if (!rows_changed) continue;
+            flat_rows.clearRetainingCapacity();
+            for (proc_rows, solution.sigs) |row, *sig| {
+                sig.ret_conditions = .{ .start = @intCast(flat_rows.items.len), .len = @intCast(row.len) };
+                try flat_rows.appendSlice(allocator, row);
+            }
+            const published = try allocator.dupe(arc_sig.RetCondition, flat_rows.items);
+            allocator.free(solution.ret_conditions);
+            solution.ret_conditions = published;
         }
-        const published = try allocator.dupe(arc_sig.RetCondition, flat_rows.items);
-        allocator.free(solution.ret_conditions);
-        solution.ret_conditions = published;
     }
     solution.unique.setRangeValue(.{ .start = 0, .end = solution.unique.bit_length }, false);
     solution.unique_destroyed.setRangeValue(.{ .start = 0, .end = solution.unique_destroyed.bit_length }, false);
@@ -7451,7 +7528,8 @@ test "uniqueness fixed point propagates fresh returns through a call diamond and
     var solution = try solve(allocator, &f.store, &f.layouts, rc, &.{}, true);
     defer solution.deinit();
     try testing.expectEqual(@as(usize, 1), @import("use_order.zig").topology_builds - builds_before);
-    try testing.expect(uniqueness_analysis_rounds - rounds_before > 8);
+    const solve_rounds = uniqueness_analysis_rounds - rounds_before;
+    try testing.expect(solve_rounds > 8);
     for (solution.sigs) |sig| try testing.expect(sig.ret_unique);
     try testing.expectEqual(@as(u64, 3), solution.sigOf(chain).ret_unique_fields);
     try testing.expect(solution.isUnique(fresh));
@@ -7460,7 +7538,7 @@ test "uniqueness fixed point propagates fresh returns through a call diamond and
     const settled_rounds = uniqueness_analysis_rounds;
     try settleUniquenessWithOptions(allocator, &f.store, &f.layouts, rc, &solution, .stamped, true, .{});
     try testing.expectEqual(@as(usize, 1), @import("use_order.zig").topology_builds - builds_before);
-    try testing.expectEqual(@as(usize, 1), uniqueness_analysis_rounds - settled_rounds);
+    try testing.expectEqual(solve_rounds, uniqueness_analysis_rounds - settled_rounds);
     try testing.expectEqual(@as(u64, 3), solution.sigOf(chain).ret_unique_fields);
     UniquenessOracleState.resetCapabilities(&solution);
     var metrics: UniquenessMetrics = .{};
@@ -7589,7 +7667,7 @@ test "component uniqueness preserves shared RC definitions shared statements and
     try std.testing.expectEqual(@as(u64, 1), solution.sigs[3].ret_unique_fields);
 }
 
-test "component uniqueness revisits only dirty callers along a long chain" {
+test "component uniqueness analyzes each component of a long chain once" {
     const allocator = std.testing.allocator;
     var f = try UniquenessTest.init();
     defer f.deinit();
@@ -7619,16 +7697,17 @@ test "component uniqueness revisits only dirty callers along a long chain" {
     UniquenessOracleState.resetCapabilities(&solution);
     var metrics: UniquenessMetrics = .{};
     try UniquenessOracleState.compare(&f, &rc, &solution, .none, &metrics);
+    // Callees settle before their callers, so no component is analyzed twice.
     try std.testing.expectEqual(@as(u64, 17), metrics.components);
-    try std.testing.expectEqual(@as(u64, 7), metrics.signature_waves);
-    try std.testing.expectEqual(@as(u64, 23), metrics.component_runs);
-    try std.testing.expectEqual(@as(u64, 23), metrics.local_visits);
-    try std.testing.expectEqual(@as(u64, 46), metrics.statement_visits);
+    try std.testing.expectEqual(@as(u64, 17), metrics.component_runs);
+    try std.testing.expectEqual(@as(u64, 17), metrics.local_visits);
+    try std.testing.expectEqual(@as(u64, 34), metrics.statement_visits);
     for (solution.sigs) |sig| try std.testing.expect(sig.ret_unique);
+    const waves = metrics.signature_waves;
     metrics = .{};
     try UniquenessOracleState.compare(&f, &rc, &solution, .stamped, &metrics);
     try std.testing.expectEqual(@as(u64, 17), metrics.component_runs);
-    try std.testing.expectEqual(@as(u64, 1), metrics.signature_waves);
+    try std.testing.expectEqual(waves, metrics.signature_waves);
 }
 
 test "component uniqueness ignores offset-only return condition changes" {
@@ -7663,7 +7742,7 @@ test "component uniqueness ignores offset-only return condition changes" {
     try UniquenessOracleState.compare(&f, &rc, &solution, .none, &metrics);
     try std.testing.expectEqual(@as(u64, 4), metrics.components);
     try std.testing.expectEqual(@as(u64, 2), metrics.signature_waves);
-    try std.testing.expectEqual(@as(u64, 6), metrics.component_runs);
+    try std.testing.expectEqual(@as(u64, 4), metrics.component_runs);
     for (solution.sigs, 0..) |sig, index| {
         try std.testing.expectEqual(@as(u32, @intCast(index)), sig.ret_conditions.start);
         try std.testing.expectEqual(@as(u32, 1), sig.ret_conditions.len);
@@ -7701,7 +7780,7 @@ test "component uniqueness read-only return refinement revives a borrowed-view l
     var metrics: UniquenessMetrics = .{};
     try UniquenessOracleState.compare(&f, &rc, &solution, .none, &metrics);
     try std.testing.expectEqual(@as(u64, 2), metrics.components);
-    try std.testing.expectEqual(@as(u64, 3), metrics.component_runs);
+    try std.testing.expectEqual(@as(u64, 2), metrics.component_runs);
     try std.testing.expectEqual(@as(u64, 2), metrics.signature_waves);
     try std.testing.expect(solution.isUnique(source));
     try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), solution.sigs[@backingInt(callee)].read_only_params);
