@@ -217,6 +217,7 @@ const Pass = struct {
         for (self.result.const_roots.items) |root| {
             try self.markProc(root.proc);
             try self.markConstPlan(root.plan);
+            if (root.stored) |stored| try self.markConstPlan(stored.plan);
             // The evaluation publishes into this slot, so the slot outlives
             // having no reader in this program.
             if (root.value_slot) |slot| try self.markStaticData(slot);

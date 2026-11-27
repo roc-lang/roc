@@ -271,6 +271,9 @@ const cases = [_]TestCase{
         .source = "f = " ++ repeat("|_| ", depth) ++ "1.U64\nmain = f" ++ repeat("(0)", depth) ++ "\n",
         .expected = .{ .inspect_str = "1" },
         .stack_bytes = stack_bytes,
+        // Ignored under specialization until
+        // https://github.com/roc-lang/roc/issues/13560 is fixed.
+        .ignore = .{ .issue = 13560, .strategy = .lss },
     },
     .{
         .name = "issue 11698: deep equality",

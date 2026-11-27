@@ -23601,7 +23601,7 @@ fn publishLiteralArgumentRoots(
     }
     try edge_args.resize(allocator, edges.items.len);
     for (edge_args.items) |*list| list.* = .empty;
-    const NewRoot = struct { site: LiteralSite, ty: CheckedTypeId, edge: LiteralEdge, callee_requirement: u32, validate_only: bool, sealed: bool, canonical: bool = false, holds_function: bool = false, owner_expr: CIR.Expr.Idx };
+    const NewRoot = struct { site: LiteralSite, ty: CheckedTypeId, edge: LiteralEdge, callee_requirement: u32, validate_only: bool, sealed: bool, canonical: bool = false, owner_expr: CIR.Expr.Idx };
     var new_roots = std.ArrayListUnmanaged(NewRoot).empty;
     defer new_roots.deinit(allocator);
     var root_index = std.AutoHashMapUnmanaged(ObligationKey, u32).empty;
@@ -23789,7 +23789,6 @@ fn publishLiteralArgumentRoots(
                             // root is stored when its value is data alone,
                             // at a sealed type too.
                             .validate_only = !constant_instance and (!obligation.site.carriesValue() or holds_function),
-                            .holds_function = constant_instance and holds_function,
                             .sealed = sealed,
                             // The canonical instantiation's own constant;
                             // its other requirements are other constants'.
@@ -23903,7 +23902,6 @@ fn publishLiteralArgumentRoots(
                     .validate_only = new_root.validate_only,
                     .sealed = new_root.sealed,
                     .canonical = new_root.canonical,
-                    .holds_function = new_root.holds_function,
                 },
             });
         }
@@ -26504,11 +26502,6 @@ pub const LiteralArgumentRoot = struct {
     /// it, and it alone reports the constant's `dbg` and `expect` (design.md
     /// "Polymorphic Constants").
     canonical: bool = false,
-    /// A polymorphic constant's instance whose type holds a function value.
-    /// Its value is stored, as every instance's is; under `.lss` the Solved
-    /// program evaluates it, as it evaluates every root holding a function
-    /// value (design.md "Compile-Time Evaluation Under `.lss`").
-    holds_function: bool = false,
 };
 
 /// The literal-conversion root kinds, as a payload-free classification
@@ -26711,9 +26704,10 @@ pub const CompileTimeRoot = struct {
     /// Arguments").
     pub fn isBoxyEvaluated(self: *const CompileTimeRoot) bool {
         return switch (self.kind) {
-            // A polymorphic constant's instance holding a function value is
-            // a Solved program's under `.lss`, as any root holding one is.
-            .literal_argument => !self.literal_argument.?.holds_function,
+            // A polymorphic constant's instance is the constant's value at
+            // that type, which the evaluator of the compilation's own
+            // strategy computes, as it computes every constant's.
+            .literal_argument => !self.isConstantInstance(),
             .interpolation_conversion => true,
             .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .repl_expr => false,
         };
@@ -41041,8 +41035,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x41, 0xBE, 0x17, 0x89, 0xD4, 0xD1, 0xC2, 0xE4, 0x8F, 0x58, 0x20, 0xCD, 0xF3, 0xA9, 0x51, 0x36,
-        0x40, 0xE9, 0xAC, 0xAA, 0x5C, 0x3A, 0x58, 0x29, 0x34, 0x89, 0x03, 0x38, 0x27, 0xFF, 0xB0, 0xA4,
+        0xB4, 0x2F, 0xEA, 0x26, 0xC4, 0xF7, 0xE8, 0x0D, 0xFC, 0x19, 0x6D, 0x2B, 0xAA, 0xD0, 0x3F, 0xBA,
+        0xB3, 0xFA, 0x93, 0x55, 0x90, 0x41, 0x7F, 0x46, 0x37, 0xB4, 0xCC, 0xF9, 0x4B, 0xAC, 0xCE, 0x1B,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

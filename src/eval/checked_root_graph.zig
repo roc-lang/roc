@@ -35,14 +35,10 @@ pub const Root = struct {
 /// For each root, the roots its evaluation reads, in ascending order.
 pub const Graph = struct {
     deps: []const []const u32,
-    /// A reached value outside this batch lacks its Boxy representation.
-    /// Visibility does not grant the batch permission to evaluate that value.
-    unavailable_boxy_reads: []const bool,
 
     pub fn deinit(self: *Graph, allocator: Allocator) void {
         for (self.deps) |deps| allocator.free(deps);
         allocator.free(self.deps);
-        allocator.free(self.unavailable_boxy_reads);
         self.* = undefined;
     }
 };
@@ -91,47 +87,18 @@ pub fn build(allocator: Allocator, modules: []const *const checked.CheckedModule
     return try buildGraph(allocator, &walker, roots);
 }
 
-/// Before Solved evaluation, follow only requested roots' reachable checked
-/// references, including imported procedures. A completed LSS value need not
-/// have a Boxy representation, so unlisted reads are not assumed Boxy-ready.
-pub fn buildForBoxySelection(allocator: Allocator, modules: []const *const checked.CheckedModuleArtifact, program: lir.CheckedPipeline.CheckedModuleSet, roots: []const Root) Allocator.Error!Graph {
-    var views = std.ArrayList(checked.ImportedModuleView).empty;
-    defer views.deinit(allocator);
-    var seen = std.AutoHashMapUnmanaged([32]u8, void).empty;
-    defer seen.deinit(allocator);
-    // Preserve the completion-list positions that Root.module indexes.
-    for (modules) |module| {
-        try views.append(allocator, checked.importedView(module));
-        try seen.put(allocator, module.key.digest().bytes, {});
-    }
-    const root_view = checked.importedView(program.root.module);
-    for ([_][]const checked.ImportedModuleView{ &.{root_view}, program.root.relation_modules, program.imports }) |group| {
-        for (group) |view| {
-            if ((try seen.getOrPut(allocator, view.key.digest().bytes)).found_existing) continue;
-            try views.append(allocator, view);
-        }
-    }
-    var walker = try Walker.initViews(allocator, views.items, roots);
-    defer walker.deinit();
-    walker.check_unlisted_readiness = true;
-    return try buildGraph(allocator, &walker, roots);
-}
-
 fn buildGraph(allocator: Allocator, walker: *Walker, roots: []const Root) Allocator.Error!Graph {
     const deps = try allocator.alloc([]const u32, roots.len);
     errdefer allocator.free(deps);
-    const unavailable = try allocator.alloc(bool, roots.len);
-    errdefer allocator.free(unavailable);
     var built: usize = 0;
     errdefer {
         for (deps[0..built]) |list| allocator.free(list);
     }
     for (roots, deps, 0..) |root, *out, ordinal| {
         out.* = try walker.dependencies(root, @intCast(ordinal));
-        unavailable[ordinal] = walker.unavailable_boxy_read;
         built += 1;
     }
-    return .{ .deps = deps, .unavailable_boxy_reads = unavailable };
+    return .{ .deps = deps };
 }
 
 /// Direct references decoded once per reached template during this graph build.
@@ -141,7 +108,6 @@ const DirectDependencies = struct {
     templates_len: u32,
     reads_start: u32,
     reads_len: u32,
-    unavailable_boxy_read: bool,
 };
 
 /// Walks the checked templates compile-time roots reach and records the
@@ -151,8 +117,6 @@ pub const Walker = struct {
     allocator: Allocator,
     modules: []const checked.ImportedModuleView,
     owns_module_views: bool = false,
-    check_unlisted_readiness: bool = false,
-    unavailable_boxy_read: bool = false,
     /// The first listed module of each checked identity.
     by_key: std.AutoHashMapUnmanaged([32]u8, u32),
     root_ordinals: std.AutoHashMapUnmanaged(RootKey, u32),
@@ -265,7 +229,6 @@ pub const Walker = struct {
     /// itself.
     pub fn dependencies(self: *Walker, root: Root, ordinal: u32) Allocator.Error![]const u32 {
         self.visit += 1;
-        self.unavailable_boxy_read = false;
         self.reads.clearRetainingCapacity();
         self.pending.clearRetainingCapacity();
         const wrapper = root.request.procedure_template orelse
@@ -417,12 +380,8 @@ pub const Walker = struct {
         if (self.summaries.get(key)) |summary| {
             try self.pending.appendSlice(self.allocator, self.summary_templates.items[summary.templates_start..][0..summary.templates_len]);
             try self.reads.appendSlice(self.allocator, self.summary_reads.items[summary.reads_start..][0..summary.reads_len]);
-            self.unavailable_boxy_read = self.unavailable_boxy_read or summary.unavailable_boxy_read;
             return;
         }
-        const previous_unavailable = self.unavailable_boxy_read;
-        self.unavailable_boxy_read = false;
-        defer self.unavailable_boxy_read = self.unavailable_boxy_read or previous_unavailable;
         const templates_start = self.pending.items.len;
         const reads_start = self.reads.items.len;
         self.evidence_visit += 1;
@@ -461,7 +420,6 @@ pub const Walker = struct {
             .templates_len = @intCast(self.pending.items.len - templates_start),
             .reads_start = @intCast(self.summary_reads.items.len),
             .reads_len = @intCast(self.reads.items.len - reads_start),
-            .unavailable_boxy_read = self.unavailable_boxy_read,
         };
         try self.summary_templates.appendSlice(self.allocator, self.pending.items[templates_start..]);
         try self.summary_reads.appendSlice(self.allocator, self.reads.items[reads_start..]);
@@ -627,12 +585,7 @@ pub const Walker = struct {
     /// it.
     fn readRoot(self: *Walker, module: u32, root: checked.ComptimeRootId) Allocator.Error!void {
         const artifact = self.modules[module];
-        const ordinal = self.root_ordinals.get(.{ .module = artifact.key.digest().bytes, .root = root }) orelse {
-            if (self.check_unlisted_readiness and artifact.compile_time_roots.root(root).needsEvaluation(.boxy)) {
-                self.unavailable_boxy_read = true;
-            }
-            return;
-        };
+        const ordinal = self.root_ordinals.get(.{ .module = artifact.key.digest().bytes, .root = root }) orelse return;
         try self.reads.append(self.allocator, ordinal);
     }
 };

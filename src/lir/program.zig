@@ -297,6 +297,11 @@ pub const ConstRootPlan = struct {
     /// representation evidence from the public checked type.
     ret_type: const_store.ConstTypeId,
     plan: ConstPlanId,
+    /// The shape of `ret_type` when it is not the evaluated value's: a
+    /// Solved program's root is stored at its declaring module's rows, which
+    /// rows the program joined can widen past. An image of the root is
+    /// written at this shape, each tag at its variant of the same name.
+    stored: ?RootShape = null,
     /// Consumer-requested materialization slot, when the root manifest asks
     /// for one. Other reads may declare additional representation-specific
     /// slots; this field is not the complete publication inventory.

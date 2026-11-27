@@ -40,9 +40,10 @@ pub const ComptimeFailure = struct {
     checked_site: ?checked.CheckedExhaustivenessSiteId,
 
     /// The terminal a failed test ends in: the empirical failure of its
-    /// checked site, or, with no comptime failure, a runtime error.
-    pub fn terminal(failure: ?ComptimeFailure) LIR.CFStmt {
-        const comptime_failure = failure orelse return .runtime_error;
+    /// checked site, or, with no comptime failure, the crash every strategy
+    /// reports for a value no pattern matches.
+    pub fn terminal(failure: ?ComptimeFailure, store: *lir_core.LirStore) Allocator.Error!LIR.CFStmt {
+        const comptime_failure = failure orelse return .{ .crash = .{ .msg = .{ .literal = try store.insertString("pattern match failed") } } };
         return .{ .comptime_exhaustiveness_failed = .{ .owner = comptime_failure.owner, .checked_site = comptime_failure.checked_site } };
     }
 };
@@ -522,7 +523,7 @@ pub const Ctx = struct {
     }
 
     pub fn failTerminal(self: Ctx) Allocator.Error!LIR.CFStmtId {
-        return try self.b.store.addCFStmt(ComptimeFailure.terminal(self.state.comptime_failure), self.b.origin(.lowering_glue));
+        return try self.b.store.addCFStmt(try ComptimeFailure.terminal(self.state.comptime_failure, self.b.store), self.b.origin(.lowering_glue));
     }
 
     pub fn lirLocalForOcc(self: Ctx, step: match_tree.Step, ty: types.TypeId, parent: ?LIR.LocalId) Allocator.Error!LIR.LocalId {

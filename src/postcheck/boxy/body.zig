@@ -2143,7 +2143,7 @@ pub const Builder = struct {
                         const lambda = self.bodies().exprDataOf(root_expr, .lambda);
                         if (lambda.args.len != params.len) invariant("a template's lambda arity differs from its signature");
                         self.locateProc(lambda.body);
-                        for (lambda.args, params, worker.params) |pattern, param, param_ty| try self.bindIrrefutable(pattern, param, param_ty);
+                        for (lambda.args, params, worker.params) |pattern, param, param_ty| try self.bindPattern(pattern, param, param_ty);
                         try self.tasks.append(self.allocator, .ret);
                         // The body's value is built at the function's result
                         // type, which its rows join (design.md "Row Joins").
@@ -2478,7 +2478,7 @@ pub const Builder = struct {
                 try self.argsRecordField(record_param.?, @intCast(own_words + index), param_ty)
             else
                 try self.erasedParamValue(record_param.?, worker.params, @intCast(index));
-            try self.bindIrrefutable(pattern, value, param_ty);
+            try self.bindPattern(pattern, value, param_ty);
         }
         try self.tasks.append(self.allocator, .ret);
         try self.destination_types.put(self.allocator, lambda.body, worker.ret);
@@ -2532,7 +2532,7 @@ pub const Builder = struct {
 
         const body_start = try self.newHole();
         self.hole = body_start;
-        for (lambda.args, worker.params, args.items[params_start..instance_start]) |pattern, param_ty, param| try self.bindIrrefutable(pattern, param, param_ty);
+        for (lambda.args, worker.params, args.items[params_start..instance_start]) |pattern, param_ty, param| try self.bindPattern(pattern, param, param_ty);
         try self.tasks.append(self.allocator, .ret);
         try self.destination_types.put(self.allocator, lambda.body, worker.ret);
         try self.tail_exprs.put(self.allocator, lambda.body, {});
@@ -3421,7 +3421,7 @@ pub const Builder = struct {
                 // A destructure that can miss has the checked site of the
                 // pending diagnostic checking left it.
                 const failure = if (self.view.view.exhaustiveness_sites.lookupByDestructurePattern(bind.pattern)) |site| try self.comptimeFailure(site) else null;
-                const miss = try self.store.addCFStmt(Match.ComptimeFailure.terminal(failure), self.origin(.lowering_glue));
+                const miss = try self.store.addCFStmt(try Match.ComptimeFailure.terminal(failure, self.store), self.origin(.lowering_glue));
                 try self.testPattern(bind.pattern, value, bind.ty, miss);
             },
             .discard => _ = self.popValue(),
@@ -4953,7 +4953,7 @@ pub const Builder = struct {
         // A miss fails as the destructure's checked site reports
         // (`comptimeFailure`).
         const failure = try self.comptimeFailure(self.view.view.exhaustiveness_sites.lookupByDestructurePattern(scrutinee_pattern));
-        const miss = try self.store.addCFStmt(Match.ComptimeFailure.terminal(failure), self.origin(.lowering_glue));
+        const miss = try self.store.addCFStmt(try Match.ComptimeFailure.terminal(failure, self.store), self.origin(.lowering_glue));
         try self.testPattern(scrutinee_pattern, scrutinee, try self.exprType(base_expr), miss);
         if (result_pattern) |pattern| {
             try self.pushValue(self.binders.get(pattern) orelse invariant("a hoisted extraction root's pattern never bound its result binder"));
@@ -11230,7 +11230,7 @@ pub const Builder = struct {
             .var_uninitialized => |var_| {
                 const local = try self.localOf(try self.patternType(var_.pattern), .frame);
                 try self.emitLinear(.{ .init_uninitialized = .{ .target = local, .next = undefined } });
-                try self.bindIrrefutable(var_.pattern, local, try self.patternType(var_.pattern));
+                try self.bindPattern(var_.pattern, local, try self.patternType(var_.pattern));
             },
             .while_ => |loop| try self.lowerLoop(@backingInt(stmt_id), loop, true),
             // `while True`: the body runs unconditionally, and only a break
@@ -11384,7 +11384,7 @@ pub const Builder = struct {
         const payload = try self.tagPayloadValue(step_value, step_ty, one, 0);
         const item = try self.recordFieldValue(payload.value, payload.ty, item_name);
         const rest = try self.recordFieldValue(payload.value, payload.ty, rest_name);
-        try self.bindIrrefutable(pattern, item.value, item.ty);
+        try self.bindPattern(pattern, item.value, item.ty);
         try self.loops.append(self.allocator, .{ .join = exit, .reached = true });
         try self.push(.end_loop);
         if (exit_merge) |m| try self.push(.{ .enter_merge = m });
@@ -11633,11 +11633,11 @@ pub const Builder = struct {
         try self.push(.{ .expr = body });
     }
 
-    /// Bind an irrefutable pattern (a parameter or a `decl`) to `value`.
-    /// Destructuring binds through the same tests a match uses; an
-    /// irrefutable pattern never takes their miss path.
-    pub fn bindIrrefutable(self: *Builder, pattern_id: PatternId, value: LocalId, ty: TypeId) Allocator.Error!void {
-        const miss = try self.newHole();
+    /// Bind a parameter's, `var`'s or loop's pattern to `value`.
+    /// Destructuring binds through the same tests a match uses; a value the
+    /// pattern does not cover fails as an unmatched value does.
+    pub fn bindPattern(self: *Builder, pattern_id: PatternId, value: LocalId, ty: TypeId) Allocator.Error!void {
+        const miss = try self.store.addCFStmt(try Match.ComptimeFailure.terminal(null, self.store), self.origin(.lowering_glue));
         try self.testPattern(pattern_id, value, ty, miss);
     }
 };

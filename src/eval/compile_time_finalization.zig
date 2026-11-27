@@ -56,11 +56,12 @@ pub const DebugObserver = struct {
     observe: *const fn (*anyopaque, []const u8) Allocator.Error!void,
 };
 
-/// Reads each `.boxy` compile-time program once it is lowered, before it
-/// runs: instrumentation that measures the programs compile-time evaluation
+/// Reads each compile-time program once it is lowered, before it runs: each
+/// `.boxy` program and each stage of a Solved program's evaluation.
+/// Instrumentation that measures the programs compile-time evaluation
 /// builds. A program can be lowered on any thread of the post-check
 /// executor, so `observe` synchronizes whatever it shares.
-pub const BoxyProgramObserver = struct {
+pub const CompileTimeProgramObserver = struct {
     context: *anyopaque,
     observe: *const fn (*anyopaque, *const lir.Program.Result) Allocator.Error!void,
 };
@@ -92,7 +93,7 @@ pub const Options = struct {
     stderr: ?StderrWriter = null,
     event_callback: ?EventCallback = null,
     debug_observer: ?DebugObserver = null,
-    boxy_program_observer: ?BoxyProgramObserver = null,
+    compile_time_program_observer: ?CompileTimeProgramObserver = null,
     debug_events: ?*DebugEvents = null,
     /// Artifact copies store results independently; shared slots publish once.
     publish_shared_slots: bool = true,
@@ -111,13 +112,12 @@ pub const Options = struct {
     timing: ?*Timing = null,
     /// Retain each stage's native excerpts for in-memory consumers.
     keep_artifacts: bool = false,
-    /// The strategy whose evaluator completes the roots holding function
-    /// values and the roots reading them: `.lss` specializes those into a
+    /// The evaluator for pending compile-time values: `.lss` specializes a
     /// Solved program and evaluates it in dependency-ordered stages; `.boxy`
-    /// lowers them as Boxy programs, as either strategy lowers every other
-    /// root (design.md "Compile-Time Evaluation Strategy"). Every producer of
-    /// checked modules names it: the strategy of the runtime program that
-    /// consumes the modules, or `.boxy` when nothing lowers them for runtime.
+    /// lowers Boxy programs (design.md "Compile-Time Evaluation Strategy").
+    /// Every producer names its strategy, including commands without a
+    /// runtime consumer. Value-form roots need no evaluator; literal argument
+    /// and interpolation conversion roots retain their Boxy validation path.
     strategy: base.SpecializationStrategy,
     /// Produce both strategies' representations, including literal argument
     /// roots under `.lss` (design.md "Literal Arguments").
@@ -1060,17 +1060,9 @@ pub fn finalizeProgram(
     const owned_runtime_roots = try cloneRootRequests(allocator, runtime_roots);
     errdefer deinitRootRequests(allocator, owned_runtime_roots);
 
-    // Every root whose evaluation reads no function value is the `.boxy`
-    // evaluator's, and completes first in one program, so the specialization
-    // restores every value it reads, as a compilation of cached modules
-    // does; the literal argument roots that read a value the Solved program
-    // computes complete once that program's roots have (design.md
-    // "Compile-Time Evaluation Under `.lss`"). The plan reads which roots
-    // remain pending after it.
-    var function_types: checked_root_graph.FunctionTypeMemo = .{};
-    defer function_types.deinit(allocator);
+    // Values requiring execution all use the selected strategy. Literal
+    // argument validation follows once the Solved program's values exist.
     try completeValueFormRoots(allocator, modules, lowering_modules, null, options);
-    try evaluateBoxyRoots(allocator, modules, lowering_modules, options, &debug_events, &function_types, .before_solved);
     var plan = try planRoots(allocator, modules, lowering_modules, program_roots, options.discovery_roots, lss_runtime, options.timing);
     defer plan.deinit(allocator);
     var evaluated_literals: LiteralRootIdentities = .empty;
@@ -1078,7 +1070,7 @@ pub fn finalizeProgram(
     const verify_literals = builtin.mode == .debug and lss_runtime and !plan.continued;
     var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, &plan, runtime_target, options, &debug_events, demand_driven, if (verify_literals) .{ .record = &evaluated_literals } else .none);
     errdefer specialized.deinit();
-    try evaluateBoxyRoots(allocator, modules, lowering_modules, options, &debug_events, &function_types, .after_solved);
+    try evaluateBoxyValidationRoots(allocator, modules, lowering_modules, options, &debug_events);
     var runtime_stages: ProgramSession.RuntimeStages = .evaluation;
     errdefer switch (runtime_stages) {
         .evaluation => {},
@@ -1161,36 +1153,15 @@ pub fn finalizeProgram(
     };
 }
 
-/// Which pending roots of a Solved compilation `evaluateBoxyRoots`
-/// evaluates.
-const BoxyPhase = enum {
-    /// Before the Solved program is specialized: every pending root that
-    /// neither holds a function value nor reads, directly or through other
-    /// roots, a value of a root that does. A literal argument root holding a
-    /// function value counts as holding none: the `.boxy` evaluator
-    /// evaluates it for its outcome and discards the value.
-    before_solved,
-    /// After the Solved program's roots completed: every literal argument
-    /// root still pending, with every pending root whose value one reads (a
-    /// root the Solved program did not demand).
-    after_solved,
-};
-
-/// Evaluate pending roots of a Solved compilation's modules with the `.boxy`
-/// evaluator, and store their values in their modules (design.md
-/// "Compile-Time Evaluation Under `.lss`"). A root holding a function value
-/// is the Solved program's, since a `.boxy` function value means nothing to
-/// Monotype ("Stored Function Values"), and so is every root that reads one;
-/// a literal argument root is the `.boxy` evaluator's whatever it reads
-/// ("Literal Arguments").
-fn evaluateBoxyRoots(
+/// Complete Boxy-only literal argument and interpolation validation after
+/// the Solved program, including any pending dependencies it did not demand
+/// (design.md "Literal Arguments").
+fn evaluateBoxyValidationRoots(
     allocator: Allocator,
     modules: []const ProgramModule,
     lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
     options: Options,
     debug_events: *DebugEvents,
-    function_types: *checked_root_graph.FunctionTypeMemo,
-    phase: BoxyPhase,
 ) FinalizeError!void {
     // The pending roots of the first artifact of each checked identity;
     // another artifact of the same identity repeats its results.
@@ -1210,60 +1181,33 @@ fn evaluateBoxyRoots(
             try pending.append(allocator, .{ .module = @intCast(index), .root = root_id, .request = request });
         }
     }
-    if (pending.items.len == 0) return;
-    if (phase == .after_solved and !any_literal) return;
+    if (!any_literal) return;
 
     const artifacts = try allocator.alloc(*checked.CheckedModuleArtifact, modules.len);
     defer allocator.free(artifacts);
     for (modules, artifacts) |entry, *artifact| artifact.* = entry.module;
-    var graph = if (phase == .before_solved)
-        try checked_root_graph.buildForBoxySelection(allocator, artifacts, lowering_modules, pending.items)
-    else
-        try checked_root_graph.build(allocator, artifacts, pending.items);
+    var graph = try checked_root_graph.build(allocator, artifacts, pending.items);
     defer graph.deinit(allocator);
     const chosen = try allocator.alloc(bool, pending.items.len);
     defer allocator.free(chosen);
-    switch (phase) {
-        // A root waits for the Solved program when it holds a function
-        // value or its evaluation reads a value of one that does, directly
-        // or through other roots.
-        .before_solved => {
-            for (pending.items, chosen, graph.unavailable_boxy_reads) |root, *flag, unavailable| {
-                flag.* = !unavailable and (artifacts[root.module].compile_time_roots.root(root.root).isBoxyEvaluated() or
-                    !try checked_root_graph.rootHoldsFunction(allocator, function_types, artifacts, lowering_modules, root));
-            }
-            var changed = true;
-            while (changed) {
-                changed = false;
-                for (graph.deps, chosen) |deps, *flag| {
-                    if (!flag.*) continue;
-                    for (deps) |dep| if (!chosen[dep]) {
-                        flag.* = false;
-                        changed = true;
-                        break;
-                    };
-                }
-            }
-        },
-        .after_solved => {
-            var work = std.ArrayList(u32).empty;
-            defer work.deinit(allocator);
-            for (pending.items, chosen, 0..) |root, *flag, ordinal| {
-                flag.* = artifacts[root.module].compile_time_roots.root(root.root).isBoxyEvaluated();
-                if (flag.*) try work.append(allocator, @intCast(ordinal));
-            }
-            while (work.pop()) |ordinal| for (graph.deps[ordinal]) |dep| {
-                if (chosen[dep]) continue;
-                chosen[dep] = true;
-                try work.append(allocator, dep);
-            };
-        },
+    var work = std.ArrayList(u32).empty;
+    defer work.deinit(allocator);
+    for (pending.items, chosen, 0..) |root, *flag, ordinal| {
+        flag.* = artifacts[root.module].compile_time_roots.root(root.root).isBoxyEvaluated();
+        if (flag.*) try work.append(allocator, @intCast(ordinal));
     }
+    while (work.pop()) |ordinal| for (graph.deps[ordinal]) |dep| {
+        if (chosen[dep]) continue;
+        chosen[dep] = true;
+        try work.append(allocator, dep);
+    };
     var selected = std.ArrayList(checked_root_graph.Root).empty;
     defer selected.deinit(allocator);
     for (pending.items, chosen) |root, flag| if (flag) try selected.append(allocator, root);
     if (selected.items.len == 0) return;
-    try evaluateRootsBoxy(allocator, modules, lowering_modules, selected.items, options, debug_events, function_types);
+    var function_types: checked_root_graph.FunctionTypeMemo = .{};
+    defer function_types.deinit(allocator);
+    try evaluateRootsBoxy(allocator, modules, lowering_modules, selected.items, options, debug_events, &function_types);
     for (modules) |entry| {
         if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
     }
@@ -2244,10 +2188,8 @@ fn finalizeProgramBoxy(
 /// for it. The roots of a module it reads complete before it: the module's
 /// own, because the writer completes the roots that read other constants
 /// after the rest, each after the ones it reads, and an imported module's,
-/// because the writer completes a module after its imports. The pending
-/// roots are those the strategy's `.boxy` evaluation takes: every root still
-/// needing evaluation under `.boxy`, and under `.lss`, where that evaluation
-/// runs before the Solved program is specialized, every root still pending.
+/// because the writer completes a module after its imports.
+/// It completes pending value-form roots before either evaluator runs.
 /// Every artifact of one checked identity owns its own store, so each
 /// completes its own roots.
 fn completeValueFormRoots(
@@ -3550,7 +3492,7 @@ const ProgramBuild = struct {
         Timing.finishStep(self.build_options.timing, lowering_started, .program_lowering);
         const lowered = &self.lowered.?;
         if (lowered.lir_result.const_roots.items.len != pending.len) finalizationInvariant("the Boxy evaluator's lowering published a different count of compile-time roots than it was asked for");
-        if (self.build_options.boxy_program_observer) |observer| try observer.observe(observer.context, &lowered.lir_result);
+        if (self.build_options.compile_time_program_observer) |observer| try observer.observe(observer.context, &lowered.lir_result);
         self.owners = try ModuleOwners.init(allocator, lowered.lir_result.lowering_modules.items, self.modules);
         self.owners.?.unfinalized = self.build_options.unfinalized_reports;
         self.program = try initEvaluationProgram(ProgramPtr, allocator, self.lowering_modules, lowered, self.build_options);
@@ -4079,6 +4021,7 @@ fn evaluateStaged(
         }, stage_producers.items, producers, lifted.loweringModules());
         if (stage.lir_result.root_procs.items.len != stage_roots.items.len)
             finalizationInvariant("compile-time stage lowering changed its requested root count");
+        if (options.compile_time_program_observer) |observer| try observer.observe(observer.context, &stage.lir_result);
         var program_storage = try initEvaluationProgram(ProgramPtr, allocator, lowering_modules, stage, options);
         defer program_storage.deinit();
         const program = program_storage.ptr();
@@ -5084,10 +5027,8 @@ fn finalize(
 }
 
 /// Complete one module's roots under `.lss` as a program of that module
-/// alone: the `.boxy` evaluator completes every root that neither holds a
-/// function value nor reads one, and the Solved program the rest (design.md
-/// "Compile-Time Evaluation Under `.lss`"). The module's imports are already
-/// complete.
+/// alone (design.md "Compile-Time Evaluation Under `.lss`").
+/// The module's imports are already complete.
 fn finalizeSolvedModule(
     allocator: Allocator,
     module: *checked.CheckedModuleArtifact,
@@ -8394,12 +8335,13 @@ fn compileTimeRootForRequest(
 }
 
 /// Whether a root may hold a function value, so that it runs in a program
-/// that stores function values: every root but a literal argument root and
-/// an interpolation conversion root, which hold none (design.md "Literal
-/// Arguments"), except a polymorphic constant's instance, which is stored
-/// whatever it holds (design.md "Polymorphic Constants").
+/// that stores function values: every root but a literal argument root that
+/// is no polymorphic constant's instance and an interpolation conversion
+/// root, which hold none (design.md "Literal Arguments"). A polymorphic
+/// constant's instance is stored whatever it holds (design.md "Polymorphic
+/// Constants").
 fn functionClassified(root: checked.CompileTimeRoot) bool {
-    return !root.isBoxyEvaluated() or root.isConstantInstance();
+    return !root.isBoxyEvaluated();
 }
 
 /// Store an evaluated root's value; a hoisted validation keeps no value,

@@ -2538,15 +2538,15 @@ root. A root for which any of these could happen is not in value form.
 The writer stores the root under the plan, layout and stored type the
 `.boxy` compile-time evaluator stores it under, computed from the root's
 result type exactly as that evaluator's lowering computes them, by a program
-of the same modules that lowers nothing (`postcheck.Boxy.ValueSchema`). Under
-`.lss` too, every root that reads no function value is the `.boxy`
-evaluator's ("Compile-Time Evaluation Under `.lss`"), so this is the one
-representation either strategy stores such a root in. A value-form root is
-data alone, so it is stored as its image (Stored Images), and the writer
-(`ConstStoreWriter.ValueFormImage`) writes that image straight from the
+of the same modules that lowers nothing (`postcheck.Boxy.ValueSchema`).
+The writer is the same under either strategy, so this is the one
+representation either strategy stores a value-form root in. A value-form
+root is data alone, so it is stored as its image (Stored Images), and the
+writer (`ConstStoreWriter.ValueFormImage`) writes that image straight from the
 checked expression, part by part at the 64-bit layout of the root's type,
 exactly as `NativeRootExport.imageRoot` writes an evaluation of the same
-expression: a numeral's bytes are the bytes lowering gives the literal
+expression, and as `NativeRootExport.imageRootAt` writes one a Solved
+program evaluated at rows its joins widened (Stored Images): a numeral's bytes are the bytes lowering gives the literal
 (`exact_numeral.encodeBits`), a literal list or string has no capacity
 beyond its items (Static Lists And Strings Keep Their Capacity), a bytes
 literal's items are the imported file's bytes and a file imported as `Str` is
@@ -3045,17 +3045,15 @@ values, their representation metadata, and the procedures' own identities.
 
 Boxy runtime lowering is a distinct declared specialization strategy: that
 consumer's runtime roots are excluded from the LSS union and lowered by the
-separate Boxy pipeline after checking completes. Under either strategy the
-`.boxy` evaluator completes every compile-time root that reads no function
-value ("Compile-Time Evaluation Under `.lss`"). This split follows the
-selected strategy, never a failed specialization attempt.
+separate Boxy pipeline after checking completes. Compile-time evaluation uses
+the same selected strategy ("Compile-Time Evaluation Under `.lss`").
+This split follows the selected strategy, never a failed specialization attempt.
 
 #### Demand-Driven Compile-Time Specialization
 
 Compile-time evaluation runs the compile-time roots, and the literal roots
-that specializations register. Under `.lss`, the `.boxy` evaluator has
-completed every compile-time root that reads no function value before the
-Solved program is specialized ("Compile-Time Evaluation Under `.lss`").
+that specializations register. Under `.lss`, pending constants are evaluated
+in the Solved program ("Compile-Time Evaluation Under `.lss`").
 Checking already gave every literal whose
 conversion is closed a compile-time root of its own (an interpolation's
 included, which is validate-only), and every literal whose conversion depends
@@ -7198,8 +7196,9 @@ Monotype's instance index): every root of one constant at one type holds
 one value.
 
 An instance root's value is stored whatever it holds: an image for data, and
-nodes for a value holding a function, which under `.lss` the Solved program
-evaluates, as it evaluates every root holding a function value. Its
+nodes for a value holding a function. The evaluator of the compilation's own
+strategy evaluates it, as it evaluates every constant: under `.lss`, the
+Solved program. Its
 evaluation is the only place the constant's body runs: the root enters the
 frames of the schemes its edge instantiates and calls the constant's entry
 wrapper there with that frame's descriptors, dictionaries and literal
@@ -18219,10 +18218,11 @@ const SpecializationStrategy = enum {
 ```
 
 The command-line spelling is `--specialize=yes` for `.lss` and
-`--specialize=no` for `.boxy`. Every command accepts the flag. A command with
-no runtime consumer (`roc check`, `roc docs`, `roc bump`, `roc bundle`,
-`roc repl`, the language server) ignores it and compiles under `.boxy`, whose
-compile-time evaluator completes every root. If the flag is omitted,
+`--specialize=no` for `.boxy`. Every command accepts the flag. `roc check`
+honors it for compile-time evaluation, defaulting to `.boxy` independently
+of `--opt`. Other commands with no runtime consumer (`roc docs`, `roc bump`,
+`roc bundle`, `roc repl`, the language server) compile under `.boxy`.
+For runtime commands, if the flag is omitted,
 `--opt=speed` uses `.lss` and
 every other optimization level (`dev`, `interpreter`, `size`) uses `.boxy`
 (`currentRuntimeSpecializationStrategy`); an explicit flag selects the
@@ -18256,11 +18256,9 @@ to drive the trampoline, just as for ordinary calls. Specialized results pass
 unchanged through these tail positions; representation conversions execute as
 LIR before returning, never as runtime descriptor operations.
 
-Compile-time evaluation follows its own rule ("Compile-Time Evaluation
-Strategy"): the `.boxy` compile-time evaluator completes every root that
-neither holds a function value nor reads one under either strategy, and the
-selected strategy's evaluator completes the rest, so a `.boxy` compilation
-evaluates every root as `.boxy` programs (`finalizeProgramBoxy`).
+Compile-time evaluation uses the selected strategy for constants as well as
+function-valued roots ("Compile-Time Evaluation Strategy"). A `.boxy`
+compilation evaluates its roots as Boxy programs (`finalizeProgramBoxy`).
 
 Compiler progress text follows the selected strategy. `.lss` reports the
 lambda-set-specializing work as `Specializing`. `.boxy` reports the same
@@ -19553,19 +19551,16 @@ is filed per strategy only because of its stored images, Stored Images).
   whose stored result holds the failure, so a compilation that restores the
   result from the checked-module cache reports it again without converting
   the literal again.
-- A literal argument root is the `.boxy` evaluator's, and every compilation
-  evaluates it like any pending root of its modules, under either strategy,
-  so a checked module holds the same values whichever strategy completed
-  it. A `.boxy` compilation evaluates it in dependency order: the request
+- A literal argument root that is no polymorphic constant's instance is the
+  `.boxy` evaluator's, and every compilation evaluates it like any pending
+  root of its modules, under either strategy, so a checked module holds the
+  same values whichever strategy completed it. A `.boxy` compilation evaluates it in dependency order: the request
   scheduler (`CompileTimeRequestScheduler`) and the finalizer's completion
   state walk the scheme a root's edge instantiates and treat a template's
   `literal_argument_demand` as reads, so each root completes before any root
   whose evaluation calls through it. A `.lss` compilation hands these roots
-  to the `.boxy` evaluator with every other root whose evaluation reads no
-  function value, in the one program that evaluates them before its Solved
-  program is specialized ("Compile-Time Evaluation Under `.lss`"); one that
-  reads a value of a root holding a function value completes once the
-  Solved program's roots have, with every pending root whose value it reads
+  to the `.boxy` evaluator once the Solved program's roots have completed
+  ("Compile-Time Evaluation Under `.lss`"), with every pending root whose value it reads
   that the Solved program did not demand. A module's own finalization
   outside a program session (the baked Builtin's among them) hands each
   batch's literal argument roots to the `.boxy` evaluator.
@@ -20533,21 +20528,21 @@ objects.
 
 ### Compile-Time Evaluation Strategy
 
-`--specialize` selects the runtime lowering, and which evaluator completes
-the roots holding function values (`CompileTimeFinalization.Options.strategy`).
-In a program's compilation, every other compile-time root is the `.boxy`
-compile-time evaluator's under either strategy, so the compilation lowers and
-compiles each procedure its compile-time roots reach once, and a checked
-module holds the same values whichever strategy completed it ("Compile-Time
-Evaluation Under `.lss`"). A module finalized on its own, outside a program
-session (the baked Builtin's among them), is a program of that module alone
-and splits its roots between the two evaluators the same way.
+`--specialize` selects both runtime lowering and compile-time evaluation
+(`CompileTimeFinalization.Options.strategy`): `.lss` specializes ordinary
+constants and function-valued roots alike; `.boxy` evaluates them without
+specialization. Value-form roots require no execution, and literal argument
+and interpolation conversion roots retain their Boxy-only validation
+("Literal Arguments"). A module finalized on its own, including the baked
+Builtin, follows the same rule as a program of that module alone.
 
 Every producer of checked modules names its strategy; the finalization option
 has no default, and neither do the `BuildEnv` and `Coordinator` that drive a
-compilation, which take the strategy as a parameter of `init`. One rule
-decides it everywhere: the strategy of the runtime program that consumes the
-modules, and `.boxy` when nothing lowers them for runtime. The coordinator's
+compilation, which take the strategy as a parameter of `init`. Runtime commands
+use their runtime program's strategy for evaluation too. `roc check` defaults
+to `.boxy`, regardless of `--opt`, but honors both explicit `--specialize`
+settings for compile-time evaluation. Other clients without a runtime consumer
+name `.boxy`. The coordinator's
 compilations take it from their command (`CliBuildEnvOptions.specialization_strategy`).
 The REPL session
 (`roc repl` and the REPL WebAssembly module) evaluates each expression as a
@@ -20604,8 +20599,8 @@ reports the same diagnostics. Neither runs a value-form root: the
 checked-value writer completes those first, under the `.boxy` evaluator's
 plans and stored types ("Value-Form Roots").
 
-Selecting a root's compile-time evaluator by whether its value contains a
-function resolves nominal backings against the **complete checked program**:
+Classifying Boxy roots whose values contain a function resolves nominal
+backings against the **complete checked program**:
 the lowering root, its platform relation modules, and its imports. The pending
 evaluation module list is not a type lookup universe. In particular, a cached
 module with no pending roots can still declare a nominal used by a fresh root
@@ -20818,36 +20813,19 @@ Boundary").
 
 #### Compile-Time Evaluation Under `.lss`
 
-A pending root's routing follows its reachable checked references through every
-visible module, including cached imports. Visibility does not grant permission
-to finalize an imported root. A completed value available only to LSS blocks
-its readers from the pre-Solved Boxy batch; it is not a ready Boxy dependency
-merely because it is absent from that batch's pending roots. Direct template
-dependency and readiness summaries are decoded once per batch and shared by
-the roots that reach them, including through recursive calls.
+A `.lss` compilation (`finalizeProgram`) completes value-form roots directly,
+then evaluates every pending ordinary constant and function-valued root in
+the Solved program's dependency-ordered stages, together with the literal
+roots its specializations register. Boxy-only literal argument and
+interpolation validation follows once those values exist. No ordinary root
+is routed to Boxy merely because its result contains no functions.
 
-A `.lss` compilation (`finalizeProgram`) hands the `.boxy` evaluator every
-pending root that neither holds a function value nor reads, directly or
-through other roots, the value of a root that does; a literal argument root
-counts as holding none, since the `.boxy` evaluator owns it whatever its
-value ("Literal Arguments"). They complete in one program before the Solved
-program is specialized (`evaluateBoxyRoots`, `.before_solved`), so the
-specialization restores every value it reads exactly as a compilation of
-cached modules does: the Solved program of a cold compilation and of a warm
-one are the same program, and an LSS runtime consumer continues it without
-the program being specialized again when it has no root left to evaluate and
-no discovery root to specialize ("Runtime Programs Read Stored Values").
-A root holding a function value is the
-Solved program's, since a `.boxy` function value means nothing to Monotype
-("Stored Function Values"), and so is every root reading one; the Solved
-program evaluates them, and the literal roots its specializations register,
-in dependency-ordered stages, as Compile-Time Constants describes. A literal
-argument root reading a value of a root holding a function value completes
-after the Solved program's roots (`.after_solved`). A compilation whose
-roots hold no function value therefore compiles its compile-time code in one
-program, and specializes nothing for compile-time evaluation but the bodies
-that can register a literal root ("Demand-Driven Compile-Time
-Specialization").
+Each strategy's checked cache entry holds the values its own evaluator
+stored ("Stored Images"), so a cache hit reuses values completed under the
+selected strategy. After fresh evaluation, a runtime consumer specializes from the
+stored values just as a warm compilation does ("Runtime Programs Read Stored
+Values"). A warm LSS compilation with no pending root or discovery work can
+continue its runtime specialization directly.
 
 #### Demanded Checked Body Indexes
 
@@ -26161,13 +26139,14 @@ once; a guard failure re-enters the residual tree for the rows below it without
 re-testing columns already known. Exhaustiveness is consumed, never re-derived:
 a tag test whose arms cover the occurrence type's committed variant set emits
 its last arm as the switch default (a single-variant union emits no dispatch at
-all); open matches keep the `comptime_exhaustiveness_failed` / `runtime_error`
-terminal. Both lowerers end a failed match or destructure in
-`comptime_exhaustiveness_failed`, naming its checked exhaustiveness site,
-exactly when the site is in a compile-time root's own expression (not in a
-function it calls or defines) and checking left the site a pending diagnostic,
-so the evaluator reports the site's empirical failure whichever strategy
-lowered the root; every other failed test ends in `runtime_error`.
+all); open matches keep a failure terminal. Both lowerers end a failed match
+or destructure in `comptime_exhaustiveness_failed`, naming its checked
+exhaustiveness site, exactly when the site is in a compile-time root's own
+expression (not in a function it calls or defines) and checking left the site
+a pending diagnostic, so the evaluator reports the site's empirical failure
+whichever strategy lowered the root; every other failed test ends in a
+`crash` with the message `pattern match failed`, so both strategies report
+the same crash.
 
 A `str_match_set` tries its arms in order, and a backend may decide any group
 of arms together when the outcome equals trying them in order. The LLVM
@@ -31588,9 +31567,9 @@ Compile-time constants use checked finalization after the coordinator's
 frontend tasks have completed. Standalone checking clients complete their
 prepared modules directly. The compilation's strategy decides which of two
 evaluators completes each root ("Compile-Time Evaluation Strategy"). The
-`.boxy` evaluator completes every root of a `.boxy` compilation, and of an
-`.lss` compilation every root that neither holds a function value nor reads
-one, along with every literal argument root:
+`.boxy` evaluator executes the pending roots of a `.boxy` compilation, and
+the Boxy-only literal argument and interpolation validation of an `.lss`
+compilation:
 
 ```text
 checked CIR
@@ -31603,8 +31582,8 @@ checked CIR
   -> store eval result in ConstStore
 ```
 
-The Solved program of an `.lss` compilation completes the roots holding a
-function value and the roots reading one:
+The Solved program of an `.lss` compilation completes pending ordinary
+constants and function-valued roots alike:
 
 ```text
 checked CIR
@@ -31673,10 +31652,9 @@ stored value is shared between strategies (Stored Images). A function
 value alone is stored in the representation of the strategy that completed
 it ("Stored Function Values"), which is why a root holding one, and every
 root reading it, belongs to the evaluator of the compilation's own strategy.
-`roc check` and every other compilation with no runtime consumer name
-`.boxy`, so the `.boxy` evaluator completes all of their roots. The
-code-generation backend `--opt` selects affects compile-time evaluation only
-through the strategy it defaults to.
+`roc check` defaults to `.boxy` and honors an explicit `--specialize` for
+compile-time evaluation. The code-generation backend `--opt` selects affects
+compile-time evaluation only through a runtime command's default strategy.
 
 Check-only ARC insertion runs the borrow-inference solver in its single-variant
 form. A shared host/runtime LIR program instead applies its declared runtime
@@ -31891,7 +31869,18 @@ freezer static-data slots use): a list of scalars is one copy, and a shared
 allocation is copied once. That pass writes the 64-bit layout whatever the
 width of the evaluation, reading the evaluator's memory at its own width, so
 a 32-bit compiler host (the interpreter path) stores the images a 64-bit one
-does. A value-form root (Value-Form Roots) is written as its image straight
+does. A Solved program's root is stored at its declaring module's rows,
+which the program's row joins can widen past (`declaredRootType`); the root's
+plan then carries the stored type's shape (`ConstRootPlan.stored`), and the
+pass writes the image at that shape (`NativeRootExport.imageRootAt`): each
+tag as the stored union's variant of the same name, at the discriminant and
+payload layout the stored type gives it, and each part at its stored
+offsets. The declared row holds each of its labels once, and the value
+inhabits it, so a tag whose name the stored union lacks is a compiler bug. A
+part whose evaluated and stored shapes are one is copied by the ordinary
+pass. This is the inverse of a read's re-encoding below, so every image is at
+the layout of the type it is stored at, whichever program evaluated it.
+A value-form root (Value-Form Roots) is written as its image straight
 from its checked expression (`ConstStoreWriter.ValueFormImage`), part by
 part at the 64-bit layout exactly as the evaluation of the same expression
 is written: each list's items in an allocation of their own, and a constant
@@ -32959,7 +32948,7 @@ lambda sets the runtime program shares with it, and the runtime program would
 then reach the test's values. Which case applies is decided before anything is
 specialized, from the pending compile-time roots and the discovery roots that
 can register a literal root (`planRoots`). When there are any, evaluation
-specializes exactly what `roc check` specializes, with the program roots as
+specializes exactly what `roc check --specialize=yes` specializes, with the program roots as
 discovery roots, and afterwards the program roots alone are specialized from
 the checked modules, now holding every value stored, exactly as a compilation
 that found them all in the cache specializes it

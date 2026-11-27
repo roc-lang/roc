@@ -255,7 +255,7 @@ pub const Writer = struct {
             // A value whose plan can hold no function is data alone, which
             // the store holds as its image (design.md "Stored Images").
             .compile_time_constant, .repl_expr => if (try self.planFunctionStrategy(root.plan) == null)
-                .{ .const_node = try self.storeImage(root.shape(), try self.storeRootType(root), value) }
+                .{ .const_node = try self.storeImage(root, try self.storeRootType(root), value) }
             else
                 .{ .const_node = try self.storeValue(root.plan, root.ret_layout, .{ .stored = root.ret_type }, value) },
             .compile_time_callable => switch (plan) {
@@ -285,19 +285,25 @@ pub const Writer = struct {
         };
     }
 
-    /// Store value `value` of `shape`, whose type is `root_type` in the
-    /// store, as an image, the value of a new node.
-    fn storeImage(self: *Writer, shape: LirProgram.RootShape, root_type: const_store.ConstTypeId, value: Value) Error!checked.ConstNodeId {
+    /// Store root `root`'s value `value`, whose type is `root_type` in the
+    /// store, as an image, the value of a new node. The image is at the
+    /// layout of `root_type`: the root's stored shape where its type is
+    /// stored at narrower rows than it was evaluated at.
+    fn storeImage(self: *Writer, root: LirProgram.ConstRootPlan, root_type: const_store.ConstTypeId, value: Value) Error!checked.ConstNodeId {
         var graph = NativeRootExport.ImageGraph{ .allocator = self.allocator, .program = self.program };
         defer graph.deinit();
-        const image = try NativeRootExport.imageRoot(&graph, shape, value);
+        const image = if (root.stored) |stored|
+            try NativeRootExport.imageRootAt(&graph, root.shape(), stored, value)
+        else
+            try NativeRootExport.imageRoot(&graph, root.shape(), value);
+        const image_layout = if (root.stored) |stored| stored.ret_layout else root.ret_layout;
         return try self.store.appendImage(.{
             .bytes = image.bytes,
             .pointers = image.pointers,
             .alignment = image.alignment,
-            .root_size = @intCast(graph.size(shape.ret_layout)),
+            .root_size = @intCast(graph.size(image_layout)),
             .root_type = root_type,
-            .layout_digest = try self.layoutDigest(shape.ret_layout),
+            .layout_digest = try self.layoutDigest(image_layout),
             .type_digest = try self.store.type_store.identityDigest(self.allocator, self.typeNames(), root_type),
         });
     }
