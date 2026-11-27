@@ -208,6 +208,7 @@ const InlineAnalyzer = struct {
             const fn_id: SpecFnId = @fromBackingInt(@as(u32, @intCast(index)));
             try analyzer.resolveSingleUseMaterialization(fn_id, materialization_states);
         }
+        if (rule == .program) try analyzer.boundSingleUseExpansion();
 
         var inline_bodies = try InlineBodies.initFilled(allocator, decisions.len);
         errdefer inline_bodies.deinit(allocator);
@@ -765,6 +766,242 @@ const InlineAnalyzer = struct {
             result = null;
         }
         return result.?;
+    }
+
+    /// Maximum lifted-expression size of a single-use body (including its own
+    /// inlined single-use callees) admitted for whole-program single-use
+    /// inlining.
+    const single_use_callee_expr_limit: u32 = 200;
+    /// Maximum cumulative lifted-expression size of a procedure after inlining
+    /// its single-use callees. Bounds mega-procedure collapse when one caller
+    /// invokes many distinct single-use monomorphizations.
+    const single_use_caller_expr_limit: u32 = 512;
+
+    /// Bound whole-program single-use inlining bottom-up over the acyclic
+    /// single-use call-owner forest. Every decision depends only on body sizes
+    /// and the call-owner graph, never on function numbering order: children
+    /// exceeding `single_use_callee_expr_limit` stay procedures, and an
+    /// oversized caller demotes its remaining single-use callees in descending
+    /// size tie-groups until within `single_use_caller_expr_limit`.
+    fn boundSingleUseExpansion(self: *InlineAnalyzer) std.mem.Allocator.Error!void {
+        const fn_count = self.decisions.len;
+        const owners = try self.allocator.alloc(?SpecFnId, fn_count);
+        defer self.allocator.free(owners);
+        @memset(owners, null);
+
+        const child_counts = try self.allocator.alloc(u32, fn_count);
+        defer self.allocator.free(child_counts);
+        @memset(child_counts, 0);
+
+        var single_use_count: usize = 0;
+        for (0..fn_count) |index| {
+            const candidate = switch (self.decisions[index]) {
+                .inline_body => |c| c,
+                .never => continue,
+                .unknown => Common.invariant("inline size bound saw an unfinished decision"),
+            };
+            if (candidate.kind != .single_use) continue;
+            const fn_id: SpecFnId = @fromBackingInt(@as(u32, @intCast(index)));
+            const owner = self.enclosingSingleUseOwner(fn_id);
+            owners[index] = owner;
+            child_counts[@backingInt(owner)] += 1;
+            single_use_count += 1;
+        }
+        if (single_use_count == 0) return;
+
+        const child_offsets = try self.allocator.alloc(u32, fn_count);
+        defer self.allocator.free(child_offsets);
+        const child_cursor = try self.allocator.alloc(u32, fn_count);
+        defer self.allocator.free(child_cursor);
+        var offset: u32 = 0;
+        for (0..fn_count) |index| {
+            child_offsets[index] = offset;
+            child_cursor[index] = offset;
+            offset += child_counts[index];
+        }
+
+        const children = try self.allocator.alloc(SpecFnId, single_use_count);
+        defer self.allocator.free(children);
+        for (owners, 0..) |maybe_owner, index| {
+            const owner = maybe_owner orelse continue;
+            const owner_index = @backingInt(owner);
+            children[child_cursor[owner_index]] = @fromBackingInt(@as(u32, @intCast(index)));
+            child_cursor[owner_index] += 1;
+        }
+
+        const pending_children = try self.allocator.dupe(u32, child_counts);
+        defer self.allocator.free(pending_children);
+
+        const expanded_size = try self.allocator.alloc(u32, fn_count);
+        defer self.allocator.free(expanded_size);
+        @memset(expanded_size, 0);
+
+        var queue: std.ArrayList(SpecFnId) = .empty;
+        defer queue.deinit(self.allocator);
+        for (0..fn_count) |index| {
+            if (owners[index] == null and child_counts[index] == 0) continue;
+            const fn_id: SpecFnId = @fromBackingInt(@as(u32, @intCast(index)));
+            expanded_size[index] = try self.fnExprSizeWithin(fn_id, single_use_caller_expr_limit + 1);
+            if (owners[index] != null and pending_children[index] == 0) {
+                try queue.append(self.allocator, fn_id);
+            }
+        }
+
+        var head: usize = 0;
+        while (head < queue.items.len) : (head += 1) {
+            const fn_id = queue.items[head];
+            const index = @backingInt(fn_id);
+            const count = child_counts[index];
+            if (count != 0) {
+                const start = child_offsets[index];
+                const node_children = children[start .. start + count];
+                for (node_children) |child| {
+                    if (expanded_size[@backingInt(child)] > single_use_callee_expr_limit) {
+                        self.decisions[@backingInt(child)] = .never;
+                    }
+                }
+                const own = expanded_size[index];
+                var total = self.sumKeptChildrenSize(own, node_children, expanded_size);
+                while (total > single_use_caller_expr_limit) {
+                    var max_size: u32 = 0;
+                    var any_kept = false;
+                    for (node_children) |child| {
+                        const child_index = @backingInt(child);
+                        if (self.decisions[child_index] != .inline_body) continue;
+                        any_kept = true;
+                        max_size = @max(max_size, expanded_size[child_index]);
+                    }
+                    if (!any_kept) break;
+                    for (node_children) |child| {
+                        const child_index = @backingInt(child);
+                        if (self.decisions[child_index] == .inline_body and expanded_size[child_index] == max_size) {
+                            self.decisions[child_index] = .never;
+                        }
+                    }
+                    total = self.sumKeptChildrenSize(own, node_children, expanded_size);
+                }
+                expanded_size[index] = total;
+            }
+            if (owners[index]) |owner| {
+                const owner_index = @backingInt(owner);
+                pending_children[owner_index] -= 1;
+                if (pending_children[owner_index] == 0) {
+                    try queue.append(self.allocator, owner);
+                }
+            }
+        }
+    }
+
+    fn sumKeptChildrenSize(self: *const InlineAnalyzer, own_size: u32, node_children: []const SpecFnId, expanded_size: []const u32) u32 {
+        var total = own_size;
+        for (node_children) |child| {
+            const child_index = @backingInt(child);
+            if (self.decisions[child_index] == .inline_body) {
+                total +|= expanded_size[child_index];
+            }
+        }
+        return total;
+    }
+
+    /// Follow single-call wrapper owners outward to the enclosing procedure or
+    /// single-use body where `fn_id` will actually be lowered.
+    fn enclosingSingleUseOwner(self: *const InlineAnalyzer, fn_id: SpecFnId) SpecFnId {
+        var current = self.use(fn_id).external_call_owner orelse
+            Common.invariant("single-use function had no external call owner");
+        while (true) {
+            const current_index = @backingInt(current);
+            switch (self.decisions[current_index]) {
+                .inline_body => |candidate| {
+                    if (candidate.kind != .wrapper) return current;
+                    const owner_use = self.use(current);
+                    if (owner_use.external_calls != 1 or owner_use.is_root) return current;
+                    const call_expr_id = owner_use.external_call_expr orelse
+                        Common.invariant("single-call inline owner had no external call expression");
+                    const call_expr = self.solved.lifted.getExpr(call_expr_id);
+                    if (call_expr.data != .call_proc) {
+                        Common.invariant("single-call inline owner use was not a direct call expression");
+                    }
+                    if (call_expr.data.call_proc.is_cold) return current;
+                    current = owner_use.external_call_owner orelse return current;
+                },
+                .never => return current,
+                .unknown => Common.invariant("inline size bound saw an unfinished owner decision"),
+            }
+        }
+    }
+
+    /// Count lifted expressions in `fn_id`'s body up to `limit`, treating
+    /// constant reads (`.static_data_candidate` and `.comptime_value`) as one
+    /// expression so cache restoration never changes the measured size.
+    fn fnExprSizeWithin(self: *const InlineAnalyzer, fn_id: SpecFnId, limit: u32) std.mem.Allocator.Error!u32 {
+        const body = switch (self.solved.lifted.getFn(self.source(fn_id)).body) {
+            .roc => |expr| expr,
+            .hosted => return 0,
+        };
+        var count: u32 = 0;
+        var stack: std.ArrayList(Lifted.ExprChild) = .empty;
+        defer stack.deinit(self.allocator);
+        try stack.append(self.allocator, .{ .expr = body });
+        while (stack.pop()) |child| switch (child) {
+            .stmt => |stmt_id| try Lifted.appendStmtChildren(self.allocator, &self.solved.lifted, stmt_id, &stack),
+            .expr => |expr_id| {
+                count += 1;
+                if (count >= limit) return limit;
+                switch (self.solved.lifted.getExpr(expr_id).data) {
+                    .static_data_candidate, .comptime_value, .lambda, .fn_def => {},
+                    .@"unreachable",
+                    .local,
+                    .unit,
+                    .int_lit,
+                    .frac_f32_lit,
+                    .frac_f64_lit,
+                    .dec_lit,
+                    .str_lit,
+                    .bytes_lit,
+                    .def_ref,
+                    .fn_ref,
+                    .list,
+                    .tuple,
+                    .record,
+                    .record_update,
+                    .tag,
+                    .typed_boundary,
+                    .row_widen,
+                    .nominal,
+                    .dbg,
+                    .expect,
+                    .expect_err,
+                    .literal_rejected,
+                    .let_,
+                    .call_proc,
+                    .call_value,
+                    .low_level,
+                    .field_access,
+                    .tuple_access,
+                    .structural_eq,
+                    .structural_hash,
+                    .match_,
+                    .if_,
+                    .block,
+                    .loop_,
+                    .break_,
+                    .continue_,
+                    .return_,
+                    .join_point,
+                    .jump,
+                    .uninitialized,
+                    .uninitialized_payload,
+                    .if_initialized_payload,
+                    .try_sequence,
+                    .try_record_sequence,
+                    .crash,
+                    .checked_error,
+                    .comptime_exhaustiveness_failed,
+                    => try Lifted.appendChildren(self.allocator, &self.solved.lifted, expr_id, &stack),
+                }
+            },
+        };
+        return count;
     }
 
     fn wrapperCandidate(self: *const InlineAnalyzer, fn_id: SpecFnId) std.mem.Allocator.Error!?Lifted.ExprId {
