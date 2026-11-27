@@ -20,6 +20,7 @@ const CoreCtx = ctx_mod.CoreCtx;
 
 const CIR = @import("CIR.zig");
 const DefaultCycles = @import("DefaultCycles.zig");
+const IndexedScratch = @import("IndexedScratch.zig").IndexedScratch;
 const Scope = @import("Scope.zig");
 
 const tokenize = parse.tokenize;
@@ -390,14 +391,9 @@ scratch_pattern_ids: base.Scratch(Pattern.Idx),
 /// Scratch free variables
 scratch_free_vars: base.Scratch(Pattern.Idx),
 /// Scratch captures (free variables being collected)
-scratch_captures: base.Scratch(Pattern.Idx),
+scratch_captures: PatternScratch,
 /// Scratch bound variables (for filtering out locally-bound vars from captures)
-scratch_bound_vars: base.Scratch(Pattern.Idx),
-/// Membership index over a run of `scratch_bound_vars`, rebuilt by
-/// `indexBoundVarsFrom` for each run of free vars checked against it. It is
-/// direct-indexed by pattern id and retained across queries, so a query
-/// clears only the entries the previous query put in it.
-bound_vars_index: collections.DenseMap(Pattern.Idx, void),
+scratch_bound_vars: PatternScratch,
 /// Scratch holding the bound-pattern set of each in-progress declaration (the
 /// `defining_bound_vars` span points into this). Kept separate from
 /// `scratch_bound_vars` so it survives across the body canonicalization without
@@ -416,14 +412,14 @@ defining_bound_positions: std.AutoHashMapUnmanaged(Pattern.Idx, u32) = .empty,
 scratch_reassign_targets: base.Scratch(Pattern.Idx),
 /// Local function declaration patterns that are visible as direct local
 /// procedures in the current canonicalization context.
-scratch_local_function_patterns: base.Scratch(Pattern.Idx),
+scratch_local_function_patterns: collections.IndexedStack(Pattern.Idx),
 /// Names declared in the current (and enclosing) block bodies, recorded from
 /// parser-owned declaration inventory so a lookup miss can tell "used before
 /// its local definition" apart from a genuinely unknown identifier. Each entry
 /// also carries the forward-reference markers used to classify
 /// use-before-definition vs mutual recursion at block end. Snapshot/rollback
 /// per block.
-scratch_block_local_defs: base.Scratch(BlockLocalDef),
+scratch_block_local_defs: IndexedScratch(BlockLocalDef, Ident.Idx, BlockLocalDef.key),
 /// Local type declarations found inside function bodies, including the types
 /// nested in their associated blocks.
 /// Collected during canonicalization, then added to all_statements at the end.
@@ -456,7 +452,7 @@ current_local_def_ident: ?Ident.Idx = null,
 /// lookup-hit path mark `refs_back` on that entry in O(1) when the def
 /// references its forward-referencer back. null when not in a local def body
 /// or the def has no resolvable name.
-current_local_def_index: ?usize = null,
+current_local_def_index: ?u32 = null,
 /// Counter for generating unique `#interp_N` locals in interpolated string
 /// desugaring.
 interp_tmp_counter: u32 = 0,
@@ -566,7 +562,6 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .scratch_free_vars = .scratch,
     .scratch_captures = .scratch,
     .scratch_bound_vars = .scratch,
-    .bound_vars_index = .scratch,
     .scratch_defining_bound_vars = .frame_partitioned,
     .defining_bound_positions = .lexical,
     .scratch_reassign_targets = .scratch,
@@ -619,6 +614,12 @@ fn debugAssertFramesBalanced(self: *const Self) void {
 const Ident = base.Ident;
 const Region = base.Region;
 
+fn patternKey(idx: Pattern.Idx) Pattern.Idx {
+    return idx;
+}
+
+const PatternScratch = IndexedScratch(Pattern.Idx, Pattern.Idx, patternKey);
+
 /// A name declared in a block body (for sequential local-let scoping). Recorded
 /// from parser-owned declaration inventory; used to recognize "used before its
 /// local definition".
@@ -640,6 +641,10 @@ const BlockLocalDef = struct {
     /// Set while canonicalizing THIS def's body if it references its
     /// forward-referencer back—completing a 2-cycle (mutual recursion).
     refs_back: bool = false,
+
+    fn key(self: BlockLocalDef) Ident.Idx {
+        return self.ident;
+    }
 };
 // ModuleEnv is already imported at the top
 const CalledVia = base.CalledVia;
@@ -1003,7 +1008,6 @@ pub fn deinit(
     self.scratch_free_vars.deinit();
     self.scratch_captures.deinit();
     self.scratch_bound_vars.deinit();
-    self.bound_vars_index.deinit();
     self.scratch_defining_bound_vars.deinit();
     self.defining_bound_positions.deinit(gpa);
     self.scratch_reassign_targets.deinit();
@@ -1100,13 +1104,12 @@ fn initInternal(
         .scratch_pattern_ids = try base.Scratch(Pattern.Idx).init(gpa),
         .type_var_scopes = .init(gpa),
         .scratch_free_vars = try base.Scratch(Pattern.Idx).init(gpa),
-        .scratch_captures = try base.Scratch(Pattern.Idx).init(gpa),
-        .scratch_bound_vars = try base.Scratch(Pattern.Idx).init(gpa),
-        .bound_vars_index = collections.DenseMap(Pattern.Idx, void).init(gpa),
+        .scratch_captures = .init(gpa),
+        .scratch_bound_vars = .init(gpa),
         .scratch_defining_bound_vars = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_reassign_targets = try base.Scratch(Pattern.Idx).init(gpa),
-        .scratch_local_function_patterns = try base.Scratch(Pattern.Idx).init(gpa),
-        .scratch_block_local_defs = try base.Scratch(BlockLocalDef).init(gpa),
+        .scratch_local_function_patterns = .init(gpa),
+        .scratch_block_local_defs = .init(gpa),
         .scratch_local_type_decls = try std.ArrayList(CIR.Statement.Idx).initCapacity(gpa, 0),
         .scratch_global_value_defs = try std.ArrayList(CIR.Def.Idx).initCapacity(gpa, 0),
         .assoc_alias_sink_arena = base.SingleThreadArena.init(gpa),
@@ -2090,7 +2093,7 @@ fn debugAssertLocalFunctionDeclRecorded(
     if (!std.debug.runtime_safety) return;
     if (self.parse_ir.decl_index.declForStatement(@backingInt(ast_stmt_idx)) == null) return;
     switch (self.env.store.exprKind(expr_idx)) {
-        .e_lambda, .e_closure => if (!self.scratch_local_function_patterns.contains(pattern_idx)) {
+        .e_lambda, .e_closure => if (!self.isLocalFunctionPattern(pattern_idx)) {
             base.invariant("canonicalization invariant violated: a block declaration whose expression is a lambda or closure is not recorded as a local function", .{});
         },
         .e_num,
@@ -6058,7 +6061,7 @@ fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allocator.Er
 /// A pattern replaced by a runtime error still introduced the binders written
 /// in its source, so the walk reads each pattern as written. With an `owner`,
 /// the walk records `owner` as the owner of every pattern node it visits.
-fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern_idx: Pattern.Idx, comptime skip_existing: bool, owner: ?CIR.Def.Idx) Allocator.Error!void {
+fn collectBoundVarsInto(self: *Self, target: anytype, pattern_idx: Pattern.Idx, comptime skip_existing: bool, owner: ?CIR.Def.Idx) Allocator.Error!void {
     var stack_allocator_state_buffer: [1024]u8 align(@alignOf(usize)) = undefined;
     var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, self.env.gpa);
     const stack_allocator = stack_allocator_state.allocator();
@@ -6071,7 +6074,7 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
         const pattern = self.env.store.getSourcePattern(current_idx);
         switch (pattern) {
             .assign, .var_assign => {
-                if (!skip_existing or !target.contains(current_idx)) try target.append(current_idx);
+                if (!skip_existing or !target.containsFrom(0, current_idx)) try target.append(current_idx);
             },
             .record_destructure => |destructure| {
                 const destructs = self.env.store.sliceRecordDestructs(destructure.destructs);
@@ -6102,7 +6105,7 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
                 }
             },
             .as => |as_pat| {
-                if (!skip_existing or !target.contains(current_idx)) try target.append(current_idx);
+                if (!skip_existing or !target.containsFrom(0, current_idx)) try target.append(current_idx);
                 try pending.append(stack_allocator, as_pat.pattern);
             },
             .list => |list| {
@@ -9237,7 +9240,7 @@ fn canonicalizeUnqualifiedIdentExpr(
             try self.checkUsedUnderscoreVariable(ident, region);
 
             if (self.current_local_def_index) |idx| {
-                const entry = &self.scratch_block_local_defs.items.items[idx];
+                const entry = self.scratch_block_local_defs.at(idx);
                 if (entry.fwd_ref_from) |fwd_from| {
                     if (fwd_from.eql(ident)) entry.refs_back = true;
                 }
@@ -9281,8 +9284,8 @@ fn canonicalizeUnboundUnqualifiedIdentExpr(
     }
 
     if (self.current_local_def_ident) |from_ident| {
-        if (self.blockLocalDefIndex(ident)) |idx| {
-            const entry = &self.scratch_block_local_defs.items.items[idx];
+        if (self.scratch_block_local_defs.lastIndex(ident)) |idx| {
+            const entry = self.scratch_block_local_defs.at(idx);
             if (entry.fwd_ref_region == null) {
                 entry.fwd_ref_region = region;
                 entry.fwd_ref_from = from_ident;
@@ -9903,7 +9906,7 @@ fn beginBlockState(
         .stmt_start = self.env.store.scratch.?.statements.top(),
         .captures_top = self.scratch_captures.top(),
         .bound_vars_top = self.scratch_bound_vars.top(),
-        .local_functions_top = self.scratch_local_function_patterns.top(),
+        .local_functions_top = self.scratch_local_function_patterns.count(),
         .block_defs_top = self.scratch_block_local_defs.top(),
         .free_vars_top = self.scratch_free_vars.top(),
         .result_start = result_start,
@@ -9922,7 +9925,7 @@ fn finishStatementListState(self: *Self, block: BlockState) std.mem.Allocator.Er
     defer self.in_statement_position = block.saved_stmt_pos;
     defer self.scratch_bound_vars.clearFrom(block.bound_vars_top);
     defer self.scratch_captures.clearFrom(block.captures_top);
-    defer self.scratch_local_function_patterns.clearFrom(block.local_functions_top);
+    defer self.scratch_local_function_patterns.truncate(block.local_functions_top);
     defer self.scratch_block_local_defs.clearFrom(block.block_defs_top);
     defer self.scratch_free_vars.clearFrom(block.free_vars_top);
 
@@ -9942,7 +9945,7 @@ fn finishBlockState(
     defer self.in_statement_position = block.saved_stmt_pos;
     defer self.scratch_bound_vars.clearFrom(block.bound_vars_top);
     defer self.scratch_captures.clearFrom(block.captures_top);
-    defer self.scratch_local_function_patterns.clearFrom(block.local_functions_top);
+    defer self.scratch_local_function_patterns.truncate(block.local_functions_top);
     defer self.scratch_block_local_defs.clearFrom(block.block_defs_top);
 
     try self.classifyBlockLocalForwardRefs(block.block_defs_top);
@@ -10887,9 +10890,7 @@ fn scheduleBlockDeclContinuation(
     self.pattern_reused_existing_var = saved_pattern_reused_existing_var;
 
     const is_lambda = self.parserValueDeclIsLambda(ast_stmt_idx);
-    if (is_lambda and !self.scratch_local_function_patterns.contains(pattern_idx)) {
-        try self.scratch_local_function_patterns.append(pattern_idx);
-    }
+    if (is_lambda) _ = try self.scratch_local_function_patterns.getOrPush(pattern_idx);
 
     const saved_current_local_def_ident = self.current_local_def_ident;
     const saved_current_local_def_index = self.current_local_def_index;
@@ -10897,9 +10898,9 @@ fn scheduleBlockDeclContinuation(
     if (ast_decl_pattern == .ident) {
         const decl_ident = self.parse_ir.tokens.resolveIdentifier(ast_decl_pattern.ident.ident_tok);
         self.current_local_def_ident = decl_ident;
-        self.current_local_def_index = if (decl_ident) |di| self.blockLocalDefIndex(di) else null;
+        self.current_local_def_index = if (decl_ident) |di| self.scratch_block_local_defs.lastIndex(di) else null;
         if (self.current_local_def_index) |idx| {
-            if (self.scratch_block_local_defs.items.items[idx].fwd_ref_region != null) {
+            if (self.scratch_block_local_defs.at(idx).fwd_ref_region != null) {
                 try self.used_patterns.put(pattern_idx, {});
             }
         }
@@ -11523,16 +11524,6 @@ pub fn canonicalizeStatementForSnapshot(
     std.debug.assert(result == null);
 }
 
-/// Index the bound vars recorded in `scratch_bound_vars` since `start` for
-/// membership queries over a run of free vars.
-fn indexBoundVarsFrom(self: *Self, start: u32) std.mem.Allocator.Error!*const collections.DenseMap(Pattern.Idx, void) {
-    self.bound_vars_index.clearRetainingCapacity();
-    for (self.scratch_bound_vars.sliceFromStart(start)) |pattern_idx| {
-        try self.bound_vars_index.put(pattern_idx, {});
-    }
-    return &self.bound_vars_index;
-}
-
 /// What the expression kernel is started on.
 const ExprKernelRoot = union(enum) {
     /// An expression; the kernel returns its canonicalized form.
@@ -11558,6 +11549,23 @@ fn runExprKernel(
     @setEvalBranchQuota(10_000);
 
     self.env.debugAssertArraysInSync();
+
+    // A failed child may never resume its block/lambda continuation. Restore
+    // this kernel's indexed scratch, including any entries shadowing its caller.
+    const block_defs_top = self.scratch_block_local_defs.top();
+    const local_functions_top = self.scratch_local_function_patterns.count();
+    const initial_captures_top = self.scratch_captures.top();
+    const initial_bound_vars_top = self.scratch_bound_vars.top();
+    const initial_def_ident = self.current_local_def_ident;
+    const initial_def_index = self.current_local_def_index;
+    errdefer {
+        self.scratch_block_local_defs.clearFrom(block_defs_top);
+        self.scratch_local_function_patterns.truncate(local_functions_top);
+        self.scratch_captures.clearFrom(initial_captures_top);
+        self.scratch_bound_vars.clearFrom(initial_bound_vars_top);
+        self.current_local_def_ident = initial_def_ident;
+        self.current_local_def_index = initial_def_index;
+    }
 
     const frame_allocator = self.env.gpa;
     const kernel_scratch = try self.takeExprKernelScratch();
@@ -14393,15 +14401,8 @@ fn runExprKernel(
             }
 
             const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars);
-            const bound_vars_view = try self.indexBoundVarsFrom(bound_vars_top);
             for (body_free_vars_slice) |fv| {
-                if (!self.scratch_captures.containsFrom(state.captures_top, fv) and
-                    !bound_vars_view.contains(fv) and
-                    !self.isGloballyResolvablePattern(fv) and
-                    !self.isLocalFunctionPattern(fv))
-                {
-                    try self.scratch_captures.append(fv);
-                }
+                try self.appendPropagatedFreeVarExcludingBound(state.captures_top, bound_vars_top, fv);
             }
 
             self.scratch_free_vars.clearFrom(state.body_free_vars_start);
@@ -14833,9 +14834,8 @@ fn runExprKernel(
                 @memcpy(guard_free_vars_copy, guard_fv_slice);
 
                 self.scratch_free_vars.clearFrom(state.body_free_vars_start);
-                const bound_vars_view = try self.indexBoundVarsFrom(state.branch_bound_vars_top);
                 for (guard_free_vars_copy) |fv| {
-                    if (!bound_vars_view.contains(fv) and
+                    if (!self.scratch_bound_vars.containsFrom(state.branch_bound_vars_top, fv) and
                         !self.isGloballyResolvablePattern(fv) and
                         !self.isLocalFunctionPattern(fv))
                     {
@@ -14883,9 +14883,8 @@ fn runExprKernel(
                 @memcpy(body_free_vars_copy, body_fv_slice);
 
                 self.scratch_free_vars.clearFrom(state.body_free_vars_start_after_guard);
-                const bound_vars_view = try self.indexBoundVarsFrom(state.branch_bound_vars_top);
                 for (body_free_vars_copy) |fv| {
-                    if (!bound_vars_view.contains(fv) and
+                    if (!self.scratch_bound_vars.containsFrom(state.branch_bound_vars_top, fv) and
                         !self.isGloballyResolvablePattern(fv) and
                         !self.isLocalFunctionPattern(fv))
                     {
@@ -17140,7 +17139,7 @@ const ExprFinishBlockDeclStmtWork = struct {
     annotation: ?Annotation.Idx,
     saved_defining_bound_vars: ?DataSpan,
     saved_current_local_def_ident: ?Ident.Idx,
-    saved_current_local_def_index: ?usize,
+    saved_current_local_def_index: ?u32,
     type_var_scope: ?TypeVarScopeIdx,
 };
 
@@ -17746,7 +17745,7 @@ const BlockStateData = struct {
     stmt_start: u32,
     captures_top: u32,
     bound_vars_top: u32,
-    local_functions_top: u32,
+    local_functions_top: usize,
     block_defs_top: u32,
     free_vars_top: u32,
     result_start: usize,
@@ -20441,7 +20440,7 @@ fn recordParserBlockLocalDefs(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) st
 /// entry and is classified as non-mutual when the outer block runs this pass,
 /// since the inner def is not visible to the outer one.
 fn classifyBlockLocalForwardRefs(self: *Self, block_defs_top: u32) std.mem.Allocator.Error!void {
-    const this_defs = self.scratch_block_local_defs.slice(block_defs_top, self.scratch_block_local_defs.top());
+    const this_defs = self.scratch_block_local_defs.sliceFromStart(block_defs_top);
     for (this_defs) |d| {
         const region = d.fwd_ref_region orelse continue;
         // Mutual recursion only applies between function definitions; a cycle
@@ -20466,23 +20465,6 @@ fn blockLocalIsFn(defs: []const BlockLocalDef, target: Ident.Idx) bool {
         if (d.ident.eql(target)) return d.is_fn;
     }
     return false;
-}
-
-/// The index in `scratch_block_local_defs` of the definition named `ident` in
-/// the current or an enclosing block body (recorded from parser-owned
-/// declaration inventory),
-/// or null if there is none. A lookup miss on such a name means it is used
-/// before its (sequential) definition. Scans from the end so a name shadowed
-/// across nested blocks resolves to the nearest (innermost) declaration, since
-/// outer entries are appended before inner ones.
-fn blockLocalDefIndex(self: *const Self, ident: Ident.Idx) ?usize {
-    const defs = self.scratch_block_local_defs.items.items;
-    var i: usize = defs.len;
-    while (i > 0) {
-        i -= 1;
-        if (defs[i].ident.eql(ident)) return i;
-    }
-    return null;
 }
 
 const BlockStatementContext = struct {
@@ -20795,8 +20777,8 @@ fn isGloballyResolvablePattern(self: *Self, pattern_idx: Pattern.Idx) bool {
     return self.globally_resolvable_patterns.contains(pattern_idx);
 }
 
-fn isLocalFunctionPattern(self: *Self, pattern_idx: Pattern.Idx) bool {
-    return self.scratch_local_function_patterns.contains(pattern_idx);
+fn isLocalFunctionPattern(self: *const Self, pattern_idx: Pattern.Idx) bool {
+    return self.scratch_local_function_patterns.get(pattern_idx) != null;
 }
 
 fn introduceTypeParametersFromHeader(self: *Self, header_idx: CIR.TypeHeader.Idx) std.mem.Allocator.Error!void {

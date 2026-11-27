@@ -14,10 +14,83 @@ const static_dispatch = check.StaticDispatchRegistry;
 const Inspected = eval.Inspected;
 const graph_mod = eval.checked_root_graph;
 const Root = graph_mod.Root;
+const Read = graph_mod.Read;
 const TemplateKey = graph_mod.TemplateKey;
 const Walker = graph_mod.Walker;
 const FunctionTypeMemo = graph_mod.FunctionTypeMemo;
 const rootHoldsFunction = graph_mod.rootHoldsFunction;
+
+test "checked root graph shares a pending initializer and reaches through an omitted function value" {
+    const allocator = std.testing.allocator;
+    var parsed = try Inspected.parseProgram(allocator, .module,
+        \\module [answer]
+        \\base : I64
+        \\base = 5 + 2
+        \\offset : I64
+        \\offset = base * 2
+        \\calls : List(I64 -> I64)
+        \\calls = [|n| n + offset]
+        \\answer : I64
+        \\answer = calls.fold(1, |acc, f| f(acc))
+    , &.{}, .{ .io = std.testing.io, .roots = .published_only, .evaluation_phase = .post_frontend });
+    defer parsed.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), parsed.checker.problems.problems.items.len);
+    const module = &parsed.checked_artifact;
+    var roots: [4]Root = undefined;
+    for ([_][]const u8{ "answer", "calls", "offset", "base" }, &roots) |name, *root| {
+        const def = parsed.can.explicitRootDefByName(name).?;
+        root.* = for (module.root_requests.compile_time_requests.items()) |req| {
+            if (req.source == .def and req.source.def == def)
+                break .{ .module = 0, .root = req.compile_time_root.get().?, .request = req };
+        } else return error.TestExpectedEqual;
+    }
+    const modules = [_]*const checked.CheckedModuleArtifact{ module, &parsed.import_artifacts[0] };
+    var graph = try graph_mod.build(allocator, &modules, &roots);
+    defer graph.deinit(allocator);
+    for (graph.deps[0..3], 1..) |reads, producer| {
+        try std.testing.expectEqualSlices(graph_mod.Read, &.{.{ .producer = @intCast(producer), .through_wrapper = true }}, reads);
+    }
+    try std.testing.expectEqual(@as(usize, 0), graph.deps[3].len);
+
+    // Both when building a smaller graph and when projecting a stage of
+    // the existing graph, `answer` still reads `base` behind BOTH wrappers.
+    var subset = try graph_mod.build(allocator, &modules, &.{ roots[0], roots[3] });
+    defer subset.deinit(allocator);
+    try std.testing.expectEqualSlices(graph_mod.Read, &.{.{ .producer = 1, .through_wrapper = true }}, subset.deps[0]);
+    var projection: graph_mod.Projection = .{};
+    defer projection.deinit(allocator);
+    projection.start(&graph, 0);
+    var found = false;
+    while (projection.next()) |read| {
+        if (read.producer == 3) found = true else try projection.omit(allocator, &graph, read);
+    }
+    try std.testing.expect(found);
+}
+
+test "projected reads cross excluded wrapper cycles but not slot-only reads" {
+    // Root 0 reaches 3 through the omitted cycle 1 <-> 2. It reads 4's
+    // value, not its initializer, so it must not acquire a read of 5.
+    const graph: graph_mod.Graph = .{ .deps = &.{
+        &.{ Read{ .producer = 1, .through_wrapper = true }, Read{ .producer = 4 } },
+        &.{Read{ .producer = 2, .through_wrapper = true }},
+        &.{ Read{ .producer = 0 }, Read{ .producer = 1, .through_wrapper = true }, Read{ .producer = 3 } },
+        &.{},
+        &.{Read{ .producer = 5 }},
+        &.{},
+    } };
+    var projection: graph_mod.Projection = .{};
+    defer projection.deinit(std.testing.allocator);
+    for ([_]bool{ false, true, false }) |include_middle| {
+        projection.start(&graph, 0);
+        var seen: [6]bool = @splat(false);
+        while (projection.next()) |read| {
+            if (read.producer == 3 or read.producer == 5 or (include_middle and read.producer == 2)) {
+                seen[read.producer] = true;
+            } else try projection.omit(std.testing.allocator, &graph, read);
+        }
+        try std.testing.expectEqual([6]bool{ false, false, include_middle, !include_middle, false, false }, seen);
+    }
+}
 
 test "Boxy root graph shares cyclic summaries across roots" {
     const allocator = std.testing.allocator;
@@ -73,7 +146,7 @@ test "Boxy root graph shares cyclic summaries across roots" {
             const ordinal = if (reverse) roots.len - 1 - position else position;
             const deps = try walker.dependencies(roots[ordinal], @intCast(ordinal));
             defer allocator.free(deps);
-            try std.testing.expectEqualSlices(u32, graph.deps[ordinal], deps);
+            try std.testing.expectEqualSlices(Read, graph.deps[ordinal], deps);
         }
         const decoded = walker.summaries.count();
         const edges = walker.summary_templates.items.len;
@@ -83,7 +156,7 @@ test "Boxy root graph shares cyclic summaries across roots" {
                 const ordinal = if (round % 2 == 0) position else roots.len - 1 - position;
                 const deps = try walker.dependencies(roots[ordinal], @intCast(ordinal));
                 defer allocator.free(deps);
-                try std.testing.expectEqualSlices(u32, graph.deps[ordinal], deps);
+                try std.testing.expectEqualSlices(Read, graph.deps[ordinal], deps);
             }
         }
         try std.testing.expectEqual(decoded, walker.summaries.count());
@@ -227,7 +300,7 @@ fn expectSharedDependencies(source: []const u8, imports: []const Inspected.Modul
             try std.testing.expect(evidence_probe.pending.items.len > 0);
             const targets = try allocator.dupe(TemplateKey, evidence_probe.pending.items);
             defer allocator.free(targets);
-            const reads = try allocator.dupe(u32, evidence_probe.reads.items);
+            const reads = try allocator.dupe(Read, evidence_probe.reads.items);
             defer allocator.free(reads);
             evidence_probe.pending.clearRetainingCapacity();
             evidence_probe.reads.clearRetainingCapacity();
@@ -235,7 +308,7 @@ fn expectSharedDependencies(source: []const u8, imports: []const Inspected.Modul
             try evidence_probe.nodes.append(allocator, id);
             try evidence_probe.drainNodes(@intCast(module_index));
             try std.testing.expectEqualSlices(TemplateKey, targets, evidence_probe.pending.items);
-            try std.testing.expectEqualSlices(u32, reads, evidence_probe.reads.items);
+            try std.testing.expectEqualSlices(Read, reads, evidence_probe.reads.items);
             probed_evidence = true;
             break :evidence;
         }
@@ -243,7 +316,7 @@ fn expectSharedDependencies(source: []const u8, imports: []const Inspected.Modul
     try std.testing.expect(probed_evidence);
     var shared = try Walker.init(allocator, modules.items, roots.items);
     defer shared.deinit();
-    var expected = std.ArrayList([]const u32).empty;
+    var expected = std.ArrayList([]const Read).empty;
     defer {
         for (expected.items) |deps| allocator.free(deps);
         expected.deinit(allocator);
@@ -260,8 +333,8 @@ fn expectSharedDependencies(source: []const u8, imports: []const Inspected.Modul
         total_reads += deps.len;
         const actual = try shared.dependencies(root, @intCast(ordinal));
         defer allocator.free(actual);
-        try std.testing.expectEqualSlices(u32, deps, actual);
-        for (actual) |dependency| try std.testing.expect(dependency != ordinal);
+        try std.testing.expectEqualSlices(Read, deps, actual);
+        for (actual) |dependency| try std.testing.expect(dependency.producer != ordinal);
     }
     try std.testing.expect(total_reads > 0);
     const decoded = shared.summaries.count();
@@ -275,7 +348,7 @@ fn expectSharedDependencies(source: []const u8, imports: []const Inspected.Modul
         ordinal -= 1;
         const actual = try shared.dependencies(roots.items[ordinal], @intCast(ordinal));
         defer allocator.free(actual);
-        try std.testing.expectEqualSlices(u32, expected.items[ordinal], actual);
+        try std.testing.expectEqualSlices(Read, expected.items[ordinal], actual);
     }
     try std.testing.expectEqual(decoded, shared.summaries.count());
     try std.testing.expectEqual(templates_len, shared.summary_templates.items.len);

@@ -1196,7 +1196,8 @@ fn evaluateBoxyValidationRoots(
         flag.* = artifacts[root.module].compile_time_roots.root(root.root).isBoxyEvaluated();
         if (flag.*) try work.append(allocator, @intCast(ordinal));
     }
-    while (work.pop()) |ordinal| for (graph.deps[ordinal]) |dep| {
+    while (work.pop()) |ordinal| for (graph.deps[ordinal]) |read| {
+        const dep = read.producer;
         if (chosen[dep]) continue;
         chosen[dep] = true;
         try work.append(allocator, dep);
@@ -2896,9 +2897,15 @@ const ModuleEvaluations = struct {
             count += 1;
         }
         const items = try allocator.alloc(ModuleEvaluation, count);
-        errdefer allocator.free(items);
-        var initialized: usize = 0;
-        errdefer for (items[0..initialized]) |*item| item.deinit(allocator);
+        var modules_initialized: usize = 0;
+        // Items are filled by module order, not necessarily by position in
+        // the evaluation array. Only release rows that actually own slices.
+        errdefer {
+            for (0..modules_initialized) |module| {
+                if (of_module.get(module)) |pos| items[@backingInt(pos)].deinit(allocator);
+            }
+            allocator.free(items);
+        }
         var members = std.ArrayList(u32).empty;
         defer members.deinit(allocator);
         var reads = std.ArrayList(u32).empty;
@@ -2913,22 +2920,24 @@ const ModuleEvaluations = struct {
             for (roots, 0..) |root, ordinal| {
                 if (root.module != module_index) continue;
                 try members.append(allocator, @intCast(ordinal));
-                // The graph names every value a root's evaluation reads,
-                // through everything its lowering reaches.
-                for (graph.deps[ordinal]) |dep| {
-                    const other: u32 = @backingInt(of_module.get(roots[dep].module).?);
+                // Every module waits for its immediate producers, which
+                // themselves wait for theirs before they can complete.
+                for (graph.deps[ordinal]) |edge| {
+                    const other: u32 = @backingInt(of_module.get(roots[edge.producer].module).?);
                     if (other == position or read[other]) continue;
                     read[other] = true;
                     try reads.append(allocator, other);
                 }
             }
+            const owned = try allocator.dupe(u32, members.items);
+            errdefer allocator.free(owned);
             items[position] = .{
                 .index = position,
                 .module = @intCast(module_index),
-                .members = try allocator.dupe(u32, members.items),
+                .members = owned,
                 .reads = try allocator.dupe(u32, reads.items),
             };
-            initialized += 1;
+            modules_initialized = module_index + 1;
         }
         return .{ .allocator = allocator, .items = items, .of_module = of_module, .remaining = count };
     }
@@ -3012,6 +3021,21 @@ const ModuleEvaluations = struct {
         return evaluation;
     }
 };
+
+test "module root dependencies release partial evaluations in request order on OOM" {
+    const Case = struct {
+        fn run(allocator: Allocator) FinalizeError!void {
+            const modules: [2]ProgramModule = undefined; // init uses only their positions
+            var roots: [2]checked_root_graph.Root = undefined;
+            roots[0].module = 1;
+            roots[1].module = 0;
+            const graph: checked_root_graph.Graph = .{ .deps = &.{ &.{.{ .producer = 1 }}, &.{} } };
+            var evaluations = try ModuleEvaluations.init(allocator, &modules, &roots, &graph);
+            defer evaluations.deinit();
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Case.run, .{});
+}
 
 /// The pending roots of one module, or of every module in a compilation
 /// that links no module objects (`evaluateRootsBoxy`), through the steps of
@@ -3106,9 +3130,13 @@ const ModuleEvaluation = struct {
             chosen[member] = true;
             try work.append(allocator, member);
         }
+        var projection: checked_root_graph.Projection = .{};
+        defer projection.deinit(allocator);
         while (work.pop()) |member| {
             try solved.append(allocator, member);
-            for (shared.graph.deps[member]) |dep| {
+            projection.start(shared.graph, member);
+            while (projection.next()) |read| {
+                const dep = read.producer;
                 // A root another evaluation owns completed before this one
                 // started (`ModuleEvaluations.readsDone`).
                 if (@backingInt(evaluations.of_module.get(roots[dep].module).?) != self.index) {
@@ -3118,7 +3146,11 @@ const ModuleEvaluation = struct {
                 // A literal argument root and an interpolation conversion root
                 // are the `.boxy` evaluator's whatever reads them (design.md
                 // "Literal Arguments").
-                if (chosen[dep] or !functionClassified(shared.modules[roots[dep].module].module.compile_time_roots.root(roots[dep].root))) continue;
+                if (chosen[dep]) continue;
+                if (!functionClassified(shared.modules[roots[dep].module].module.compile_time_roots.root(roots[dep].root))) {
+                    try projection.omit(allocator, shared.graph, read);
+                    continue;
+                }
                 chosen[dep] = true;
                 try work.append(allocator, dep);
             }
@@ -3181,9 +3213,13 @@ const ModuleEvaluation = struct {
             defer allocator.free(is_remaining);
             @memset(is_remaining, false);
             for (remaining) |member| is_remaining[member] = true;
+            var projection: checked_root_graph.Projection = .{};
+            defer projection.deinit(allocator);
             for (remaining) |member| {
-                const waits = for (shared.graph.deps[member]) |dep| {
-                    if (is_remaining[dep]) break true;
+                projection.start(shared.graph, member);
+                const waits = while (projection.next()) |read| {
+                    if (is_remaining[read.producer]) break true;
+                    try projection.omit(allocator, shared.graph, read);
                 } else false;
                 if (!waits) try ready.append(allocator, member);
             }
@@ -3468,11 +3504,28 @@ const ProgramBuild = struct {
             for (local_deps[0..built_deps]) |deps| allocator.free(deps);
             allocator.free(local_deps);
         }
+        var projection: checked_root_graph.Projection = .{};
+        defer projection.deinit(allocator);
         for (pending, local_deps) |member, *out| {
             var deps = std.ArrayList(u32).empty;
             errdefer deps.deinit(allocator);
-            for (self.graph.deps[member]) |dep| {
-                if (position.get(dep)) |dep_position| try deps.append(allocator, @backingInt(dep_position));
+            projection.start(self.graph, member);
+            while (projection.next()) |read| {
+                if (position.get(read.producer)) |dep_position| {
+                    try deps.append(allocator, @backingInt(dep_position));
+                } else try projection.omit(allocator, self.graph, read);
+            }
+            // Distinct omitted wrappers can reach the same local producer.
+            // A row needing no expansion was already sorted and unique.
+            if (projection.expanded.count() != 0) {
+                std.sort.pdq(u32, deps.items, {}, std.sort.asc(u32));
+                var unique: usize = 0;
+                for (deps.items) |dep| {
+                    if (unique != 0 and deps.items[unique - 1] == dep) continue;
+                    deps.items[unique] = dep;
+                    unique += 1;
+                }
+                deps.shrinkRetainingCapacity(unique);
             }
             out.* = try deps.toOwnedSlice(allocator);
             built_deps += 1;

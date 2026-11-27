@@ -144,9 +144,8 @@ const TagTailClosingEntry = struct {
     closing: TagTailClosing,
 };
 
-/// Watched class descriptors. A write to one advances `generation` and drops
-/// every watch, so each memo that recorded the generation it read under sees
-/// the change, whichever owner registered the written class.
+/// Watched class kinds. Changing one or relinking one of its slots advances
+/// the generation for every consumer; a rank or flag write changes no kind.
 const ClassWatch = struct {
     watched: std.DynamicBitSetUnmanaged = .{},
     watched_list: std.ArrayListUnmanaged(u32) = .empty,
@@ -165,13 +164,27 @@ const ClassWatch = struct {
         if (index < self.watched.bit_length and self.watched.isSet(index)) self.advance();
     }
 
-    fn noteRollback(self: *ClassWatch) void {
+    fn invalidateAll(self: *ClassWatch) void {
         if (!self.stale and self.watched_list.items.len != 0) self.advance();
     }
 
     fn advance(self: *ClassWatch) void {
         self.generation += 1;
         self.stale = true;
+    }
+
+    fn watch(self: *ClassWatch, gpa: Allocator, desc: DescStore.Idx) Allocator.Error!void {
+        if (self.stale) {
+            for (self.watched_list.items) |idx| self.watched.unset(idx);
+            self.watched_list.clearRetainingCapacity();
+            self.stale = false;
+        }
+        const index = @backingInt(desc);
+        if (index >= self.watched.bit_length) try self.watched.resize(gpa, @max(index + 1, self.watched.bit_length * 2), false);
+        if (!self.watched.isSet(index)) {
+            try self.watched_list.append(gpa, index);
+            self.watched.set(index);
+        }
     }
 };
 
@@ -1699,7 +1712,7 @@ pub const Store = struct {
     /// Restore every entry journaled since `mark` and drop everything
     /// appended since.
     fn restoreTo(self: *Self, mark: *const ProbeMark) void {
-        self.class_watch.noteRollback();
+        self.class_watch.invalidateAll();
         self.settled_descs.clear();
         self.function_free_descs.clear();
         // Rows for classes appended since the probe began sort after every
@@ -1981,7 +1994,9 @@ pub const Store = struct {
                     if (self.function_free_descs.contains(desc_idx)) self.function_free_descs.clear();
                 }
             },
-            .redirect => {},
+            // A semantic rewrite of a non-root occurrence can detach just
+            // that occurrence. Its old class need not otherwise be written.
+            .redirect => self.class_watch.invalidateAll(),
         }
         switch (val) {
             .root => |desc_idx| self.class_watch.noteWrite(desc_idx),
@@ -2019,6 +2034,7 @@ pub const Store = struct {
         // generalization pass has marked.
         std.debug.assert(!self.descs.getWord(idx).marked());
         try self.journalDescWrite(family, idx);
+        if (self.descs.getWord(idx).kind != row.word.kind) self.class_watch.noteWrite(idx);
         if ((self.settled_descs.contains(idx) or self.function_free_descs.contains(idx)) and
             !DescStore.sameContent(self.descs.getRow(idx), row))
         {
@@ -2029,8 +2045,8 @@ pub const Store = struct {
     }
 
     /// In-place write of a descriptor's word alone: its flags or rank, never
-    /// its kind, so its content stays as it was. Journaled and watched like
-    /// every descriptor write (see setSlot).
+    /// its kind, so its content stays as it was. Journaled like every
+    /// descriptor write (see setSlot).
     inline fn setDescWord(self: *Self, comptime family: WriteFamily, idx: DescStore.Idx, word: Desc.Word) Allocator.Error!void {
         self.debugAssertUnfrozenWrite(idx);
         try self.setDescWordUnguarded(family, idx, word);
@@ -2044,12 +2060,10 @@ pub const Store = struct {
     }
 
     /// Before an in-place write to descriptor `idx`: journal its row when a
-    /// unifier write reaches a descriptor that predates the open probe, and
-    /// note the write for class watches.
+    /// unifier write reaches a descriptor that predates the open probe.
     inline fn journalDescWrite(self: *Self, comptime family: WriteFamily, idx: DescStore.Idx) Allocator.Error!void {
         self.debugAssertUnsealed();
         if (self.journalsWrite(family, @backingInt(idx), self.probe_baseline_descs)) try self.journalDescRow(idx);
-        self.class_watch.noteWrite(idx);
     }
 
     /// Journal descriptor `idx`'s row without its generalization marks: a
@@ -2068,6 +2082,17 @@ pub const Store = struct {
     pub fn markSettled(self: *Self, vars: []const Var) Allocator.Error!void {
         self.debugAssertUnsealed();
         for (vars) |var_| try self.settled_descs.insert(self.gpa, self.resolveVar(var_).desc_idx);
+    }
+
+    /// A change of content kind, an occurrence leaving its class, or rollback
+    /// invalidates every kind read made under the previous generation.
+    pub fn watchClassKind(self: *Self, class: DescStore.Idx) Allocator.Error!void {
+        try self.class_watch.watch(self.gpa, class);
+    }
+
+    /// The generation under which the watched kinds are still valid.
+    pub fn watchedClassGeneration(self: *const Self) u64 {
+        return self.class_watch.generation;
     }
 
     /// Whether a checking scan recorded `var_`'s class as settled (see
@@ -2097,7 +2122,6 @@ pub const Store = struct {
         if (self.journalsWrite(family, @backingInt(idx), self.probe_baseline_descs)) {
             try self.undo_log.append(self.gpa, .{ .root_meta = .{ .idx = idx, .old = self.getRootMeta(idx) } });
         }
-        self.class_watch.noteWrite(idx);
         self.root_metas.set(rootMetaIdx(idx), val);
     }
 

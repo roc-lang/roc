@@ -5505,9 +5505,9 @@ pub const DeferredConstraintCheck = struct {
     /// epoch when it was last re-deferred; while the epoch is unchanged the
     /// obligation would be re-deferred exactly as before.
     waiting_epoch: u32 = 0,
-    /// Set on the copy a drain retains because the obligation still waits
-    /// exactly as on its last pass.
-    retained_unchanged: bool = false,
+    /// Evidence from the last drain that put the entry back without relating
+    /// any types. Either wait may start a skippable prefix of the queue.
+    retained: enum { none, unchanged_target, flex } = .none,
     /// Set on an obligation waiting for the boundary of the definition that
     /// built the plain record or tag union it calls a method on.
     waiting_on_plain_decision: bool = false,
