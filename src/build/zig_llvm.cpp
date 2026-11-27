@@ -73,6 +73,11 @@
 #include <llvm/Transforms/Utils/CanonicalizeAliases.h>
 #include <llvm/Transforms/Utils/LowerMemIntrinsics.h>
 #include <llvm/Transforms/Utils/NameAnonGlobals.h>
+#include <llvm/Transforms/Utils/SplitModule.h>
+#include <llvm/Bitcode/BitcodeReader.h>
+#include <llvm/Support/xxhash.h>
+#include <atomic>
+#include <thread>
 
 #include <lld/Common/CommonLinkerContext.h>
 #include <lld/Common/Driver.h>
@@ -325,12 +330,139 @@ static bool openEmitFile(const char *filename, std::unique_ptr<raw_fd_ostream> &
     return false;
 }
 
+// Code generation of a large module splits across threads: the optimized
+// module is cut into partitions with LLVM's SplitModule, and each partition is
+// compiled to its own object, in its own LLVMContext, by a pool of worker
+// threads. The partitions link back together as ordinary objects.
+//
+// A partition holds roughly this many IR instructions at least, so a small
+// module, whose code generation is quick anyway, is not split at all.
+static constexpr uint64_t min_instructions_per_partition = 20000;
+
+static unsigned codegenPartitionCount(const Module &module, unsigned max_partitions) {
+    if (max_partitions <= 1) return 1;
+    // SplitModule cannot give a local defined in module-level inline asm to
+    // every partition that uses it.
+    if (!module.getModuleInlineAsm().empty()) return 1;
+    uint64_t instructions = 0;
+    for (const Function &function : module) {
+        if (!function.isDeclaration()) instructions += function.getInstructionCount();
+    }
+    const uint64_t by_size = instructions / min_instructions_per_partition;
+    if (by_size <= 1) return 1;
+    return by_size < max_partitions ? static_cast<unsigned>(by_size) : max_partitions;
+}
+
+// SplitModule gives every local symbol external linkage and hidden visibility,
+// so a partition can reach the locals another partition defines. Hidden symbols
+// still bind across every object in a static link, so a promoted local could
+// collide with a symbol of the same name in the host (a private compiler-rt
+// routine, for example). Rename each local first with the `.llvm.<hash>` suffix
+// ThinLTO gives the locals it promotes, which symbolizers already recognize.
+static void renameLocalsForSplit(Module &module) {
+    // The suffix hashes the names the module defines for the linker, which
+    // keeps the output reproducible: the module identifier is a temp path.
+    uint64_t hash = 0;
+    for (const GlobalValue &value : module.global_values()) {
+        if (!value.isDeclaration() && !value.hasLocalLinkage() && value.hasName()) {
+            hash = xxh3_64bits(value.getName()) ^ (hash * 31);
+        }
+    }
+    const std::string suffix = ".llvm." + std::to_string(hash & 0xffffffffffff);
+    auto rename = [&](GlobalValue &value) {
+        if (!value.hasLocalLinkage()) return;
+        if (value.hasName() && value.getName().starts_with("llvm.")) return;
+        const std::string base = value.hasName() ? value.getName().str() : std::string("roc.cg.unnamed");
+        value.setName(base + suffix);
+    };
+    for (Function &function : module) rename(function);
+    for (GlobalVariable &global : module.globals()) rename(global);
+    for (GlobalAlias &alias : module.aliases()) rename(alias);
+    for (GlobalIFunc &ifunc : module.ifuncs()) rename(ifunc);
+}
+
+// Splits `module` into `partitions` objects and compiles them on up to
+// `threads` threads. Partition 0 is written to `dest_bin` and partition i to
+// `extra_bin_filenames[i - 1]`.
+static bool emitPartitionedObjects(TargetMachine &target_machine, Module &module, unsigned partitions,
+    unsigned threads, raw_pwrite_stream &dest_bin, const char *const *extra_bin_filenames, char **error_message)
+{
+    renameLocalsForSplit(module);
+
+    // Each partition shares the module's context, so it is serialized here and
+    // parsed into a fresh context on whichever worker compiles it.
+    std::vector<SmallString<0>> bitcodes;
+    bitcodes.reserve(partitions);
+    SplitModule(module, partitions, [&](std::unique_ptr<Module> part) {
+        SmallString<0> bitcode;
+        raw_svector_ostream stream(bitcode);
+        WriteBitcodeToFile(*part, stream);
+        bitcodes.push_back(std::move(bitcode));
+    }, /*PreserveLocals=*/false, /*RoundRobin=*/false);
+
+    std::vector<SmallVector<char, 0>> objects(bitcodes.size());
+    std::vector<std::string> errors(bitcodes.size());
+    std::atomic<size_t> next_partition{0};
+    auto work = [&] {
+        for (size_t i = next_partition++; i < bitcodes.size(); i = next_partition++) {
+            LLVMContext context;
+            auto parsed = parseBitcodeFile(
+                MemoryBufferRef(StringRef(bitcodes[i].data(), bitcodes[i].size()), "roc_codegen_partition"), context);
+            if (!parsed) {
+                errors[i] = toString(parsed.takeError());
+                continue;
+            }
+            std::unique_ptr<TargetMachine> machine(target_machine.getTarget().createTargetMachine(
+                target_machine.getTargetTriple(), target_machine.getTargetCPU(),
+                target_machine.getTargetFeatureString(), target_machine.Options,
+                target_machine.getRelocationModel(), target_machine.getCodeModel(),
+                target_machine.getOptLevel()));
+            machine->setO0WantsFastISel(target_machine.getO0WantsFastISel());
+            raw_svector_ostream stream(objects[i]);
+            legacy::PassManager pass_manager;
+            pass_manager.add(createTargetTransformInfoWrapperPass(machine->getTargetIRAnalysis()));
+            if (machine->addPassesToEmitFile(pass_manager, stream, nullptr, CodeGenFileType::ObjectFile)) {
+                errors[i] = "TargetMachine can't emit an object file";
+                continue;
+            }
+            pass_manager.run(**parsed);
+            bitcodes[i] = SmallString<0>();
+        }
+    };
+    const unsigned worker_count = threads < partitions ? threads : partitions;
+    std::vector<std::thread> workers;
+    for (unsigned t = 1; t < worker_count; t++) workers.emplace_back(work);
+    work();
+    for (auto &worker : workers) worker.join();
+
+    for (auto &error : errors) {
+        if (!error.empty()) {
+            *error_message = strdup(error.c_str());
+            return true;
+        }
+    }
+
+    dest_bin.write(objects[0].data(), objects[0].size());
+    for (size_t i = 1; i < objects.size(); i++) {
+        std::unique_ptr<raw_fd_ostream> file;
+        if (openEmitFile(extra_bin_filenames[i - 1], file, error_message)) return true;
+        file->write(objects[i].data(), objects[i].size());
+        file->close();
+        if (file->has_error()) {
+            *error_message = strdup(file->error().message().c_str());
+            file->clear_error();
+            return true;
+        }
+    }
+    return false;
+}
+
 // Runs the optimization and code generation pipeline, writing the object (or
 // LTO bitcode) to `dest_bin` when it is non-null. The assembly and bitcode
 // outputs named in `options` are written to their files.
 static bool emitWithBinStream(LLVMTargetMachineRef targ_machine_ref, LLVMModuleRef module_ref,
     char **error_message, const ZigLLVMEmitOptions *options, raw_pwrite_stream *dest_bin,
-    const char *time_trace_name)
+    const char *time_trace_name, bool allow_partitions)
 {
     TimePassesIsEnabled = options->time_report_out != nullptr;
 
@@ -356,6 +488,14 @@ static bool emitWithBinStream(LLVMTargetMachineRef targ_machine_ref, LLVMModuleR
     }
 
     Module &llvm_module = *unwrap(module_ref);
+
+    // Code generation splits only for a plain object: the other outputs, debug
+    // info and the time report all assume one module and one code generation run.
+    const unsigned max_partitions = (allow_partitions && dest_bin && !options->lto && !dest_asm &&
+        !dest_bitcode && options->llvm_ir_filename == nullptr && !options->is_debug &&
+        options->time_report_out == nullptr && options->codegen_threads > 1)
+        ? options->extra_bin_filename_count + 1 : 1;
+    unsigned partitions = 1;
 
     // Pipeline configurations
     const OptimizationLevel opt_level = toLLVMOptimizationLevel(options->ir_opt_level);
@@ -486,7 +626,7 @@ static bool emitWithBinStream(LLVMTargetMachineRef targ_machine_ref, LLVMModuleR
     codegen_pm.add(
       createTargetTransformInfoWrapperPass(target_machine.getTargetIRAnalysis()));
 
-    if (dest_bin && !options->lto) {
+    if (dest_bin && !options->lto && max_partitions == 1) {
         if (target_machine.addPassesToEmitFile(codegen_pm, *dest_bin, nullptr, CodeGenFileType::ObjectFile)) {
             *error_message = strdup("TargetMachine can't emit an object file");
             return true;
@@ -552,7 +692,23 @@ static bool emitWithBinStream(LLVMTargetMachineRef targ_machine_ref, LLVMModuleR
     }
 
     // Code generation phase
-    codegen_pm.run(llvm_module);
+    partitions = codegenPartitionCount(llvm_module, max_partitions);
+    if (partitions > 1) {
+        if (emitPartitionedObjects(target_machine, llvm_module, partitions, options->codegen_threads,
+                *dest_bin, options->extra_bin_filenames, error_message)) {
+            return true;
+        }
+    } else {
+        if (max_partitions > 1 &&
+            target_machine.addPassesToEmitFile(codegen_pm, *dest_bin, nullptr, CodeGenFileType::ObjectFile)) {
+            *error_message = strdup("TargetMachine can't emit an object file");
+            return true;
+        }
+        codegen_pm.run(llvm_module);
+    }
+    if (options->bin_files_written != nullptr) {
+        *options->bin_files_written = dest_bin ? partitions : 0;
+    }
 
     if (options->llvm_ir_filename) {
         if (LLVMPrintModuleToFile(module_ref, options->llvm_ir_filename, error_message)) {
@@ -590,7 +746,7 @@ ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machi
     std::unique_ptr<raw_fd_ostream> dest_bin;
     if (openEmitFile(options->bin_filename, dest_bin, error_message)) return true;
     return emitWithBinStream(targ_machine_ref, module_ref, error_message, options, dest_bin.get(),
-        options->bin_filename ? options->bin_filename : options->asm_filename);
+        options->bin_filename ? options->bin_filename : options->asm_filename, /*allow_partitions=*/true);
 }
 
 ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitObjectToMemory(LLVMTargetMachineRef targ_machine_ref, LLVMModuleRef module_ref,
@@ -598,7 +754,7 @@ ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitObjectToMemory(LLVMTargetMachineRef ta
 {
     SmallVector<char, 0> object_buf;
     raw_svector_ostream dest_bin(object_buf);
-    if (emitWithBinStream(targ_machine_ref, module_ref, error_message, options, &dest_bin, "<memory>")) {
+    if (emitWithBinStream(targ_machine_ref, module_ref, error_message, options, &dest_bin, "<memory>", /*allow_partitions=*/false)) {
         return true;
     }
 

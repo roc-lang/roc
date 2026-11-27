@@ -140,6 +140,12 @@ pub const CompileConfig = struct {
     /// When non-null, LLVM times each pass and code generation stage, and its
     /// report is written here.
     time_report: ?*TimeReport = null,
+    /// Above 1, code generation of a large module splits across this many
+    /// threads, writing `output_path` and then `extra_output_paths` in order.
+    /// `objects_written` receives how many of those paths hold objects.
+    codegen_threads: u32 = 1,
+    extra_output_paths: []const [:0]const u8 = &.{},
+    objects_written: ?*usize = null,
 };
 
 /// Receives LLVM's per-pass timing report from `compileBitcodeToObject`.
@@ -230,6 +236,12 @@ const ZigLLVMEmitOptions = extern struct {
     coverage: ZigLLVMCoverageOptions,
     no_target_libcalls: bool,
     lower_memory_intrinsics_to_loops: bool,
+    /// See `ZigLLVMEmitOptions` in zig_llvm.h: with `codegen_threads` above 1,
+    /// code generation of a large module may write extra objects.
+    extra_bin_filenames: ?[*]const [*:0]const u8 = null,
+    extra_bin_filename_count: c_uint = 0,
+    codegen_threads: c_uint = 1,
+    bin_files_written: ?*c_uint = null,
 };
 
 // LLVM Code Generation Optimization Levels
@@ -1032,6 +1044,11 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     // The glue `malloc`s the report and hands ownership to us on success.
     var llvm_time_report: ?[*:0]u8 = null;
 
+    const extra_bin_filenames = try gpa.alloc([*:0]const u8, config.extra_output_paths.len);
+    defer gpa.free(extra_bin_filenames);
+    for (extra_bin_filenames, config.extra_output_paths) |*c_path, path| c_path.* = path.ptr;
+    var bin_files_written: c_uint = 0;
+
     const emit_options = ZigLLVMEmitOptions{
         // App object debug output is controlled by the user's --debug flag.
         .is_debug = config.debug,
@@ -1049,6 +1066,10 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         .coverage = coverage_options,
         .no_target_libcalls = config.no_target_libcalls,
         .lower_memory_intrinsics_to_loops = config.lower_memory_intrinsics_to_loops,
+        .extra_bin_filenames = extra_bin_filenames.ptr,
+        .extra_bin_filename_count = @intCast(extra_bin_filenames.len),
+        .codegen_threads = config.codegen_threads,
+        .bin_files_written = &bin_files_written,
     };
 
     // LLVM keeps this limit in process-wide options that code generation
@@ -1074,6 +1095,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         report.text = try report.allocator.dupe(u8, std.mem.span(llvm_text));
     }
 
+    if (config.objects_written) |written| written.* = bin_files_written;
     std.log.debug("Successfully compiled bitcode to object file: {s}", .{config.output_path});
     return true;
 }

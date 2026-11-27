@@ -201,6 +201,12 @@ pub const TargetMachine = opaque {
         coverage: Coverage,
         no_target_libcalls: bool,
         lower_memory_intrinsics_to_loops: bool,
+        /// See `ZigLLVMEmitOptions` in zig_llvm.h: with `codegen_threads` above 1,
+        /// code generation of a large module may write extra objects.
+        extra_bin_filenames: ?[*]const [*:0]const u8 = null,
+        extra_bin_filename_count: c_uint = 0,
+        codegen_threads: c_uint = 1,
+        bin_files_written: ?*c_uint = null,
 
         pub const LtoPhase = enum(c_int) {
             None,
