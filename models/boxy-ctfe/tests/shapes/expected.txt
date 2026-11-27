@@ -1,0 +1,12 @@
+p0 ct: { a: 44, b: ["x!", "y!"], e: Gone({}) }
+p0 rt-const: { a: 44, b: ["x!", "y!"], e: Gone({}) }
+p0 rt: { a: 44, b: ["x!", "y!"], e: Gone({}) }
+p1 ct: Ok({ x: 12345678901234567890123000000, y: "hi" })
+p1 rt-const: Ok({ x: 12345678901234567890123000000, y: "hi" })
+p1 rt: Ok({ x: 12345678901234567890123000000, y: "hi" })
+p2 ct: More(1, More(2, More(3, More(4, Stop))))
+p2 rt-const: More(1, More(2, More(3, More(4, Stop))))
+p2 rt: More(1, More(2, More(3, More(4, Stop))))
+p3 ct: 7
+p3 rt-const: 7
+p3 rt: 7

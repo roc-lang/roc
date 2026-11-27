@@ -1,0 +1,57 @@
+*** Termination: under every order the coordinator could pick, the measure strictly decreases on each step,
+*** and every final program passes the checks.
+load ../maude/pass.maude
+
+mod TERM is
+  protecting SC-PASS .
+  op TYS : -> Prog .
+  eq TYS = ty('Bool, cd('True, tnil) ; cd('False, tnil)) ty('Nat, cd('Z, tnil) ; cd('S, tN('Nat))) .
+  op ift : Expr Expr Expr -> Expr .
+  vars E1 E2 E3 : Expr .
+  eq ift(E1, E2, E3) = mt(E1, (pc('True, pnil) => E2) | (pc('False, pnil) => E3)) .
+  op nat : Nat -> Expr .
+  var N : Nat .
+  eq nat(0) = tg('Z, enil) .
+  eq nat(s N) = tg('S, nat(N)) .
+  ops PW PDEEP PMUT : -> Prog .
+
+  *** call-pattern worker on a known recursive argument
+  eq PW = TYS
+    fn('len, ('n : tN('Nat), 'a : tInt), tInt,
+       mt(v('n), (pc('Z, pnil) => v('a)) | (pc('S, pv('m)) => cl('len, (v('m), pr('add, (v('a), i(1))))))))
+    fn('g, ('k : tInt), tInt,
+       pr('add, (cl('len, (nat(2), v('k))), cl('len, (tg('S, tg('S, tg('S, cl('mk, v('k))))), i(0))))))
+    fn('mk, ('k : tInt), tN('Nat), ift(pr('lt, (v('k), i(1))), nat(0), tg('S, cl('mk, pr('sub, (v('k), i(1))))))) .
+
+  *** a body that rebuilds its argument one constructor deeper on every recursive call
+  eq PDEEP = TYS
+    fn('h, ('x : tN('Nat), 'k : tInt), tInt,
+       ift(pr('lt, (v('k), i(1))), i(0),
+           mt(v('x), (pc('Z, pnil) => cl('h, (nat(1), pr('sub, (v('k), i(1))))))
+                   | (pc('S, pv('m)) => pr('add, (i(1), cl('h, (tg('S, tg('S, v('m))), pr('sub, (v('k), i(1)))))))))))
+    fn('top, ('k : tInt), tInt, cl('h, (nat(0), v('k)))) .
+
+  *** mutual recursion through known constructors
+  eq PMUT = TYS
+    fn('ev, ('x : tN('Nat)), tInt, mt(v('x), (pc('Z, pnil) => i(1)) | (pc('S, pv('m)) => cl('od, v('m)))))
+    fn('od, ('x : tN('Nat)), tInt, mt(v('x), (pc('Z, pnil) => i(0)) | (pc('S, pv('m)) => cl('ev, v('m)))))
+    fn('top, ('k : tInt), tInt, pr('add, (cl('ev, nat(5)), cl('od, tg('S, cl('mk, v('k)))))))
+    fn('mk, ('k : tInt), tN('Nat), ift(pr('lt, (v('k), i(1))), nat(0), tg('S, cl('mk, pr('sub, (v('k), i(1))))))) .
+
+  op viol : Cfg -> Bool .
+  vars P : Phase . var S : St . var QS : QidList . var M : Mu . var V : Bool . var K : Nat .
+  eq viol(cfg(P, S, QS, M, V, K)) = V .
+  op outOf : Cfg -> Prog .
+  eq outOf(cfg(P, S, QS, M, V, K)) = outProg(S) .
+endm
+
+red passes(check(PW, noF, 'g, ints(4), 40)) .
+red workers(sc(PW, noF)) == 3 .
+red passes(check(PDEEP, noF, 'top, ints(6), 40)) .
+red passes(check(PMUT, noF, 'top, ints(5), 40)) .
+search [1] start(PDEEP, noF) =>* C:Cfg such that viol(C:Cfg) .
+search [1] start(PMUT, noF) =>* C:Cfg such that viol(C:Cfg) .
+search [1] start(PW, noF) =>* C:Cfg such that viol(C:Cfg) .
+search start(PDEEP, noF) =>! C:Cfg such that not passes(check2(PDEEP, outOf(C:Cfg), 'top, ints(6), 40)) .
+search start(PMUT, noF) =>! C:Cfg such that not passes(check2(PMUT, outOf(C:Cfg), 'top, ints(5), 40)) .
+search start(PW, noF) =>! C:Cfg such that not passes(check2(PW, outOf(C:Cfg), 'g, ints(4), 40)) .

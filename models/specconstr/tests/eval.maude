@@ -1,0 +1,20 @@
+*** The IR evaluator and typing judgment on two small functions.
+load ../maude/ir.maude
+
+fmod EVAL-TEST is
+  protecting IR-EVAL . protecting IR-TYPING .
+  op P : -> Prog . op LOOPBODY : -> Expr .
+  eq LOOPBODY = mt(pr('lt, (v('i), v('k))),
+                   (pc('True, pnil) => ct((pr('add, (v('i), i(1))), pr('add, (v('s), v('i))))))
+                 | (pc('False, pnil) => bk(tp((v('i), v('s)))))) .
+  eq P = ty('Bool, cd('True, tnil) ; cd('False, tnil)) ty('Nat, cd('Z, tnil) ; cd('S, tN('Nat)))
+    fn('len, ('n : tN('Nat), 'a : tInt), tInt,
+       mt(v('n), (pc('Z, pnil) => v('a)) | (pc('S, pv('m)) => cl('len, (v('m), pr('add, (v('a), i(1))))))))
+    fn('sum, ('k : tInt), tInt,
+       lt('r, lp(tT(tInt ; tInt), ('i : tInt, 's : tInt), (i(0), i(0)), LOOPBODY), pj(v('r), 1))) .
+endfm
+
+red run(P, 'len, (vt('S, vt('S, vt('Z, vnil))), vi(0)), 10) == ok(vi(2)) .
+red run(P, 'sum, vi(10), 20) == ok(vi(45)) .
+red wellTyped(P) .
+red typesOf(P) == tInt + tN('Bool) + tN('Nat) + tT(tInt ; tInt) .
