@@ -11940,7 +11940,9 @@ when the copied body pays for itself. Three kinds of call always qualify: a
 wrapper whose body does less work than its
 call (the definition solved inline analysis uses, shared in `wrapper_body.zig`),
 that lies on no cycle of direct calls, where inlining it would only unroll the
-recursion, and that passes none of its own calls a value it builds itself where
+recursion, that is not a layout-resolved Builtin wrapper (`list_map_can_reuse`,
+`list_item_size_at_most`), which stays a direct call until LIR lowering folds
+its `match`, and that passes none of its own calls a value it builds itself where
 the callee consumes it; a call whose captures the context substituted,
 which cannot stay residual; and, in a callable worker's body, a call whose
 callee builds the worker's source function (below). A body like `|msg| for_each!(msg, Stdout.line!)`

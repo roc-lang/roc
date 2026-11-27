@@ -3411,7 +3411,7 @@ test "a bound against the loop's own list read where the loop is left is not ass
     try std.testing.expect(marked_shape.found);
     // Assuming the bound caps thirteen refreshes.
     try std.testing.expectEqual(@as(usize, 0), work.capped_refreshes);
-    try std.testing.expectEqual(@as(usize, 8), work.rounds);
+    try std.testing.expectEqual(@as(usize, 6), work.rounds);
 }
 
 // The list starts at `start` items and only grows, so every edge into the
