@@ -1,0 +1,492 @@
+@@LPD begin program run=1 stage=1 label=lowered proc=*
+P 0 name=- args=- ret=0 body=36 abi=roc hosted=0 static_init=0 transform=none erased_capture=0 dyn_result=0
+S 36 join 1 18 20 35
+S 20 join 0 4 2 19
+S 35 lit 27 int 4 34
+S 2 lit 5 int 10 1
+S 19 ref 6 local 18 0 0 0 18
+S 34 lit 28 int 0 33
+S 1 ll 3 num_is_eq 4,5 0
+S 18 ref 7 local 6 0 0 0 17
+S 33 ll 26 num_is_lte 27,28 32
+S 0 ret 3
+S 17 ref 8 discriminant 7 0 0 0 16
+S 32 switch 26 29 - 1:31
+S 16 switch 8 15 - 1:4
+S 29 lit 20 int 4 28
+S 31 lit 18 static 0 30
+S 15 ref 9 tag_payload 7 0 0 0 14
+S 4 lit 4 int 0 3
+S 28 lit 24 int 4 27
+S 30 jump 1
+S 14 ref 17 tag_payload 7 1 0 0 13
+S 3 jump 0
+S 27 lit 25 int 1 26
+S 13 ll 10 box_unbox 17 12
+S 26 ll 22 num_int_sub_crash_on_overflow 24,25 25
+S 12 ref 16 local 9 0 0 0 11
+S 25 call 23 2 22 24 tail=0
+S 11 ref 13 local 10 0 0 0 10
+S 24 ll 21 box_box 23 23
+S 10 lit 14 int 0 9
+S 23 struct 19 20,21 22
+S 9 ref 15 local 16 0 0 0 8
+S 22 tag 18 0 0 19 21
+S 8 ll 12 num_int_add_crash_on_overflow 14,15 7
+S 21 jump 1
+S 7 ref 11 local 13 0 0 0 6
+S 6 call 4 1 11,12 5 tail=0
+S 5 jump 0
+V 18 25
+V 4 9
+V 27 9
+V 5 9
+V 6 25
+V 28 9
+V 3 0
+V 7 25
+V 26 0
+V 8 6
+V 20 9
+V 9 9
+V 24 9
+V 17 27
+V 25 9
+V 10 25
+V 22 9
+V 16 9
+V 23 25
+V 13 25
+V 21 27
+V 14 9
+V 19 28
+V 15 9
+V 12 9
+V 11 25
+P 1 name=sum args=0,1 ret=9 body=55 abi=roc hosted=0 static_init=0 transform=none erased_capture=0 dyn_result=0
+S 55 join 2 29 37 54
+S 37 ret 29
+S 54 ref 30 local 0 0 0 0 53
+S 53 ref 31 local 30 0 0 0 52
+S 52 ref 32 discriminant 31 0 0 0 51
+S 51 switch 32 50 - 1:39
+S 50 ref 33 tag_payload 31 0 0 0 49
+S 39 ref 29 local 1 0 0 0 38
+S 49 ref 41 tag_payload 31 1 0 0 48
+S 38 jump 2
+S 48 ll 34 box_unbox 41 47
+S 47 ref 40 local 33 0 0 0 46
+S 46 ref 37 local 34 0 0 0 45
+S 45 ref 38 local 1 0 0 0 44
+S 44 ref 39 local 40 0 0 0 43
+S 43 ll 36 num_int_add_crash_on_overflow 38,39 42
+S 42 ref 35 local 37 0 0 0 41
+S 41 call 29 1 35,36 40 tail=1
+S 40 jump 2
+V 0 25
+V 1 9
+V 29 9
+V 30 25
+V 31 25
+V 32 6
+V 33 9
+V 41 27
+V 34 25
+V 40 9
+V 37 25
+V 38 9
+V 39 9
+V 36 9
+V 35 25
+P 2 name=build args=2 ret=25 body=72 abi=roc hosted=0 static_init=0 transform=none erased_capture=0 dyn_result=0
+S 72 join 3 42 56 71
+S 56 ret 42
+S 71 lit 52 int 0 70
+S 70 ref 51 local 2 0 0 0 69
+S 69 ll 50 num_is_lte 51,52 68
+S 68 switch 50 65 - 1:67
+S 65 ref 44 local 2 0 0 0 64
+S 67 lit 42 static 0 66
+S 64 lit 49 int 1 63
+S 66 jump 3
+S 63 ref 48 local 2 0 0 0 62
+S 62 ll 46 num_int_sub_crash_on_overflow 48,49 61
+S 61 call 47 2 46 60 tail=0
+S 60 ll 45 box_box 47 59
+S 59 struct 43 44,45 58
+S 58 tag 42 0 0 43 57
+S 57 jump 3
+V 2 9
+V 42 25
+V 52 9
+V 51 9
+V 50 0
+V 44 9
+V 49 9
+V 48 9
+V 46 9
+V 47 25
+V 45 27
+V 43 28
+P 3 name=- args=- ret=25 body=74 abi=roc hosted=0 static_init=1 transform=none erased_capture=0 dyn_result=0
+S 74 tag 53 1 1 - 73
+S 73 ret 53
+V 53 25
+L 0 tag_union disc_size=1 16 16
+L 25 tag_union disc_size=1 28 16
+L 9 int i64
+L 6 int u32
+L 27 box 25
+L 28 struct 0:9 1:27
+L 16 zst
+D 0 25 init 3
+@@LPD end
+@@LPD begin phase run=1 stage=1 label=trmc proc=1
+@@LPD pre
+P 1 name=sum args=0,1 ret=9 body=55 abi=roc hosted=0 static_init=0 transform=none erased_capture=0 dyn_result=0
+S 55 join 2 29 37 54
+S 37 ret 29
+S 54 ref 30 local 0 0 0 0 53
+S 53 ref 31 local 30 0 0 0 52
+S 52 ref 32 discriminant 31 0 0 0 51
+S 51 switch 32 50 - 1:39
+S 50 ref 33 tag_payload 31 0 0 0 49
+S 39 ref 29 local 1 0 0 0 38
+S 49 ref 41 tag_payload 31 1 0 0 48
+S 38 jump 2
+S 48 ll 34 box_unbox 41 47
+S 47 ref 40 local 33 0 0 0 46
+S 46 ref 37 local 34 0 0 0 45
+S 45 ref 38 local 1 0 0 0 44
+S 44 ref 39 local 40 0 0 0 43
+S 43 ll 36 num_int_add_crash_on_overflow 38,39 42
+S 42 ref 35 local 37 0 0 0 41
+S 41 call 29 1 35,36 40 tail=1
+S 40 jump 2
+V 0 25
+V 1 9
+V 29 9
+V 30 25
+V 31 25
+V 32 6
+V 33 9
+V 41 27
+V 34 25
+V 40 9
+V 37 25
+V 38 9
+V 39 9
+V 36 9
+V 35 25
+L 9 int i64
+L 25 tag_union disc_size=1 28 16
+L 6 int u32
+L 27 box 25
+L 28 struct 0:9 1:27
+L 16 zst
+@@LPD post
+P 1 name=sum args=0,1 ret=9 body=78 abi=roc hosted=0 static_init=0 transform=tce erased_capture=0 dyn_result=0
+S 78 join 3 0,1 55 77
+S 55 join 2 29 37 54
+S 77 jump 3
+S 37 ret 29
+S 54 ref 30 local 0 0 0 0 53
+S 53 ref 31 local 30 0 0 0 52
+S 52 ref 32 discriminant 31 0 0 0 51
+S 51 switch 32 50 - 1:39
+S 50 ref 33 tag_payload 31 0 0 0 49
+S 39 ref 29 local 1 0 0 0 38
+S 49 ref 41 tag_payload 31 1 0 0 48
+S 38 jump 2
+S 48 ll 34 box_unbox 41 47
+S 47 ref 40 local 33 0 0 0 46
+S 46 ref 37 local 34 0 0 0 45
+S 45 ref 38 local 1 0 0 0 44
+S 44 ref 39 local 40 0 0 0 43
+S 43 ll 36 num_int_add_crash_on_overflow 38,39 42
+S 42 ref 35 local 37 0 0 0 41
+S 41 set 1 36 initialize_join_param 75
+S 75 set 0 35 initialize_join_param 76
+S 76 jump 3
+V 0 25
+V 1 9
+V 29 9
+V 30 25
+V 31 25
+V 32 6
+V 33 9
+V 41 27
+V 34 25
+V 40 9
+V 37 25
+V 38 9
+V 39 9
+V 36 9
+V 35 25
+L 9 int i64
+L 25 tag_union disc_size=1 28 16
+L 6 int u32
+L 27 box 25
+L 28 struct 0:9 1:27
+L 16 zst
+@@LPD end
+@@LPD begin phase run=1 stage=1 label=trmc proc=2
+@@LPD pre
+P 2 name=build args=2 ret=25 body=72 abi=roc hosted=0 static_init=0 transform=none erased_capture=0 dyn_result=0
+S 72 join 3 42 56 71
+S 56 ret 42
+S 71 lit 52 int 0 70
+S 70 ref 51 local 2 0 0 0 69
+S 69 ll 50 num_is_lte 51,52 68
+S 68 switch 50 65 - 1:67
+S 65 ref 44 local 2 0 0 0 64
+S 67 lit 42 static 0 66
+S 64 lit 49 int 1 63
+S 66 jump 3
+S 63 ref 48 local 2 0 0 0 62
+S 62 ll 46 num_int_sub_crash_on_overflow 48,49 61
+S 61 call 47 2 46 60 tail=0
+S 60 ll 45 box_box 47 59
+S 59 struct 43 44,45 58
+S 58 tag 42 0 0 43 57
+S 57 jump 3
+V 2 9
+V 42 25
+V 52 9
+V 51 9
+V 50 0
+V 44 9
+V 49 9
+V 48 9
+V 46 9
+V 47 25
+V 45 27
+V 43 28
+L 25 tag_union disc_size=1 28 16
+L 9 int i64
+L 0 tag_union disc_size=1 16 16
+L 27 box 25
+L 28 struct 0:9 1:27
+L 16 zst
+@@LPD post
+P 2 name=build args=61 ret=25 body=86 abi=roc hosted=0 static_init=0 transform=trmc erased_capture=0 dyn_result=0
+S 86 join 4 2,54,55 72 85
+S 72 join 3 42 56 71
+S 85 ll 56 ptr_alloca - 84
+S 56 ll 58 ptr_store 54,42 76
+S 71 lit 52 int 0 70
+S 84 set 2 61 initialize_join_param 83
+S 76 ll 57 ptr_load 55 75
+S 70 ref 51 local 2 0 0 0 69
+S 83 set 54 56 initialize_join_param 82
+S 75 ret 57
+S 69 ll 50 num_is_lte 51,52 68
+S 82 set 55 56 initialize_join_param 81
+S 68 switch 50 65 - 1:67
+S 81 jump 4
+S 65 ref 44 local 2 0 0 0 64
+S 67 lit 42 static 0 66
+S 64 lit 49 int 1 63
+S 66 jump 3
+S 63 ref 48 local 2 0 0 0 62
+S 62 ll 46 num_int_sub_crash_on_overflow 48,49 60
+S 60 ll 45 box_alloc_zeroed - 77
+S 77 ll 59 ptr_cast 45 59
+S 59 struct 43 44,45 58
+S 58 tag 42 0 0 43 57
+S 57 ll 60 ptr_store 54,42 78
+S 78 set 54 59 initialize_join_param 79
+S 79 set 2 46 initialize_join_param 80
+S 80 jump 4
+V 61 9
+V 2 9
+V 54 30
+V 55 30
+V 42 25
+V 56 30
+V 58 16
+V 52 9
+V 57 25
+V 51 9
+V 50 0
+V 44 9
+V 49 9
+V 48 9
+V 46 9
+V 45 27
+V 59 30
+V 43 28
+V 60 16
+L 25 tag_union disc_size=1 28 16
+L 9 int i64
+L 30 ptr 25
+L 16 zst
+L 0 tag_union disc_size=1 16 16
+L 27 box 25
+L 28 struct 0:9 1:27
+@@LPD end
+@@LPD begin program run=1 stage=2 label=after_trmc_segment proc=*
+P 0 name=- args=- ret=0 body=36 abi=roc hosted=0 static_init=0 transform=none erased_capture=0 dyn_result=0
+S 36 join 1 18 20 35
+S 20 join 0 4 2 19
+S 35 lit 27 int 4 34
+S 2 lit 5 int 10 1
+S 19 ref 6 local 18 0 0 0 18
+S 34 lit 28 int 0 33
+S 1 ll 3 num_is_eq 4,5 0
+S 18 ref 7 local 6 0 0 0 17
+S 33 ll 26 num_is_lte 27,28 32
+S 0 ret 3
+S 17 ref 8 discriminant 7 0 0 0 16
+S 32 switch 26 29 - 1:31
+S 16 switch 8 15 - 1:4
+S 29 lit 20 int 4 28
+S 31 lit 18 static 0 30
+S 15 ref 9 tag_payload 7 0 0 0 14
+S 4 lit 4 int 0 3
+S 28 lit 24 int 4 27
+S 30 jump 1
+S 14 ref 17 tag_payload 7 1 0 0 13
+S 3 jump 0
+S 27 lit 25 int 1 26
+S 13 ll 10 box_unbox 17 12
+S 26 ll 22 num_int_sub_crash_on_overflow 24,25 25
+S 12 ref 16 local 9 0 0 0 11
+S 25 call 23 2 22 24 tail=0
+S 11 ref 13 local 10 0 0 0 10
+S 24 ll 21 box_box 23 23
+S 10 lit 14 int 0 9
+S 23 struct 19 20,21 22
+S 9 ref 15 local 16 0 0 0 8
+S 22 tag 18 0 0 19 21
+S 8 ll 12 num_int_add_crash_on_overflow 14,15 7
+S 21 jump 1
+S 7 ref 11 local 13 0 0 0 6
+S 6 call 4 1 11,12 5 tail=0
+S 5 jump 0
+V 18 25
+V 4 9
+V 27 9
+V 5 9
+V 6 25
+V 28 9
+V 3 0
+V 7 25
+V 26 0
+V 8 6
+V 20 9
+V 9 9
+V 24 9
+V 17 27
+V 25 9
+V 10 25
+V 22 9
+V 16 9
+V 23 25
+V 13 25
+V 21 27
+V 14 9
+V 19 28
+V 15 9
+V 12 9
+V 11 25
+P 1 name=sum args=0,1 ret=9 body=78 abi=roc hosted=0 static_init=0 transform=tce erased_capture=0 dyn_result=0
+S 78 join 3 0,1 55 77
+S 55 join 2 29 37 54
+S 77 jump 3
+S 37 ret 29
+S 54 ref 30 local 0 0 0 0 53
+S 53 ref 31 local 30 0 0 0 52
+S 52 ref 32 discriminant 31 0 0 0 51
+S 51 switch 32 50 - 1:39
+S 50 ref 33 tag_payload 31 0 0 0 49
+S 39 ref 29 local 1 0 0 0 38
+S 49 ref 41 tag_payload 31 1 0 0 48
+S 38 jump 2
+S 48 ll 34 box_unbox 41 47
+S 47 ref 40 local 33 0 0 0 46
+S 46 ref 37 local 34 0 0 0 45
+S 45 ref 38 local 1 0 0 0 44
+S 44 ref 39 local 40 0 0 0 43
+S 43 ll 36 num_int_add_crash_on_overflow 38,39 42
+S 42 ref 35 local 37 0 0 0 41
+S 41 set 1 36 initialize_join_param 75
+S 75 set 0 35 initialize_join_param 76
+S 76 jump 3
+V 0 25
+V 1 9
+V 29 9
+V 30 25
+V 31 25
+V 32 6
+V 33 9
+V 41 27
+V 34 25
+V 40 9
+V 37 25
+V 38 9
+V 39 9
+V 36 9
+V 35 25
+P 2 name=build args=61 ret=25 body=90 abi=roc hosted=0 static_init=0 transform=trmc erased_capture=0 dyn_result=0
+S 90 join 4 2,54,55 72 89
+S 72 join 3 42 56 71
+S 89 ll 56 ptr_alloca - 88
+S 56 ll 58 ptr_store 54,42 80
+S 71 lit 52 int 0 70
+S 88 set 2 61 initialize_join_param 87
+S 80 ll 57 ptr_load 55 79
+S 70 ref 51 local 2 0 0 0 69
+S 87 set 54 56 initialize_join_param 86
+S 79 ret 57
+S 69 ll 50 num_is_lte 51,52 68
+S 86 set 55 56 initialize_join_param 85
+S 68 switch 50 65 - 1:67
+S 85 jump 4
+S 65 ref 44 local 2 0 0 0 64
+S 67 lit 42 static 0 66
+S 64 lit 49 int 1 63
+S 66 jump 3
+S 63 ref 48 local 2 0 0 0 62
+S 62 ll 46 num_int_sub_crash_on_overflow 48,49 60
+S 60 ll 45 box_alloc_zeroed - 81
+S 81 ll 59 ptr_cast 45 59
+S 59 struct 43 44,45 58
+S 58 tag 42 0 0 43 57
+S 57 ll 60 ptr_store 54,42 82
+S 82 set 54 59 initialize_join_param 83
+S 83 set 2 46 initialize_join_param 84
+S 84 jump 4
+V 61 9
+V 2 9
+V 54 30
+V 55 30
+V 42 25
+V 56 30
+V 58 16
+V 52 9
+V 57 25
+V 51 9
+V 50 0
+V 44 9
+V 49 9
+V 48 9
+V 46 9
+V 45 27
+V 59 30
+V 43 28
+V 60 16
+P 3 name=- args=- ret=25 body=74 abi=roc hosted=0 static_init=1 transform=none erased_capture=0 dyn_result=0
+S 74 tag 53 1 1 - 73
+S 73 ret 53
+V 53 25
+L 0 tag_union disc_size=1 16 16
+L 25 tag_union disc_size=1 28 16
+L 9 int i64
+L 6 int u32
+L 27 box 25
+L 28 struct 0:9 1:27
+L 30 ptr 25
+L 16 zst
+D 0 25 init 3
+@@LPD end

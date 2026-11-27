@@ -1,0 +1,71 @@
+*** Each known, now-fixed bug: the current rules pass, and the flag that restores the pre-fix rule fails.
+load ../maude/pass.maude
+
+fmod CALIB is
+  protecting SC-DRIVER .
+  op TYS : -> Prog .
+  eq TYS = ty('Bool, cd('True, tnil) ; cd('False, tnil)) ty('Nat, cd('Z, tnil) ; cd('S, tN('Nat))) .
+  ops P9975 P9975b P10438 P10461 PLETBRK : -> Prog .
+  op ift : Expr Expr Expr -> Expr .     *** if c then a else b
+  vars E1 E2 E3 : Expr .
+  eq ift(E1, E2, E3) = mt(E1, (pc('True, pnil) => E2) | (pc('False, pnil) => E3)) .
+
+  *** #9975: known-constructor match where every branch has a pattern the fold cannot decide
+  *** (list patterns there; integer literal patterns here, which verdict `unknown` the same way)
+  eq P9975 = TYS
+    fn('nth, ('l : tInt, 'i : tInt), tInt,
+       mt(tp((v('l), v('i))),
+          (pt((pl(0), pw)) => i(-1))
+        | (pt((pw, pl(0))) => v('l))
+        | (pt((pl(1), pw)) => cl('nth, (pr('sub, (v('l), i(1))), pr('sub, (v('i), i(1)))))))) .
+  *** same, with a catch-all last branch: the pre-fix verdict silently selects it (wrong result)
+  eq P9975b = TYS
+    fn('nth, ('l : tInt, 'i : tInt), tInt,
+       mt(tp((v('l), v('i))),
+          (pt((pl(0), pw)) => i(-1))
+        | (pt((pw, pl(0))) => v('l))
+        | (pt((pw, pw)) => cl('nth, (pr('sub, (v('l), i(1))), pr('sub, (v('i), i(1)))))))) .
+
+  *** #10438/#10435: a while loop carrying three vars, two read after the loop
+  eq P10438 = TYS
+    fn('f, ('n : tInt), tInt,
+       lt('r, lp(tT(tInt ; tInt ; tInt), ('i : tInt, 'a : tInt, 'b : tInt), (i(0), i(0), i(1)),
+                 ift(pr('lt, (v('i), v('n))),
+                     ct((pr('add, (v('i), i(1))), pr('add, (v('a), v('i))), pr('add, (v('b), v('b))))),
+                     bk(tp((v('i), v('a), v('b)))))),
+          pr('add, (pj(v('r), 1), pj(v('r), 2))))) .
+
+  *** #10461: inner loop result partly used, and the continuation continues the OUTER loop
+  eq P10461 = TYS
+    fn('f, ('n : tInt), tInt,
+       lp(tInt, ('o : tInt, 'acc : tInt), (i(0), i(0)),
+          ift(pr('lt, (v('o), v('n))),
+              lt('r, lp(tT(tInt ; tInt ; tInt), ('j : tInt, 'k : tInt, 'm : tInt), (i(0), v('acc), i(7)),
+                        ift(pr('lt, (v('j), i(2))),
+                            ct((pr('add, (v('j), i(1))), pr('add, (v('k), v('o))), v('m))),
+                            bk(tp((v('j), v('k), v('m)))))),
+                 ct((pr('add, (v('o), i(1))), pr('add, (pj(v('r), 1), pj(v('r), 0)))))),
+              bk(v('acc))))) .
+  *** model regression: a break inside a let binding must be rewritten by exit selection too
+  eq PLETBRK = TYS
+    fn('f, ('n : tInt), tInt,
+       lt('r, lp(tT(tInt ; tInt), ('i : tInt, 's : tInt), (i(0), i(0)),
+                 ift(pr('lt, (v('i), v('n))),
+                     lt('w, mt(v('i), (pl(3) => bk(tp((v('i), v('s))))) | (pw => i(1))),
+                        ct((pr('add, (v('i), v('w))), pr('add, (v('s), v('i)))))),
+                     bk(tp((v('i), v('s)))))),
+          pj(v('r), 1))) .
+endfm
+
+*** roc-lang/roc#9975: literal patterns under a known-constructor match
+red passes(check(P9975, noF, 'nth, (vi(0), vi(0)) ;; (vi(2), vi(0)) ;; (vi(3), vi(3)), 20)) .
+red not passes(check(P9975, 'B9975, 'nth, (vi(0), vi(0)) ;; (vi(2), vi(0)) ;; (vi(3), vi(3)), 20)) .
+red passes(check(P9975b, noF, 'nth, (vi(0), vi(0)) ;; (vi(2), vi(0)) ;; (vi(3), vi(3)), 20)) .
+red not passes(check(P9975b, 'B9975, 'nth, (vi(0), vi(0)) ;; (vi(2), vi(0)) ;; (vi(3), vi(3)), 20)) .
+*** roc-lang/roc#10438: loop exit selection must not mint a new tuple type
+red passes(check(P10438, noF, 'f, ints(5), 30)) .
+red newTypes(P10438, sc(P10438, 'B10438)) == tT(tInt ; tInt) .
+*** roc-lang/roc#10461: single-site exit join inlined across a continue of the outer loop
+red passes(check(P10461, noF, 'f, ints(4), 30)) .
+red not passes(check(P10461, 'B10461, 'f, ints(4), 30)) .
+red passes(check(PLETBRK, noF, 'f, ints(6), 30)) .

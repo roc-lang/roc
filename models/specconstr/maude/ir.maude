@@ -1,0 +1,517 @@
+*** SpecConstr model: first-order fragment of Monotype Lifted IR.
+*** Syntax, values, typing judgment, and big-step evaluation semantics.
+*** See RULES.md for the mapping to src/postcheck/monotype_lifted/spec_constr.zig.
+
+fmod IR-SYNTAX is
+  protecting INT .
+  protecting QID .
+  protecting STRING .
+
+  sorts Type TypeList .
+  subsort Type < TypeList .
+  op tInt : -> Type [ctor] .
+  op tN : Qid -> Type [ctor] .            *** named closed tag union (Bool, Nat, ...)
+  op tT : TypeList -> Type [ctor] .       *** tuple (stands for records too)
+  op tBot : -> Type [ctor] .              *** type of a control transfer
+  op tErr : String -> Type [ctor] .       *** ill-typed, with a reason
+  op tAuto : -> Type [ctor] .             *** result type of a loop whose exits were all replaced by an inlined continuation
+  op tnil : -> TypeList [ctor] .
+  op _;_ : TypeList TypeList -> TypeList [ctor assoc id: tnil] .
+
+  sorts Expr ExprList Pat PatList Branch BranchList Param ParamList .
+  subsort Expr < ExprList .
+  subsort Pat < PatList .
+  subsort Branch < BranchList .
+  subsort Param < ParamList .
+
+  op enil : -> ExprList [ctor] .
+  op _,_ : ExprList ExprList -> ExprList [ctor assoc id: enil] .
+  op pnil : -> PatList [ctor] .
+  op _,_ : PatList PatList -> PatList [ctor assoc id: pnil] .
+  op bnil : -> BranchList [ctor] .
+  op _|_ : BranchList BranchList -> BranchList [ctor assoc id: bnil] .
+  op qnil : -> ParamList [ctor] .
+  op _,_ : ParamList ParamList -> ParamList [ctor assoc id: qnil] .
+  op _:_ : Qid Type -> Param [ctor prec 20] .
+
+  op v : Qid -> Expr [ctor] .                         *** local
+  op i : Int -> Expr [ctor] .                         *** integer literal
+  op tg : Qid ExprList -> Expr [ctor] .               *** tag construction
+  op tp : ExprList -> Expr [ctor] .                   *** tuple/record construction
+  op pj : Expr Nat -> Expr [ctor] .                   *** tuple/record field read (0-based)
+  op lt : Qid Expr Expr -> Expr [ctor] .              *** let x = e1 in e2
+  op mt : Expr BranchList -> Expr [ctor] .            *** match
+  op cl : Qid ExprList -> Expr [ctor] .               *** direct call
+  op pr : Qid ExprList -> Expr [ctor] .               *** primitive: 'add 'sub 'mul 'lt 'eq
+  op lp : Type ParamList ExprList Expr -> Expr [ctor] . *** loop (result type, params, initial values, body)
+  op ct : ExprList -> Expr [ctor] .                   *** continue (innermost lexical loop)
+  op bk : Expr -> Expr [ctor] .                       *** break (innermost lexical loop)
+  op jn : Qid ParamList Expr Expr -> Expr [ctor] .    *** join J(params) = body in remainder
+  op jp : Qid ExprList -> Expr [ctor] .               *** jump J(args)
+  op ivk : String -> Expr [ctor] .                    *** a Common.invariant(...) the pass hit
+
+  op pv : Qid -> Pat [ctor] .
+  op pw : -> Pat [ctor] .
+  op pc : Qid PatList -> Pat [ctor] .
+  op pt : PatList -> Pat [ctor] .
+  op pl : Int -> Pat [ctor] .                         *** integer literal pattern
+  op _=>_ : Pat Expr -> Branch [ctor prec 50] .
+
+  *** program
+  sorts CtorDecl CtorDecls Decl Prog .
+  subsort CtorDecl < CtorDecls .
+  subsort Decl < Prog .
+  op cd : Qid TypeList -> CtorDecl [ctor] .
+  op cnil : -> CtorDecls [ctor] .
+  op _;_ : CtorDecls CtorDecls -> CtorDecls [ctor assoc id: cnil] .
+  op ty : Qid CtorDecls -> Decl [ctor] .               *** type T := [ctors]
+  op fn : Qid ParamList Type Expr -> Decl [ctor] .     *** fn f(params) : ret = body
+  op none : -> Prog [ctor] .
+  op __ : Prog Prog -> Prog [ctor assoc comm id: none] .
+
+  vars T T' : Type . vars TL TL' : TypeList . var E : Expr . var EL : ExprList .
+  var P : Pat . var PL : PatList . var B : Branch . var BL : BranchList .
+  var Q : Param . var QL : ParamList . vars X F C : Qid . var CDS : CtorDecls .
+  var PG : Prog . var N : Nat .
+
+  *** list utilities
+  op len : ExprList -> Nat .
+  eq len(enil) = 0 . eq len((E, EL)) = s len(EL) .
+  op plen : ParamList -> Nat .
+  eq plen(qnil) = 0 . eq plen(((X : T), QL)) = s plen(QL) .
+  op tlen : TypeList -> Nat .
+  eq tlen(tnil) = 0 . eq tlen((T ; TL)) = s tlen(TL) .
+  op nth : ExprList Nat -> Expr .
+  eq nth((E, EL), 0) = E . eq nth((E, EL), s N) = nth(EL, N) .
+  op tnth : TypeList Nat -> Type .
+  eq tnth((T ; TL), 0) = T . eq tnth((T ; TL), s N) = tnth(TL, N) .
+  eq tnth(tnil, N) = tErr("tuple index out of range") .
+  op ptypes : ParamList -> TypeList .
+  eq ptypes(qnil) = tnil . eq ptypes(((X : T), QL)) = T ; ptypes(QL) .
+  op pnames : ParamList -> ExprList .
+  eq pnames(qnil) = enil . eq pnames(((X : T), QL)) = v(X), pnames(QL) .
+
+  *** declarations
+  op ctorsOf : Prog Qid -> CtorDecls .
+  eq ctorsOf(ty(X, CDS) PG, X) = CDS .
+  eq ctorsOf(PG, X) = cnil [owise] .
+  op ctorArgs : CtorDecls Qid -> TypeList .
+  op ctorArgsOr : CtorDecls Qid -> TypeList .
+  eq ctorArgs((CDS' ; cd(C, TL) ; CDS), C) = TL .
+  eq ctorArgs(CDS, C) = tErr("no such ctor") [owise] .
+  op ownerOf : Prog Qid -> Type .                    *** the named type owning a constructor
+  eq ownerOf(ty(X, (CDS ; cd(C, TL) ; CDS')) PG, C) = tN(X) .
+  eq ownerOf(PG, C) = tErr("unknown ctor") [owise] .
+  var CDS' : CtorDecls .
+  op hasFn : Prog Qid -> Bool .
+  eq hasFn(fn(F, QL, T, E) PG, F) = true .
+  eq hasFn(PG, F) = false [owise] .
+  op paramsOf : Prog Qid -> ParamList .
+  eq paramsOf(fn(F, QL, T, E) PG, F) = QL .
+  op retOf : Prog Qid -> Type .
+  eq retOf(fn(F, QL, T, E) PG, F) = T .
+  eq retOf(PG, F) = tErr("unknown fn") [owise] .
+  op bodyOf : Prog Qid -> Expr .
+  eq bodyOf(fn(F, QL, T, E) PG, F) = E .
+endfm
+
+fmod IR-VALUES is
+  protecting IR-SYNTAX .
+  sorts Val ValList .
+  subsort Val < ValList .
+  op vi : Int -> Val [ctor] .
+  op vt : Qid ValList -> Val [ctor] .
+  op vp : ValList -> Val [ctor] .
+  op vnil : -> ValList [ctor] .
+  op _,_ : ValList ValList -> ValList [ctor assoc id: vnil] .
+
+  var V : Val . var VL : ValList . var N : Nat .
+  op vnth : ValList Nat -> Val .
+  eq vnth((V, VL), 0) = V . eq vnth((V, VL), s N) = vnth(VL, N) .
+  op vlen : ValList -> Nat .
+  eq vlen(vnil) = 0 . eq vlen((V, VL)) = s vlen(VL) .
+  op true? : Bool -> Val .
+  eq true?(true) = vt('True, vnil) . eq true?(false) = vt('False, vnil) .
+endfm
+
+*** ------------------------------------------------------------------------
+*** Typing judgment.  G: locals, J: joins (param types), L: loop stack
+*** with param types and result type.  Every compiler type annotation lives on
+*** binders (fn, loop, join params) and on loop results, as in Lifted IR.
+*** ------------------------------------------------------------------------
+fmod IR-TYPING is
+  protecting IR-SYNTAX .
+
+  sorts TEnv TBind .
+  subsort TBind < TEnv .
+  op _|->_ : Qid Type -> TBind [ctor prec 20] .
+  op tenil : -> TEnv [ctor] .
+  op _&_ : TEnv TEnv -> TEnv [ctor assoc id: tenil] .
+  sorts JEnvT JBind LStack LFrame .
+  subsort JBind < JEnvT . subsort LFrame < LStack .
+  op _|=>_ : Qid TypeList -> JBind [ctor] .
+  op jnil : -> JEnvT [ctor] .
+  op _&_ : JEnvT JEnvT -> JEnvT [ctor assoc id: jnil] .
+  op lf : TypeList Type -> LFrame [ctor] .
+  op lnil : -> LStack [ctor] .
+  op _::_ : LFrame LStack -> LStack [ctor] .     *** innermost first
+
+  vars G G' : TEnv . var JE : JEnvT . var LS : LStack . var PG : Prog .
+  vars X Y F C J : Qid . vars T T' T1 T2 : Type . vars TL TL' : TypeList .
+  vars E E1 E2 : Expr . var EL : ExprList . var P : Pat . var PL : PatList .
+  var B : Branch . var BL : BranchList . var QL : ParamList . var I : Int .
+  var N : Nat . var S : String . var TB : TBind . var JB : JBind .
+
+  op lookT : TEnv Qid -> Type .
+  eq lookT(G & (X |-> T), X) = T .
+  eq lookT(G & (Y |-> T), X) = lookT(G, X) [owise] .
+  eq lookT(tenil, X) = tErr("unbound local " + string(X)) .
+  op lookJ : JEnvT Qid -> TypeList .
+  eq lookJ(JE & (J |=> TL), J) = TL .
+  eq lookJ(JE & (Y |=> TL), J) = lookJ(JE, J) [owise] .
+  eq lookJ(jnil, J) = tErr("unbound join " + string(J)) .
+  op bindParams : TEnv ParamList -> TEnv .
+  eq bindParams(G, qnil) = G .
+  eq bindParams(G, ((X : T), QL)) = bindParams(G & (X |-> T), QL) .
+
+  op lub : Type Type -> Type [comm] .
+  eq lub(tBot, T) = T .
+  eq lub(T, T) = T .
+  eq lub(tErr(S), T) = tErr(S) .
+  eq lub(T1, T2) = tErr("branch types disagree") [owise] .
+
+  op ok? : Type -> Bool .
+  eq ok?(tErr(S)) = false .
+  eq ok?(T) = true [owise] .
+
+  *** expected type check: a control transfer (tBot) fits anywhere
+  op fits : Type Type -> Bool .
+  eq fits(tBot, T) = true .
+  eq fits(T, tAuto) = true .
+  eq fits(T, T) = true .
+  eq fits(T1, T2) = false [owise] .
+  op fitsL : TypeList TypeList -> Bool .
+  eq fitsL(tnil, tnil) = true .
+  eq fitsL((T1 ; TL), (T2 ; TL')) = fits(T1, T2) and fitsL(TL, TL') .
+  eq fitsL(TL, TL') = false [owise] .
+
+  op tc : Prog TEnv JEnvT LStack Expr -> Type .
+  op tcs : Prog TEnv JEnvT LStack ExprList -> TypeList .
+  eq tcs(PG, G, JE, LS, enil) = tnil .
+  eq tcs(PG, G, JE, LS, (E, EL)) = tc(PG, G, JE, LS, E) ; tcs(PG, G, JE, LS, EL) .
+
+  eq tc(PG, G, JE, LS, v(X)) = lookT(G, X) .
+  eq tc(PG, G, JE, LS, i(I)) = tInt .
+  ceq tc(PG, G, JE, LS, tg(C, EL)) =
+      if fitsL(tcs(PG, G, JE, LS, EL), ctorArgs(ctorsOf(PG, X), C)) then tN(X)
+      else tErr("bad payload for " + string(C)) fi
+    if tN(X) := ownerOf(PG, C) .
+  eq tc(PG, G, JE, LS, tg(C, EL)) = tErr("unknown ctor " + string(C)) [owise] .
+  eq tc(PG, G, JE, LS, tp(EL)) = tT(tcs(PG, G, JE, LS, EL)) .
+  ceq tc(PG, G, JE, LS, pj(E, N)) = tnth(TL, N) if tT(TL) := tc(PG, G, JE, LS, E) .
+  eq tc(PG, G, JE, LS, pj(E, N)) = tErr("projection from non-tuple") [owise] .
+  ceq tc(PG, G, JE, LS, lt(X, E1, E2)) = tc(PG, G & (X |-> T1), JE, LS, E2)
+    if T1 := tc(PG, G, JE, LS, E1) /\ ok?(T1) /\ T1 =/= tBot .
+  ceq tc(PG, G, JE, LS, lt(X, E1, E2)) = T1
+    if T1 := tc(PG, G, JE, LS, E1) /\ (T1 == tBot or not ok?(T1)) .
+  ceq tc(PG, G, JE, LS, mt(E, BL)) = tcBr(PG, G, JE, LS, T, BL)
+    if T := tc(PG, G, JE, LS, E) /\ ok?(T) .
+  eq tc(PG, G, JE, LS, mt(E, BL)) = tErr("bad scrutinee") [owise] .
+  eq tc(PG, G, JE, LS, cl(F, EL)) =
+      if hasFn(PG, F) then
+        (if fitsL(tcs(PG, G, JE, LS, EL), ptypes(paramsOf(PG, F))) then retOf(PG, F)
+         else tErr("call args do not fit " + string(F)) fi)
+      else tErr("call to unknown fn " + string(F)) fi .
+  eq tc(PG, G, JE, LS, pr('add, (E1, E2))) = tcInt2(tc(PG, G, JE, LS, E1), tc(PG, G, JE, LS, E2), tInt) .
+  eq tc(PG, G, JE, LS, pr('sub, (E1, E2))) = tcInt2(tc(PG, G, JE, LS, E1), tc(PG, G, JE, LS, E2), tInt) .
+  eq tc(PG, G, JE, LS, pr('mul, (E1, E2))) = tcInt2(tc(PG, G, JE, LS, E1), tc(PG, G, JE, LS, E2), tInt) .
+  eq tc(PG, G, JE, LS, pr('lt, (E1, E2))) = tcInt2(tc(PG, G, JE, LS, E1), tc(PG, G, JE, LS, E2), tN('Bool)) .
+  eq tc(PG, G, JE, LS, pr('eq, (E1, E2))) = tcInt2(tc(PG, G, JE, LS, E1), tc(PG, G, JE, LS, E2), tN('Bool)) .
+  op tcInt2 : Type Type Type -> Type .
+  eq tcInt2(T1, T2, T) = if fits(T1, tInt) and fits(T2, tInt) then T else tErr("prim operand not Int") fi .
+  *** a loop none of whose exits is a break (every exit jumps out) has the bottom type
+  eq tc(PG, G, JE, LS, lp(T, QL, EL, E)) =
+      if fitsL(tcs(PG, G, JE, LS, EL), ptypes(QL))
+      then loopT(tc(PG, bindParams(G, QL), JE, lf(ptypes(QL), T) :: LS, E), T, ownsBreak(E))
+      else tErr("loop initial values do not fit params") fi .
+  op loopT : Type Type Bool -> Type .
+  eq loopT(T1, tAuto, BB) = T1 .
+  ceq loopT(T1, T, BB) = if not ok?(T1) then T1 else
+       (if fits(T1, T) then (if T1 == tBot and not BB then tBot else T fi)
+        else tErr("loop body falls through with wrong type") fi) fi if T =/= tAuto .
+  var BB : Bool .
+  op ownsBreak : Expr -> Bool .
+  op ownsBreakL : ExprList -> Bool .
+  op ownsBreakB : BranchList -> Bool .
+  eq ownsBreak(bk(E)) = true .
+  eq ownsBreak(lp(T, QL, EL, E)) = ownsBreakL(EL) .
+  eq ownsBreak(lt(X, E1, E2)) = ownsBreak(E1) or ownsBreak(E2) .
+  eq ownsBreak(mt(E, BL)) = ownsBreak(E) or ownsBreakB(BL) .
+  eq ownsBreak(jn(J, QL, E1, E2)) = ownsBreak(E1) or ownsBreak(E2) .
+  eq ownsBreak(tg(C, EL)) = ownsBreakL(EL) . eq ownsBreak(tp(EL)) = ownsBreakL(EL) .
+  eq ownsBreak(cl(F, EL)) = ownsBreakL(EL) . eq ownsBreak(pr(F, EL)) = ownsBreakL(EL) .
+  eq ownsBreak(ct(EL)) = ownsBreakL(EL) . eq ownsBreak(jp(J, EL)) = ownsBreakL(EL) .
+  eq ownsBreak(pj(E, N)) = ownsBreak(E) .
+  eq ownsBreak(E) = false [owise] .
+  eq ownsBreakL(enil) = false . eq ownsBreakL((E, EL)) = ownsBreak(E) or ownsBreakL(EL) .
+  eq ownsBreakB(bnil) = false . eq ownsBreakB((P => E) | BL) = ownsBreak(E) or ownsBreakB(BL) .
+  eq tc(PG, G, JE, lf(TL, T) :: LS, ct(EL)) =
+      if fitsL(tcs(PG, G, JE, lf(TL, T) :: LS, EL), TL) then tBot
+      else tErr("continue arity/type differs from loop params") fi .
+  eq tc(PG, G, JE, lnil, ct(EL)) = tErr("continue outside loop") .
+  eq tc(PG, G, JE, lf(TL, T) :: LS, bk(E)) =
+      if fits(tc(PG, G, JE, lf(TL, T) :: LS, E), T) then tBot else tErr("break type differs from loop") fi .
+  eq tc(PG, G, JE, lnil, bk(E)) = tErr("break outside loop") .
+  eq tc(PG, G, JE, LS, jn(J, QL, E1, E2)) =
+      lub(tc(PG, bindParams(G, QL), JE & (J |=> ptypes(QL)), LS, E1),
+          tc(PG, G, JE & (J |=> ptypes(QL)), LS, E2)) .
+  eq tc(PG, G, JE, LS, jp(J, EL)) =
+      if fitsL(tcs(PG, G, JE, LS, EL), lookJ(JE, J)) then tBot else tErr("jump arity/type differs from join") fi .
+  eq tc(PG, G, JE, LS, ivk(S)) = tErr("pass invariant: " + S) .
+  eq tc(PG, G, JE, LS, E) = tErr("unknown form") [owise] .
+
+  op tcBr : Prog TEnv JEnvT LStack Type BranchList -> Type .
+  eq tcBr(PG, G, JE, LS, T, bnil) = tBot .
+  eq tcBr(PG, G, JE, LS, T, (P => E) | BL) =
+      lub(tcPatBody(PG, G, JE, LS, patEnv(PG, P, T), E), tcBr(PG, G, JE, LS, T, BL)) .
+  op tcPatBody : Prog TEnv JEnvT LStack TEnv Expr -> Type .
+  op badPat : -> TEnv .
+  eq tcPatBody(PG, G, JE, LS, badPat, E) = tErr("pattern does not fit scrutinee") .
+  eq tcPatBody(PG, G, JE, LS, G', E) = tc(PG, G & G', JE, LS, E) [owise] .
+
+  op patEnv : Prog Pat Type -> TEnv .
+  op patEnvs : Prog PatList TypeList -> TEnv .
+  eq patEnv(PG, pv(X), T) = X |-> T .
+  eq patEnv(PG, pw, T) = tenil .
+  eq patEnv(PG, pl(I), tInt) = tenil .
+  ceq patEnv(PG, pc(C, PL), tN(X)) = patEnvs(PG, PL, ctorArgs(ctorsOf(PG, X), C))
+    if ownerOf(PG, C) == tN(X) .
+  eq patEnv(PG, pt(PL), tT(TL)) = patEnvs(PG, PL, TL) .
+  eq patEnv(PG, P, T) = badPat [owise] .
+  eq patEnvs(PG, pnil, tnil) = tenil .
+  ceq patEnvs(PG, (P, PL), (T ; TL)) = G & G'
+    if G := patEnv(PG, P, T) /\ G =/= badPat /\ G' := patEnvs(PG, PL, TL) /\ G' =/= badPat .
+  eq patEnvs(PG, PL, TL) = badPat [owise] .
+  ceq badPat & G = badPat if G =/= tenil .
+  ceq G & badPat = badPat if G =/= tenil .
+
+  *** whole-program judgment
+  op wtFns : Prog Prog -> Bool .
+  op wellTyped : Prog -> Bool .
+  eq wellTyped(PG) = wtFns(PG, PG) .
+  eq wtFns(PG, fn(F, QL, T, E) PG') = fits(tc(PG, bindParams(tenil, QL), jnil, lnil, E), T) and wtFns(PG, PG') .
+  eq wtFns(PG, PG') = true [owise] .
+  var PG' : Prog .
+  op whyFn : Prog Qid -> Type .
+  eq whyFn(PG, F) = tc(PG, bindParams(tenil, paramsOf(PG, F)), jnil, lnil, bodyOf(PG, F)) .
+
+  *** ---- "no new types": the set of types a program mentions ----
+  sort TypeSet . subsort Type < TypeSet .
+  op tsnil : -> TypeSet [ctor] .
+  op _+_ : TypeSet TypeSet -> TypeSet [ctor assoc comm id: tsnil] .
+  eq T + T = T .
+  op tset : TypeList -> TypeSet .
+  eq tset(tnil) = tsnil . eq tset(T ; TL) = T + tset(TL) .
+  op _in_ : Type TypeSet -> Bool .
+  var TS TS' : TypeSet .
+  eq T in (T + TS) = true . eq T in TS = false [owise] .
+  op _subset_ : TypeSet TypeSet -> Bool .
+  eq tsnil subset TS = true .
+  eq (T + TS) subset TS' = (T in TS') and (TS subset TS') .
+  op _minus_ : TypeSet TypeSet -> TypeSet .
+  eq tsnil minus TS = tsnil .
+  eq (T + TS) minus TS' = if T in TS' then TS minus TS' else T + (TS minus TS') fi .
+
+  *** every type annotated on a binder plus the type of every tuple node
+  op typesP : Prog Prog -> TypeSet .
+  op typesE : Prog TEnv JEnvT LStack Expr -> TypeSet .
+  op typesEs : Prog TEnv JEnvT LStack ExprList -> TypeSet .
+  op typesB : Prog TEnv JEnvT LStack Type BranchList -> TypeSet .
+  op typesOf : Prog -> TypeSet .
+  eq typesOf(PG) = typesP(PG, PG) .
+  eq typesP(PG, fn(F, QL, T, E) PG') =
+     tset(ptypes(QL)) + T + typesE(PG, bindParams(tenil, QL), jnil, lnil, E) + typesP(PG, PG') .
+  eq typesP(PG, ty(X, CDS) PG') = tN(X) + typesP(PG, PG') .
+  eq typesP(PG, none) = tsnil .
+  var CDS : CtorDecls .
+  eq typesEs(PG, G, JE, LS, enil) = tsnil .
+  eq typesEs(PG, G, JE, LS, (E, EL)) = typesE(PG, G, JE, LS, E) + typesEs(PG, G, JE, LS, EL) .
+  eq typesE(PG, G, JE, LS, tp(EL)) = tc(PG, G, JE, LS, tp(EL)) + typesEs(PG, G, JE, LS, EL) .
+  eq typesE(PG, G, JE, LS, tg(C, EL)) = typesEs(PG, G, JE, LS, EL) .
+  eq typesE(PG, G, JE, LS, pj(E, N)) = typesE(PG, G, JE, LS, E) .
+  eq typesE(PG, G, JE, LS, lt(X, E1, E2)) =
+     typesE(PG, G, JE, LS, E1) + typesE(PG, G & (X |-> tc(PG, G, JE, LS, E1)), JE, LS, E2) .
+  eq typesE(PG, G, JE, LS, mt(E, BL)) = typesE(PG, G, JE, LS, E) + typesB(PG, G, JE, LS, tc(PG, G, JE, LS, E), BL) .
+  eq typesB(PG, G, JE, LS, T, bnil) = tsnil .
+  eq typesB(PG, G, JE, LS, T, (P => E) | BL) = typesE(PG, G & patEnv(PG, P, T), JE, LS, E) + typesB(PG, G, JE, LS, T, BL) .
+  eq typesE(PG, G, JE, LS, cl(F, EL)) = typesEs(PG, G, JE, LS, EL) .
+  eq typesE(PG, G, JE, LS, pr(X, EL)) = typesEs(PG, G, JE, LS, EL) .
+  eq typesE(PG, G, JE, LS, lp(T, QL, EL, E)) =
+     (if T == tAuto then tsnil else T fi) + tset(ptypes(QL)) + typesEs(PG, G, JE, LS, EL) + typesE(PG, bindParams(G, QL), JE, lf(ptypes(QL), T) :: LS, E) .
+  eq typesE(PG, G, JE, LS, ct(EL)) = typesEs(PG, G, JE, LS, EL) .
+  eq typesE(PG, G, JE, LS, bk(E)) = typesE(PG, G, JE, LS, E) .
+  eq typesE(PG, G, JE, LS, jn(J, QL, E1, E2)) =
+     tset(ptypes(QL)) + typesE(PG, bindParams(G, QL), JE & (J |=> ptypes(QL)), LS, E1) + typesE(PG, G, JE & (J |=> ptypes(QL)), LS, E2) .
+  eq typesE(PG, G, JE, LS, jp(J, EL)) = typesEs(PG, G, JE, LS, EL) .
+  eq typesE(PG, G, JE, LS, E) = tsnil [owise] .
+
+  *** The frozen-store judgment: every type the rewritten program mentions is
+  *** already a type of the source program, or a component of one (Monotype
+  *** interns every component of every type it seals).
+  op closeT : TypeSet -> TypeSet .
+  op comps : TypeList -> TypeSet .
+  eq comps(tnil) = tsnil .
+  eq comps(T ; TL) = T + comps(TL) .
+  op closeStep : TypeSet -> TypeSet .
+  eq closeStep(tT(TL) + TS) = tT(TL) + comps(TL) + closeStep(TS) .
+  eq closeStep(TS) = TS [owise] .
+  ceq closeT(TS) = closeT(TS') if TS' := closeStep(TS) /\ TS' =/= TS .
+  eq closeT(TS) = TS [owise] .
+endfm
+
+*** ------------------------------------------------------------------------
+*** Big-step evaluation with fuel (fuel bounds call/loop nesting depth).
+*** ------------------------------------------------------------------------
+fmod IR-EVAL is
+  protecting IR-VALUES .
+  sorts VEnv VBind Res ResList JClos JEnv .
+  subsort VBind < VEnv .
+  op _:=_ : Qid Val -> VBind [ctor prec 20] .
+  op venil : -> VEnv [ctor] .
+  op _&_ : VEnv VEnv -> VEnv [ctor assoc id: venil] .
+
+  op jc : Qid ParamList Expr VEnv JEnv -> JClos [ctor] .
+  op jenil : -> JEnv [ctor] .
+  op _&_ : JEnv JClos -> JEnv [ctor] .
+
+  op ok : Val -> Res [ctor] .
+  op okl : ValList -> Res [ctor] .         *** evaluated argument list
+  op cn : ValList -> Res [ctor] .          *** continue signal
+  op br : Val -> Res [ctor] .              *** break signal
+  op jm : Qid ValList -> Res [ctor] .      *** jump signal
+  op err : String -> Res [ctor] .
+  op oof : -> Res [ctor] .                 *** out of fuel
+
+  vars X Y J F C : Qid . vars E E1 E2 : Expr . var EL : ExprList . var PG : Prog .
+  vars V V1 V2 : Val . vars VL VL' : ValList . vars RV : VEnv . var JV : JEnv .
+  var QL : ParamList . var BL : BranchList . var P : Pat . var PL : PatList .
+  var I I1 I2 : Int . var N K : Nat . var T : Type . var R : Res . var S : String .
+
+  op look : VEnv Qid -> Val .
+  op lookE : VEnv Qid -> Res .
+  eq lookE(RV & (X := V), X) = ok(V) .
+  eq lookE(RV & (Y := V), X) = lookE(RV, X) [owise] .
+  eq lookE(venil, X) = err("unbound " + string(X)) .
+
+  op bindPs : VEnv ParamList ValList -> VEnv .
+  eq bindPs(RV, qnil, vnil) = RV .
+  eq bindPs(RV, ((X : T), QL), (V, VL)) = bindPs(RV & (X := V), QL, VL) .
+
+  op ev : Prog VEnv JEnv Nat Expr -> Res .
+  op evs : Prog VEnv JEnv Nat ExprList -> Res .
+  eq evs(PG, RV, JV, K, enil) = okl(vnil) .
+  eq evs(PG, RV, JV, K, (E, EL)) = evs2(PG, RV, JV, K, ev(PG, RV, JV, K, E), EL) .
+  op evs2 : Prog VEnv JEnv Nat Res ExprList -> Res .
+  eq evs2(PG, RV, JV, K, ok(V), EL) = cons(V, evs(PG, RV, JV, K, EL)) .
+  eq evs2(PG, RV, JV, K, R, EL) = R [owise] .
+  op cons : Val Res -> Res .
+  eq cons(V, okl(VL)) = okl((V, VL)) .
+  eq cons(V, R) = R [owise] .
+
+  eq ev(PG, RV, JV, K, v(X)) = lookE(RV, X) .
+  eq ev(PG, RV, JV, K, i(I)) = ok(vi(I)) .
+  eq ev(PG, RV, JV, K, tg(C, EL)) = mkTag(C, evs(PG, RV, JV, K, EL)) .
+  op mkTag : Qid Res -> Res .
+  eq mkTag(C, okl(VL)) = ok(vt(C, VL)) . eq mkTag(C, R) = R [owise] .
+  eq ev(PG, RV, JV, K, tp(EL)) = mkTup(evs(PG, RV, JV, K, EL)) .
+  op mkTup : Res -> Res .
+  eq mkTup(okl(VL)) = ok(vp(VL)) . eq mkTup(R) = R [owise] .
+  eq ev(PG, RV, JV, K, pj(E, N)) = proj(ev(PG, RV, JV, K, E), N) .
+  op proj : Res Nat -> Res .
+  eq proj(ok(vp(VL)), N) = ok(vnth(VL, N)) .
+  eq proj(R, N) = R [owise] .
+  eq ev(PG, RV, JV, K, lt(X, E1, E2)) = evLet(PG, RV, JV, K, X, ev(PG, RV, JV, K, E1), E2) .
+  op evLet : Prog VEnv JEnv Nat Qid Res Expr -> Res .
+  eq evLet(PG, RV, JV, K, X, ok(V), E2) = ev(PG, RV & (X := V), JV, K, E2) .
+  eq evLet(PG, RV, JV, K, X, R, E2) = R [owise] .
+  eq ev(PG, RV, JV, K, mt(E, BL)) = evMatch(PG, RV, JV, K, ev(PG, RV, JV, K, E), BL) .
+  op evMatch : Prog VEnv JEnv Nat Res BranchList -> Res .
+  eq evMatch(PG, RV, JV, K, ok(V), bnil) = err("non-exhaustive match") .
+  eq evMatch(PG, RV, JV, K, ok(V), (P => E) | BL) =
+     if matches(P, V) then ev(PG, RV & binds(P, V), JV, K, E) else evMatch(PG, RV, JV, K, ok(V), BL) fi .
+  eq evMatch(PG, RV, JV, K, R, BL) = R [owise] .
+
+  op matches : Pat Val -> Bool .
+  op matchesL : PatList ValList -> Bool .
+  eq matches(pv(X), V) = true .
+  eq matches(pw, V) = true .
+  eq matches(pl(I), vi(I1)) = I == I1 .
+  eq matches(pc(C, PL), vt(Y, VL)) = C == Y and matchesL(PL, VL) .
+  eq matches(pt(PL), vp(VL)) = matchesL(PL, VL) .
+  eq matches(P, V) = false [owise] .
+  eq matchesL(pnil, vnil) = true .
+  eq matchesL((P, PL), (V, VL)) = matches(P, V) and matchesL(PL, VL) .
+  eq matchesL(PL, VL) = false [owise] .
+  op binds : Pat Val -> VEnv .
+  op bindsL : PatList ValList -> VEnv .
+  eq binds(pv(X), V) = X := V .
+  eq binds(pc(C, PL), vt(Y, VL)) = bindsL(PL, VL) .
+  eq binds(pt(PL), vp(VL)) = bindsL(PL, VL) .
+  eq binds(P, V) = venil [owise] .
+  eq bindsL(pnil, vnil) = venil .
+  eq bindsL((P, PL), (V, VL)) = binds(P, V) & bindsL(PL, VL) .
+
+  eq ev(PG, RV, JV, s K, cl(F, EL)) = evCall(PG, s K, F, evs(PG, RV, JV, s K, EL)) .
+  eq ev(PG, RV, JV, 0, cl(F, EL)) = oof .
+  op evCall : Prog Nat Qid Res -> Res .
+  eq evCall(PG, s K, F, okl(VL)) = fnRes(ev(PG, bindPs(venil, paramsOf(PG, F), VL), jenil, K, bodyOf(PG, F))) .
+  eq evCall(PG, K, F, R) = R [owise] .
+  op fnRes : Res -> Res .
+  eq fnRes(ok(V)) = ok(V) . eq fnRes(oof) = oof . eq fnRes(err(S)) = err(S) .
+  eq fnRes(R) = err("control transfer escaped a function body") [owise] .
+
+  eq ev(PG, RV, JV, K, pr(X, EL)) = prim(X, evs(PG, RV, JV, K, EL)) .
+  op prim : Qid Res -> Res .
+  eq prim('add, okl((vi(I1), vi(I2)))) = ok(vi(I1 + I2)) .
+  eq prim('sub, okl((vi(I1), vi(I2)))) = ok(vi(I1 - I2)) .
+  eq prim('mul, okl((vi(I1), vi(I2)))) = ok(vi(I1 * I2)) .
+  eq prim('lt, okl((vi(I1), vi(I2)))) = ok(true?(I1 < I2)) .
+  eq prim('eq, okl((vi(I1), vi(I2)))) = ok(true?(I1 == I2)) .
+  eq prim(X, R) = R [owise] .
+
+  *** loops: body runs with params; continue re-enters with fuel-1
+  eq ev(PG, RV, JV, K, lp(T, QL, EL, E)) = evLoop(PG, RV, JV, K, QL, E, evs(PG, RV, JV, K, EL)) .
+  op evLoop : Prog VEnv JEnv Nat ParamList Expr Res -> Res .
+  eq evLoop(PG, RV, JV, s K, QL, E, okl(VL)) =
+     loopRes(PG, RV, JV, K, QL, E, ev(PG, bindPs(RV, QL, VL), JV, s K, E)) .
+  eq evLoop(PG, RV, JV, 0, QL, E, okl(VL)) = oof .
+  eq evLoop(PG, RV, JV, K, QL, E, R) = R [owise] .
+  op loopRes : Prog VEnv JEnv Nat ParamList Expr Res -> Res .
+  eq loopRes(PG, RV, JV, K, QL, E, cn(VL)) =
+     if vlen(VL) == plen(QL) then evLoop(PG, RV, JV, K, QL, E, okl(VL))
+     else err("continue arity differs from loop") fi .
+  eq loopRes(PG, RV, JV, K, QL, E, br(V)) = ok(V) .
+  eq loopRes(PG, RV, JV, K, QL, E, R) = R [owise] .
+  eq ev(PG, RV, JV, K, ct(EL)) = toCn(evs(PG, RV, JV, K, EL)) .
+  op toCn : Res -> Res .
+  eq toCn(okl(VL)) = cn(VL) . eq toCn(R) = R [owise] .
+  eq ev(PG, RV, JV, K, bk(E)) = toBr(ev(PG, RV, JV, K, E)) .
+  op toBr : Res -> Res .
+  eq toBr(ok(V)) = br(V) . eq toBr(R) = R [owise] .
+
+  *** joins: lexically scoped continuation; the body may jump to itself
+  eq ev(PG, RV, JV, K, jn(J, QL, E1, E2)) = joinRes(PG, RV, JV, K, J, QL, E1, ev(PG, RV, JV, K, E2)) .
+  op joinRes : Prog VEnv JEnv Nat Qid ParamList Expr Res -> Res .
+  eq joinRes(PG, RV, JV, s K, J, QL, E1, jm(J, VL)) =
+     if vlen(VL) == plen(QL) then joinRes(PG, RV, JV, K, J, QL, E1, ev(PG, bindPs(RV, QL, VL), JV, K, E1))
+     else err("jump arity differs from join") fi .
+  eq joinRes(PG, RV, JV, 0, J, QL, E1, jm(J, VL)) = oof .
+  eq joinRes(PG, RV, JV, K, J, QL, E1, R) = R [owise] .
+  eq ev(PG, RV, JV, K, jp(J, EL)) = toJm(J, evs(PG, RV, JV, K, EL)) .
+  op toJm : Qid Res -> Res .
+  eq toJm(J, okl(VL)) = jm(J, VL) . eq toJm(J, R) = R [owise] .
+  eq ev(PG, RV, JV, K, ivk(S)) = err("pass invariant: " + S) .
+
+  op run : Prog Qid ValList Nat -> Res .
+  eq run(PG, F, VL, K) = evCall(PG, s K, F, okl(VL)) .
+endfm
