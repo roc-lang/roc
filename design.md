@@ -28841,6 +28841,18 @@ a borrowed capture view reaches the source's place through its borrow link,
 and an owned capture retains through the source at the match. Only releases
 use every place.
 
+Each emission settles its ownership places once, before it plans anything
+(`OwnershipPlan`). For every local of the procedure's frame the plan records
+the binding mode this emission gives the local, the local whose ownership unit
+an occurrence of it moves, and the leader of its ownership place: the binding
+reached by following, from the local, the representative its projection alias
+reads or else its solved lender, stopping at the first binding this emission
+owns. The plan is built from the solved modes, the dismantle plan, and the
+bindings the emission's signature overrides to owned, and planning and emission
+read binding modes, units, and places only from it, so no decision of one
+emission can combine answers taken from those sources at different points. A
+Debug compiler checks the plan against its inputs as it is built.
+
 The ownership-place query asks whether a path from a statement reaches a use
 of a root's place before a statement that rebinds the root. Its cost is linear
 in the procedure even when many roots share one place. The procedure's

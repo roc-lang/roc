@@ -1635,6 +1635,160 @@ fn installOwnedBindingOverrides(
     }
 }
 
+/// One emission's settled ownership places. For every local of the frame it
+/// records the binding mode this emission gives the local, the local whose
+/// ownership unit an occurrence of it moves, and the leader of its ownership
+/// place. It is built once, from the solved modes, the dismantle plan and the
+/// bindings this emission's signature overrides to owned, before any planning;
+/// planning and emission only read it, so every ownership-place decision of an
+/// emission has this one source.
+const OwnershipPlan = struct {
+    domain: *const ProcArcDomain,
+    solution: *const arc_solve.Solution,
+    dismantles: *const arc_dismantle.Dismantles,
+    /// The bindings solved borrowed that this emission binds owned.
+    overrides: *const OwnedSet,
+    /// By frame index: bound borrowed in this emission.
+    borrowed: std.bit_set.DynamicBitSetUnmanaged,
+    /// By frame index: read through a complete projection, whose root's
+    /// unit a borrowed binding of it keys.
+    projected: std.bit_set.DynamicBitSetUnmanaged,
+    /// By frame index: the local whose unit an occurrence moves.
+    units: []const LIR.LocalId,
+    /// By frame index: the leader of the local's ownership place.
+    place_leaders: []const LIR.LocalId,
+
+    fn build(
+        allocator: Allocator,
+        domain: *const ProcArcDomain,
+        solution: *const arc_solve.Solution,
+        dismantles: *const arc_dismantle.Dismantles,
+        overrides: *const OwnedSet,
+    ) ResourceError!OwnershipPlan {
+        const frame = domain.frame_locals;
+        var borrowed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, frame.len);
+        var projected = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, frame.len);
+        const units = try allocator.alloc(LIR.LocalId, frame.len);
+        const place_leaders = try allocator.alloc(LIR.LocalId, frame.len);
+        for (frame, units, 0..) |local, *unit, frame_index| {
+            if (solution.isBorrowed(local) and !overrides.contains(local)) borrowed.set(frame_index);
+            const projection_root = dismantles.projectionUnitOf(local);
+            if (projection_root != null) projected.set(frame_index);
+            // A borrowed complete projection keys its root's unit; a take
+            // binding through that same projection owns the stored unit it
+            // took and keys itself.
+            unit.* = if (projection_root != null and borrowed.isSet(frame_index))
+                projection_root.?
+            else
+                solution.unitLocalOf(local);
+        }
+
+        // Every local's place is its chain of place parents followed to a
+        // local with none; each link is resolved once.
+        var resolved = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, frame.len);
+        for (frame) |local| {
+            var cursor = local;
+            var steps: usize = 0;
+            const place = while (true) {
+                const frame_index = domain.frameIndexOf(cursor);
+                if (resolved.isSet(frame_index)) break place_leaders[frame_index];
+                const parent = placeParent(solution, dismantles, overrides, cursor) orelse {
+                    const root = if (overrides.contains(cursor)) cursor else solution.leaderOf(cursor);
+                    place_leaders[frame_index] = root;
+                    resolved.set(frame_index);
+                    break root;
+                };
+                cursor = parent;
+                steps += 1;
+                if (steps > frame.len) arcInvariant("ARC ownership-place borrow chain contained a cycle");
+            };
+            cursor = local;
+            while (true) {
+                const frame_index = domain.frameIndexOf(cursor);
+                if (resolved.isSet(frame_index)) break;
+                place_leaders[frame_index] = place;
+                resolved.set(frame_index);
+                cursor = placeParent(solution, dismantles, overrides, cursor) orelse arcInvariant("ARC unresolved place has no parent");
+            }
+        }
+
+        const plan: OwnershipPlan = .{
+            .domain = domain,
+            .solution = solution,
+            .dismantles = dismantles,
+            .overrides = overrides,
+            .borrowed = borrowed,
+            .projected = projected,
+            .units = units,
+            .place_leaders = place_leaders,
+        };
+        if (builtin.mode == .debug) plan.verify();
+        return plan;
+    }
+
+    /// The local `local`'s place continues through in this emission: none
+    /// for a binding this emission owns, else the representative its
+    /// projection alias reads, else its solved lender.
+    fn placeParent(
+        solution: *const arc_solve.Solution,
+        dismantles: *const arc_dismantle.Dismantles,
+        overrides: *const OwnedSet,
+        local: LIR.LocalId,
+    ) ?LIR.LocalId {
+        if (overrides.contains(local)) return null;
+        return dismantles.projectionAliasRoot(local) orelse solution.borrowSourceOf(local);
+    }
+
+    /// Checks the table against the facts it was built from, so a
+    /// disagreement between the solved modes, the dismantle plan and the
+    /// emission's overrides stops here rather than in an emitted body.
+    fn verify(self: *const OwnershipPlan) void {
+        for (self.domain.frame_locals, 0..) |local, frame_index| {
+            if (self.overrides.contains(local)) {
+                if (self.borrowed.isSet(frame_index)) arcInvariant("ARC ownership plan binds an owned override borrowed");
+                if (self.place_leaders[frame_index] != local) arcInvariant("ARC ownership plan put an owned override in another binding's place");
+            }
+            if (self.domain.resourceBitOf(local) != null and self.dismantles.isTakeBinding(local) and self.borrowed.isSet(frame_index)) {
+                arcInvariant("ARC ownership plan binds a take binding borrowed");
+            }
+            _ = self.domain.frameIndexOf(self.place_leaders[frame_index]);
+        }
+    }
+
+    /// Whether this emission binds `local` borrowed. A local outside the
+    /// frame is one the emission itself created, which is never borrowed.
+    fn isBorrowed(self: *const OwnershipPlan, local: LIR.LocalId) bool {
+        if (self.domain.global_local_index.get(local)) |frame_index| return self.borrowed.isSet(frame_index);
+        if (self.solution.isBorrowed(local)) arcInvariant("ARC ownership plan queried a borrowed local outside its frame");
+        return false;
+    }
+
+    /// The local whose ownership resource an occurrence of `local` moves.
+    fn unitOf(self: *const OwnershipPlan, local: LIR.LocalId) LIR.LocalId {
+        if (self.domain.global_local_index.get(local)) |frame_index| return self.units[frame_index];
+        if (self.dismantles.projectionUnitOf(local)) |root| {
+            if (self.isBorrowed(local)) return root;
+        }
+        return self.solution.unitLocalOf(local);
+    }
+
+    /// The leader of `local`'s ownership place.
+    fn placeLeader(self: *const OwnershipPlan, local: LIR.LocalId) LIR.LocalId {
+        return self.place_leaders[self.domain.frameIndexOf(local)];
+    }
+
+    /// Whether `local` is read through a complete projection.
+    fn isProjection(self: *const OwnershipPlan, local: LIR.LocalId) bool {
+        if (self.domain.global_local_index.get(local)) |frame_index| return self.projected.isSet(frame_index);
+        return self.dismantles.projectionUnitOf(local) != null;
+    }
+
+    /// Whether this emission binds owned a local the solve bound borrowed.
+    fn overridesOwned(self: *const OwnershipPlan, local: LIR.LocalId) bool {
+        return self.overrides.contains(local);
+    }
+};
+
 /// Every pointer retained by planning refers to this fixed owner or its arena,
 /// never a worker scratch allocation or a callback stack frame.
 const EmissionOwner = struct {
@@ -2483,7 +2637,8 @@ const Inserter = struct {
     /// These facts belong to one frozen binding-override context, not to
     /// the source shared by its base and owned variants. Places are indexed
     /// by frame ordinal; span and view facts are allocated only when queried.
-    ownership_places: []collections.OptionalId(LIR.LocalId) = &.{},
+    /// The current emission's settled ownership places.
+    ownership: OwnershipPlan = undefined,
     operand_first: []collections.OptionalU32 = &.{},
     operand_sharing: std.AutoHashMapUnmanaged(LIR.LocalSpan, []const bool) = .empty,
     view_shell_shapes: collections.DenseMapUnmanaged(LIR.LocalId, ViewShellShape) = .empty,
@@ -5127,8 +5282,7 @@ const Inserter = struct {
     }
 
     fn isBindingBorrowed(self: *const Inserter, local: LIR.LocalId) bool {
-        if (!self.solution.isBorrowed(local)) return false;
-        return !self.owned_binding_override.contains(local);
+        return self.ownership.isBorrowed(local);
     }
 
     // Ownership-transfer keying layer
@@ -5172,10 +5326,7 @@ const Inserter = struct {
     /// itself, so the root's residual shell and the taken field never share
     /// a resource.
     fn unitOf(self: *const Inserter, local: LIR.LocalId) LIR.LocalId {
-        if (self.dismantles.projectionUnitOf(local)) |root| {
-            if (self.isBindingBorrowed(local)) return root;
-        }
-        return self.solution.unitLocalOf(local);
+        return self.ownership.unitOf(local);
     }
 
     fn ownsUnit(self: *const Inserter, owned: *const OwnedSet, local: LIR.LocalId) bool {
@@ -5319,6 +5470,8 @@ const Inserter = struct {
         const base_sig = self.solution.sigOf(proc);
         try installOwnedBindingOverrides(&overrides, self.store, self.solution, self.dismantles, self.current_domain.?, proc, base_sig);
         self.owned_binding_override = &overrides;
+        self.emission_allocator = scratch;
+        try self.initOwnershipQueries();
 
         const Pending = struct { decision: CompleteProjectionDecision, next: LIR.CFStmtId, unit: LIR.LocalId };
         var pending = std.ArrayList(Pending).empty;
@@ -5338,8 +5491,6 @@ const Inserter = struct {
         }
         if (pending.items.len == 0) return &.{};
 
-        self.emission_allocator = scratch;
-        try self.initOwnershipQueries();
         self.place_query_seen = .{};
         self.place_query_visited = .empty;
         self.place_query_stack = .empty;
@@ -6502,45 +6653,17 @@ const Inserter = struct {
         return self.ownershipPlaceLeader(local) == place;
     }
 
+    /// Settle the emission's ownership places from its installed owned
+    /// binding overrides, and empty the caches keyed on them.
     fn initOwnershipQueries(self: *Inserter) ResourceError!void {
-        self.ownership_places = try self.emission_allocator.alloc(collections.OptionalId(LIR.LocalId), self.domain().frame_locals.len);
-        @memset(self.ownership_places, .none);
+        self.ownership = try OwnershipPlan.build(self.emission_allocator, self.domain(), self.solution, self.dismantles, self.owned_binding_override);
         self.operand_first = &.{};
         self.operand_sharing = .empty;
         self.view_shell_shapes = .empty;
     }
 
-    fn ownershipPlaceParent(self: *const Inserter, local: LIR.LocalId) ?LIR.LocalId {
-        if (self.owned_binding_override.contains(local)) return null;
-        return self.dismantles.projectionAliasRoot(local) orelse self.solution.borrowSourceOf(local);
-    }
-
     fn ownershipPlaceLeader(self: *const Inserter, local: LIR.LocalId) LIR.LocalId {
-        var cursor = local;
-        var steps: usize = 0;
-        const place = while (true) {
-            const slot = &self.ownership_places[self.domain().frameIndexOf(cursor)];
-            if (slot.get()) |resolved| break resolved;
-            const parent = self.ownershipPlaceParent(cursor) orelse {
-                const root = if (self.owned_binding_override.contains(cursor)) cursor else self.solution.leaderOf(cursor);
-                slot.* = .some(root);
-                break root;
-            };
-            cursor = parent;
-            steps += 1;
-            if (steps > self.ownership_places.len) arcInvariant("ARC ownership-place borrow chain contained a cycle");
-        };
-        // Compress only this context's index, never the solved borrow links.
-        // Each newly visited link is resolved once, without a walk stack.
-        cursor = local;
-        while (true) {
-            const slot = &self.ownership_places[self.domain().frameIndexOf(cursor)];
-            if (slot.* != .none) break;
-            const parent = self.ownershipPlaceParent(cursor) orelse arcInvariant("ARC unresolved place has no parent");
-            slot.* = .some(place);
-            cursor = parent;
-        }
-        return place;
+        return self.ownership.placeLeader(local);
     }
 
     /// What one statement does to ownership places, as the place-use query
@@ -7249,7 +7372,7 @@ const Inserter = struct {
                 next,
                 outcome_sig,
             );
-            const projected_alias_conflict = self.dismantles.projectionUnitOf(local) != null and
+            const projected_alias_conflict = self.ownership.isProjection(local) and
                 try self.groupSharesOtherOperand(span, position);
             const can_transfer = owned.contains(owner) and
                 (!used_after_call or restitution != null) and
@@ -7379,7 +7502,7 @@ const Inserter = struct {
                 )
             else
                 null;
-            const projected_alias_conflict = self.dismantles.projectionUnitOf(local) != null and
+            const projected_alias_conflict = self.ownership.isProjection(local) and
                 try self.groupSharesOtherOperand(span, position);
             const can_transfer = owned.contains(owner) and (!used_after_call or restitution != null) and !projected_alias_conflict;
             if (restitution) |claim| try self.setOutcomeRestoration(claim, can_transfer);
@@ -8110,7 +8233,7 @@ const Inserter = struct {
     fn takeForEmission(self: *const Inserter, stmt: LIR.CFStmtId) ?arc_dismantle.Take {
         if (self.dismantles.takeAt(stmt)) |take| return take;
         if (self.dismantles.ownedOnlyTake(stmt)) |take| {
-            if (self.owned_binding_override.contains(take.root)) return take;
+            if (self.ownership.overridesOwned(take.root)) return take;
         }
         return null;
     }
@@ -8121,7 +8244,7 @@ const Inserter = struct {
     fn operandTakeForEmission(self: *const Inserter, stmt: LIR.CFStmtId, position: usize) ?arc_dismantle.Take {
         if (self.dismantles.operandTakeAt(stmt, position)) |take| return take;
         if (self.dismantles.ownedOnlyOperandTake(stmt, position)) |take| {
-            if (self.owned_binding_override.contains(take.root)) return take;
+            if (self.ownership.overridesOwned(take.root)) return take;
         }
         return null;
     }
@@ -8176,7 +8299,7 @@ const Inserter = struct {
     fn viewForEmission(self: *const Inserter, local: LIR.LocalId) ?arc_dismantle.View {
         const view = self.dismantles.viewOf(local) orelse return null;
         const holder = view.holder orelse return view;
-        if (!self.owned_binding_override.contains(holder)) return view;
+        if (!self.ownership.overridesOwned(holder)) return view;
         if (view.is_holder or self.dismantleFor(holder) == null) return null;
         return .{ .root = holder, .base = view.base - view.holder_base };
     }
@@ -8188,7 +8311,7 @@ const Inserter = struct {
         // for one call position and restore the same committed place twice.
         if (self.dismantles.completeTakeRoot(receipt.projection) != null) return null;
         if (self.dismantles.ownedOnlyContainerOf(receipt.place.root) != null and
-            !self.owned_binding_override.contains(receipt.place.root)) return null;
+            !self.ownership.overridesOwned(receipt.place.root)) return null;
         // A tag-union container's fields are numbered in its payload view,
         // which holds no unit: the union's unit is the resource whose residual
         // mask a restituting edge refills.
@@ -8202,7 +8325,7 @@ const Inserter = struct {
     fn dismantleFor(self: *const Inserter, local: LIR.LocalId) ?arc_dismantle.Container {
         if (self.dismantles.containerOf(local)) |container| return container;
         if (self.dismantles.ownedOnlyContainerOf(local)) |container| {
-            if (self.owned_binding_override.contains(local)) return container;
+            if (self.ownership.overridesOwned(local)) return container;
         }
         return null;
     }
@@ -20258,9 +20381,9 @@ test "ARC ownership query cache separates contexts and resolves deep borrow chai
         try inserter.initOwnershipQueries();
         const expected = if (owns_held) held else chain[0];
         try testing.expectEqual(expected, inserter.ownershipPlaceLeader(chain[chain.len - 1]));
-        // One query fills every traversed link, not just its starting local.
+        // The plan settles every link of the chain, not just the queried local.
         for (chain[chain.len / 2 ..]) |local| {
-            try testing.expectEqual(expected, inserter.ownership_places[domain.frameIndexOf(local)].get().?);
+            try testing.expectEqual(expected, inserter.ownership.place_leaders[domain.frameIndexOf(local)]);
         }
         try testing.expectEqual(!owns_held, try inserter.groupSharesOtherOperand(operands, 0));
         try testing.expect(!try inserter.groupSharesOtherOperand(operands, 1));
