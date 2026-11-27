@@ -28565,6 +28565,14 @@ Whole-program `.boxy` lowering marks the same kinds of workers as module
 lowering (`LirProcSpec.module_worker`): their linkage is local, but their
 base convention must agree with the corresponding module export.
 
+Field-take analysis commits those base conventions when the callee's
+call-graph component is complete, before solving its callers. A caller
+planning a field transfer or a whole-parameter forward sees the same
+signature as an importer of the compiled worker. Looking only at the
+initial borrow solution here would keep a reference across an owning
+call, even though no body variant is needed. This uses the existing
+callee-first component order; it does not rerun ownership solving.
+
 Variant bodies are cloned with the existing statement-cloning machinery and
 added with `LirStore.addProcSpec`. Root procs are never specialized; their
 vectors are pinned. The variant count is bounded by realized demand vectors,

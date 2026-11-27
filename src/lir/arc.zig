@@ -657,32 +657,6 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         }
         try solution.adoptHeldBindings(store.allocator, held.items);
     }
-    // A borrowed parameter whose owned variant takes every stored unit on
-    // every returning path is owned by the base signature: the borrowed base
-    // would retain each unit where the variant takes it, so borrowing saves
-    // no caller any work and would only emit a second body. A position that
-    // lends the return, or holds a demand hole, keeps its borrowed mode.
-    // Cross-unit workers additionally own positions with a field-take benefit:
-    // their importers cannot demand an owned variant. The producer commits
-    // this convention independently of callers, which retain kept arguments.
-    for (0..store.procSpecCount()) |proc_index| {
-        const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        if (solution.isPinnedProc(proc)) continue;
-        const sig = solution.sigOf(proc);
-        var mask = dismantles.ownedOnlyParamTotals(proc);
-        const spec = store.getProcSpecImmediate(proc);
-        if (spec.exported or spec.module_worker) mask |= dismantles.ownedOnlyParamBenefits(proc);
-        mask &= sig.borrowed_params;
-        if (sig.ret_mode == .borrowed) mask &= ~sig.ret_lenders;
-        if (mask == 0) continue;
-        const params = store.getLocalSpan(store.getProcSpecImmediate(proc).args);
-        for (0..@min(GuardedList.borrowLen(params), arc_sig.tracked_param_count)) |position| {
-            const bit = arc_sig.paramBit(position).?;
-            if ((mask & bit) != 0 and layouts.layoutHoldsHole(store.getLocal(GuardedList.at(params, position)).layout_idx)) mask &= ~bit;
-        }
-        if (mask != 0) solution.ownParams(proc, mask);
-    }
-
     step_started = timingLap(timing, step_started, .signatures);
     const base_proc_count = store.procSpecCount();
     const sources = try store.allocator.alloc(SourceCache, base_proc_count);
@@ -8781,16 +8755,32 @@ test "RC cross-unit field-take convention owns conditional partial consumers" {
         const proc = try f.addProc(&.{ pair, condition }, try f.switchStmt(condition, consuming, untouched, null), f.list_i64);
         f.store.getProcSpecPtr(proc).exported = boundary == .exported;
         f.store.getProcSpecPtr(proc).module_worker = boundary != .private;
+        // An isolated helper can never request a variant. Its only use of
+        // the argument is this forward, so it should agree with the worker's
+        // actual base convention, including a producer-selected promotion.
+        const incoming = try f.local(pair_layout);
+        const flag = try f.local(.i64);
+        const result = try f.local(f.list_i64);
+        const forward = try f.store.addCFStmt(.{ .assign_call = .{
+            .proc = proc,
+            .target = result,
+            .args = try f.span(&.{ incoming, flag }),
+            .next = try f.ret(result),
+        } }, .test_fixture);
+        const helper = try f.addProc(&.{ incoming, flag }, forward, f.list_i64);
+        f.store.getProcSpecPtr(helper).emission_unit = .isolated;
         _ = try insert(&f.store, &f.layouts, .{ .specialize = false });
 
         const borrowed: u64 = @intFromBool(boundary == .private);
         try testing.expectEqual(borrowed, f.store.getProcSpecImmediate(proc).rc_borrowed_params);
+        try testing.expectEqual(borrowed, f.store.getProcSpecImmediate(helper).rc_borrowed_params);
+        try f.expectRc(incoming, 0, 0, 0);
         try testing.expectEqual(@as(usize, @intCast(borrowed)), f.countRc(field, .incref));
-        try testing.expectEqual(@as(usize, 1), f.store.procSpecCount());
+        try testing.expectEqual(@as(usize, 2), f.store.procSpecCount());
         // Certification is explicit so the ReleaseFast unit test checks both
         // paths, including the untouched residual field and early return.
         var diag: arc_certify.Diagnostic = .{};
-        const sigs = [_]arc_sig.RcSig{.{ .borrowed_params = @intCast(borrowed) }};
+        const sigs: [2]arc_sig.RcSig = @splat(.{ .borrowed_params = @intCast(borrowed) });
         try arc_certify.certifyStore(testing.allocator, &f.store, &f.layouts, .{ .sigs = &sigs }, &.{}, &diag);
     }
 }

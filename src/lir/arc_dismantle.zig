@@ -365,12 +365,6 @@ pub const Dismantles = struct {
     /// Parameter positions whose owned variant activates an exact field take,
     /// indexed directly by source procedure id.
     owned_only_param_benefits: []arc_sig.ParamMask,
-    /// Parameter positions whose owned variant takes every stored unit of
-    /// the parameter on every returning path, indexed by source procedure
-    /// id. The borrowed base retains each of those units where the variant
-    /// takes it, so borrowing saves no work for any caller: the parameter's
-    /// base signature owns the position instead (`arc.zig`).
-    owned_only_param_totals: []arc_sig.ParamMask,
     /// Bindings that hold a stored unit taken from their container: the
     /// owned targets of unconditional field takes, projected containers
     /// solved borrowed whose read moves their root's unit, and views solved
@@ -478,14 +472,6 @@ pub const Dismantles = struct {
             dismantleInvariant("ARC owned-only benefit lookup exceeded the analyzed source-procedure table");
         }
         return self.owned_only_param_benefits[index];
-    }
-
-    pub fn ownedOnlyParamTotals(self: *const Dismantles, proc: LIR.LirProcSpecId) arc_sig.ParamMask {
-        const index = @backingInt(proc);
-        if (index >= self.owned_only_param_totals.len) {
-            dismantleInvariant("ARC owned-only total lookup exceeded the analyzed source-procedure table");
-        }
-        return self.owned_only_param_totals[index];
     }
 
     pub fn ownedOnlyBindingRoot(self: *const Dismantles, local: LIR.LocalId) ?LIR.LocalId {
@@ -2863,7 +2849,7 @@ fn forwardsWholeOnEveryReturn(
     store: *const LirStore,
     solution: *const arc_solve.Solution,
     analysis: *const Analysis,
-    result: *const Dismantles,
+    component_totals: []const arc_sig.ParamMask,
     borrow_child_heads: []const OptionalU32,
     borrow_child_edges: []const BorrowChildEdge,
     borrow_stack: *std.ArrayList(u32),
@@ -2903,7 +2889,7 @@ fn forwardsWholeOnEveryReturn(
                         if (found or position >= arc_sig.tracked_param_count) return false;
                         if (!carriesReadValue(analysis, solution, arg, root)) return false;
                         const bit = arc_sig.paramBit(position).?;
-                        const total = (result.owned_only_param_totals[@backingInt(stmt.proc)] & bit) != 0;
+                        const total = (component_totals[@backingInt(stmt.proc)] & bit) != 0;
                         if (callee_sig.paramMode(position) != .owned and !total) return false;
                         found = true;
                     }
@@ -3488,13 +3474,14 @@ fn materializedPlaceLink(
     return placeLinkOf(store, layouts, solution, read.stmt, .{ .target = assign.target, .op = LIR.RefOp.local(representative_local) });
 }
 
-/// Solve takes for every reachable statement in the store.
+/// Solve field takes and commit each component's base signatures before its
+/// callers decide whether fields flow into owning operands.
 pub fn compute(
     gpa: Allocator,
     store: *LirStore,
     layouts: *const layout_mod.Store,
     rc_local: []const bool,
-    solution: *const arc_solve.Solution,
+    solution: *arc_solve.Solution,
     options: ComputeOptions,
 ) Error!Dismantles {
     if (rc_local.len != store.localCount()) {
@@ -3791,7 +3778,6 @@ pub fn compute(
         .owned_only_takes = .init(gpa),
         .owned_only_containers = .init(gpa),
         .owned_only_param_benefits = &.{},
-        .owned_only_param_totals = &.{},
         .take_bindings = &.{},
         .owned_only_binding_roots = .{},
         .field_restitution_args = .empty,
@@ -3803,8 +3789,6 @@ pub fn compute(
     errdefer result.deinit();
     result.owned_only_param_benefits = try result.arena.allocator().alloc(arc_sig.ParamMask, store.procSpecCount());
     @memset(result.owned_only_param_benefits, 0);
-    result.owned_only_param_totals = try result.arena.allocator().alloc(arc_sig.ParamMask, store.procSpecCount());
-    @memset(result.owned_only_param_totals, 0);
     result.take_bindings = try result.arena.allocator().alloc(bool, store.localCount());
     @memset(result.take_bindings, false);
     result.owned_only_binding_roots = try SparseIndexColumn.init(gpa, store.localCount());
@@ -4086,6 +4070,10 @@ pub fn compute(
     // Every parameter benefit published so far, which classifies operands.
     const operand_benefits = try scc_allocator.alloc(arc_sig.ParamMask, proc_count);
     @memset(operand_benefits, 0);
+    // Parameters whose entire unit moves on every returning path. These
+    // are working facts of the current component, not another call ABI.
+    const component_totals = try scc_allocator.alloc(arc_sig.ParamMask, proc_count);
+    @memset(component_totals, 0);
     const proc_values = try scc_allocator.alloc(u32, proc_count);
     for (proc_values, 0..) |*value, index| value.* = @intCast(index);
     const proc_buckets = try ComponentBuckets.build(scc_allocator, component_count, component_of_proc, proc_values);
@@ -4227,7 +4215,7 @@ pub fn compute(
                 for (component_place_keys.items) |key| _ = places.remove(key);
                 for (scc_procs) |proc_index| {
                     result.owned_only_param_benefits[proc_index] = 0;
-                    result.owned_only_param_totals[proc_index] = 0;
+                    component_totals[proc_index] = 0;
                 }
             }
             solved = true;
@@ -4840,7 +4828,7 @@ pub fn compute(
                 {
                     if (param_info.get(candidate_index)) |info| {
                         if (!info.ambiguous and !solution.isPinnedProc(@fromBackingInt(info.proc))) {
-                            result.owned_only_param_totals[info.proc] |= arc_sig.paramBit(info.position).?;
+                            component_totals[info.proc] |= arc_sig.paramBit(info.position).?;
                         }
                     }
                 }
@@ -5236,16 +5224,39 @@ pub fn compute(
             const params = store.getLocalSpan(store.getProcSpecImmediate(proc_id).args);
             for (0..@min(GuardedList.borrowLen(params), arc_sig.tracked_param_count)) |position| {
                 const bit = arc_sig.paramBit(position).?;
-                if ((result.owned_only_param_totals[proc_index] & bit) != 0) continue;
+                if ((component_totals[proc_index] & bit) != 0) continue;
                 if (sig.paramMode(position) != .borrowed) continue;
                 const param = GuardedList.at(params, position);
                 if (!rc_local[@backingInt(param)]) continue;
                 const info = param_info.get(@backingInt(param)) orelse continue;
                 if (info.ambiguous) continue;
-                if (try forwardsWholeOnEveryReturn(gpa, store, solution, &analysis, &result, borrow_child_heads, borrow_child_edges.items, &borrow_stack, &forest, forest_mark, &forward_scratch, proc_id, sig, param)) {
-                    result.owned_only_param_totals[proc_index] |= bit;
+                if (try forwardsWholeOnEveryReturn(gpa, store, solution, &analysis, component_totals, borrow_child_heads, borrow_child_edges.items, &borrow_stack, &forest, forest_mark, &forward_scratch, proc_id, sig, param)) {
+                    component_totals[proc_index] |= bit;
                 }
             }
+        }
+
+        // Publish the whole component together. A later component sees the
+        // same owning call positions as an importer of a compiled object:
+        // a projected argument can move its field, and an isolated helper
+        // that only forwards its parameter need not borrow and retain it.
+        for (scc_procs) |proc_index| {
+            const proc: LIR.LirProcSpecId = @fromBackingInt(proc_index);
+            var mask = component_totals[proc_index];
+            component_totals[proc_index] = 0;
+            if (solution.isPinnedProc(proc)) continue;
+            const sig = solution.sigOf(proc);
+            const spec = store.getProcSpecImmediate(proc);
+            if (spec.exported or spec.module_worker) mask |= result.owned_only_param_benefits[proc_index];
+            mask &= sig.borrowed_params;
+            if (sig.ret_mode == .borrowed) mask &= ~sig.ret_lenders;
+            if (mask == 0) continue;
+            const params = store.getLocalSpan(spec.args);
+            for (0..@min(GuardedList.borrowLen(params), arc_sig.tracked_param_count)) |position| {
+                const bit = arc_sig.paramBit(position).?;
+                if ((mask & bit) != 0 and layouts.layoutHoldsHole(store.getLocal(GuardedList.at(params, position)).layout_idx)) mask &= ~bit;
+            }
+            if (mask != 0) solution.ownParams(proc, mask);
         }
     }
     // Materialize only equivalences whose representative holds a committed
