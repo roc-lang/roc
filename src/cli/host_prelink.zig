@@ -1052,7 +1052,7 @@ const STT_SECTION = 3;
 const STV_HIDDEN = 2;
 
 /// The header offset of the generated object's section named `wanted`.
-fn testSection(object: []const u8, wanted: []const u8) !usize {
+fn testSection(object: []const u8, wanted: []const u8) error{TestUnexpectedResult}!usize {
     const shoff = readU64(object, 40);
     const names_at: usize = @intCast(shoff + @as(u64, readU16(object, 62)) * 64);
     const names = object[@intCast(readU64(object, names_at + 24))..];
@@ -1065,7 +1065,7 @@ fn testSection(object: []const u8, wanted: []const u8) !usize {
 
 /// The generated object carries the spare notes first, alternating 4- and
 /// 8-byte alignment, so LLD writes program header entries for them.
-fn expectSpareNotes(object: []const u8) !void {
+fn expectSpareNotes(object: []const u8) error{ TestUnexpectedResult, TestExpectedEqual }!void {
     const shoff = readU64(object, 40);
     inline for (0..spare_notes) |index| {
         const at = try testSection(object, std.fmt.comptimePrint("{s}{d}", .{ spare_note_prefix, index }));
