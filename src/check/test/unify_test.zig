@@ -3250,6 +3250,34 @@ test "unify - numeral literal with unchanged facts keeps the receiver's requirem
     try std.testing.expectEqual(recorded_before, types.numeral_infos.len());
 }
 
+test "unify - indexed literal fold keeps independent requirements and records the exact representative" {
+    var env = try TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const store = &env.module_env.types;
+    const names = env.module_env.getIdentStore();
+    const other = try names.insert(env.module_env.gpa, Ident.for_text("z"));
+    const conversion = try names.insert(env.module_env.gpa, Ident.for_text("from_quote"));
+    const arg = try store.fresh();
+    const signature = try env.mkFuncPure(&.{arg}, arg);
+    var held: [32]types_mod.StaticDispatchConstraint = undefined;
+    for (&held) |*slot| slot.* = .{ .fn_name = other, .fn_var = try store.freshFromContent(signature), .origin = .method_call };
+    held[17].fn_name = conversion;
+    held[17].origin = .{ .from_literal = .quote };
+    const range = try store.appendStaticDispatchConstraints(&held);
+    const receiver = try store.freshFromContent(.{ .flex = Flex.init().withConstraints(range) });
+    const call = try store.freshFromContent(signature);
+    const calls = try store.appendStaticDispatchConstraints(&.{.{ .fn_name = conversion, .fn_var = call, .origin = .method_call }});
+    const other_receiver = try store.freshFromContent(.{ .flex = Flex.init().withConstraints(calls) });
+
+    try std.testing.expectEqual(.unified, try env.unify(other_receiver, receiver));
+    try std.testing.expectEqual(range, store.resolveVar(receiver).desc.content.flex.constraints);
+    try std.testing.expectEqual(store.resolveDescIdx(call), store.resolveDescIdx(held[17].fn_var));
+    const merges = store.static_dispatch_relation_merges.items;
+    try std.testing.expectEqual(1, merges.len);
+    try std.testing.expectEqual(call, merges[0].dropped_fn_var);
+    try std.testing.expectEqual(held[17].fn_var, merges[0].retained_fn_var);
+}
+
 test "unify - operator and dot call requirements stay separate until generalization" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);

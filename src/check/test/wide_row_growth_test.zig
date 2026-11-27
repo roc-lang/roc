@@ -108,15 +108,31 @@ test "wide row growth: coverage of one arm per constructor (#13311)" {
     try expectLinearStorage(.coverage_bytes);
 }
 
+const Uses = enum { interpolations, alternating_operators, literal_patterns };
+
 /// The work relating requirement lists and judging ambiguity candidates does
-/// for `uses` interpolations of one value.
-fn interpolationWork(uses: usize) TestEnv.TestEnvError!usize {
+/// for `count` uses of one value.
+fn requirementWork(uses: Uses, count: usize) TestEnv.TestEnvError!usize {
     var source = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer source.deinit();
     const w = &source.writer;
-    try w.writeAll("greet : Str -> List(Str)\ngreet = |name| [\n");
-    for (0..uses) |i| try w.print("    \"line {d} for ${{name}}\",\n", .{i});
-    try w.writeAll("]\n");
+    switch (uses) {
+        .interpolations => {
+            try w.writeAll("greet : Str -> List(Str)\ngreet = |name| [\n");
+            for (0..count) |i| try w.print("    \"line {d} for ${{name}}\",\n", .{i});
+            try w.writeAll("]\n");
+        },
+        .alternating_operators => {
+            try w.writeAll("calc = |v| [\n");
+            for (0..count) |i| try w.print("    v {s} {d},\n", .{ if (i % 2 == 0) "+" else "-", i });
+            try w.writeAll("]\n");
+        },
+        .literal_patterns => {
+            try w.writeAll("pick = |k| match k {\n");
+            for (0..count) |i| try w.print("    {d} => \"n{d}\"\n", .{ i, i });
+            try w.writeAll("    _ => \"other\"\n}\n");
+        },
+    }
 
     var env = try TestEnv.init("Test", source.written());
     defer env.deinit();
@@ -124,9 +140,21 @@ fn interpolationWork(uses: usize) TestEnv.TestEnvError!usize {
     return env.checker.unify_scratch.test_constraint_reads + env.checker.test_ambiguity_candidate_visits;
 }
 
-test "many interpolations of one value relate their requirements in linear work (#13310)" {
-    const small = try interpolationWork(64);
-    const large = try interpolationWork(256);
-    if (large > 8 * small) std.debug.print("interpolation work: 64 uses: {d}; 256 uses: {d}\n", .{ small, large });
+fn expectLinearRequirementWork(uses: Uses) !void {
+    const small = try requirementWork(uses, 64);
+    const large = try requirementWork(uses, 256);
+    if (large > 8 * small) std.debug.print("{t}: 64 uses: {d}; 256 uses: {d}\n", .{ uses, small, large });
     try std.testing.expect(large <= 8 * small);
+}
+
+test "many interpolations of one value relate their requirements in linear work (#13310)" {
+    try expectLinearRequirementWork(.interpolations);
+}
+
+test "many uses of one value through alternating operators relate their requirements in linear work" {
+    try expectLinearRequirementWork(.alternating_operators);
+}
+
+test "many literal patterns on one inferred value relate their requirements in linear work" {
+    try expectLinearRequirementWork(.literal_patterns);
 }

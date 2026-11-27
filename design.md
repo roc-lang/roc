@@ -24127,8 +24127,11 @@ Same-name relations must agree on fixed outer function properties:
 rank-1 instantiation can vary types but cannot vary a declaration's argument
 count or known effect mode. A requirement is held to this where it joins a
 receiver's requirements, against the argument count and effect mode already
-known for its name there; the unifier remembers those for a long list
-(`ConstraintListSummary`) instead of reading the list again for each use. A
+known for its name there. The unifier indexes a long list by method name:
+alternating uses of different methods need not revisit unrelated callables.
+A fixed literal conversion can absorb a joining requirement without rebuilding
+the list only if its representative and metadata stay unchanged. The callable
+relation and the evidence for the dropped requirement must still be recorded. A
 callable whose outer shape becomes known only later is held to it where the
 boundary relates the receiver's requirements or the receiver resolves. Once a scheme's public type is fixed, equivalent
 requirements whose only differences are private generalized variables collapse;
