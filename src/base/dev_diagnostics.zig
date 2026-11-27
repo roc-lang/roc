@@ -32,6 +32,11 @@ pub const Var = enum {
     spec_resolution_profile,
     /// Print the final LIR of every procedure whose debug name contains the value.
     lir_dump,
+    /// Print every procedure at each LIR pass boundary, and each procedure
+    /// before and after each procedure-local phase that changes it, for
+    /// the lir-passes model (`src/lir/pass_dump.zig`, `models/lir-passes`).
+    /// Not written on Windows.
+    lir_pass_dump,
     /// Print every closed specialization key.
     spec_census,
     /// Print the procedures each lowered LIR program compiles, one line per
@@ -100,6 +105,7 @@ pub const Var = enum {
             .trace_boxy_digests => "ROC_TRACE_BOXY_DIGESTS",
             .verify_boxy_object_reuse => "ROC_VERIFY_BOXY_OBJECT_REUSE",
             .lir_dump => "ROC_LIR_DUMP",
+            .lir_pass_dump => "ROC_LIR_PASS_DUMP",
             .spec_census => "ROC_SPEC_CENSUS",
             .proc_census => "ROC_PROC_CENSUS",
             .lambda_solve_stats => "ROC_LAMBDA_SOLVE_STATS",
