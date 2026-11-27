@@ -21,6 +21,7 @@ const CompletedErasedMembers = @import("completed_erased_members.zig").Completed
 const match_tree = @import("match_tree.zig");
 const Mono = @import("monotype/ast.zig");
 const Lifted = @import("monotype_lifted/ast.zig");
+const IrExport = @import("monotype_lifted/ir_export.zig");
 const SolvedInline = @import("solved_inline.zig");
 const proc_identity = @import("proc_identity.zig");
 const Solved = @import("lambda_solved/ast.zig");
@@ -225,6 +226,9 @@ pub fn runBorrowed(
 
     var lowerer = try Lowerer.init(allocator, target_usize, solved, options);
     errdefer lowerer.deinit();
+    var lambda_set_export: IrExport.LambdaSetExport = .{};
+    defer lambda_set_export.deinit();
+    if (IrExport.LambdaSetExport.enabled()) lowerer.lambda_set_export = &lambda_set_export;
     lowerer.source_digests = source_digests;
     lowerer.layout_keyed_source_digests = layout_keyed_source_digests;
 
@@ -240,6 +244,7 @@ pub fn runBorrowed(
     try lowerer.keepReachedErasedMembers();
     try lowerer.writeRuntimeSchemas();
     lowerer.result.finishExpectSites();
+    if (lowerer.lambda_set_export) |sets| try sets.flush(allocator, &solved.lifted);
     verifyNoCaptureFreePacks(&lowerer.result.store);
     return lowerer.finish();
 }
@@ -829,6 +834,9 @@ const ExprContextTys = struct {
 };
 
 const Lowerer = struct {
+    /// Where value calls record their callable variants, when
+    /// `ROC_LAMBDA_SET_EXPORT` is set. Shared with every body worker.
+    lambda_set_export: ?*IrExport.LambdaSetExport = null,
     allocator: std.mem.Allocator,
     solved: *const Solved.Program,
     solved_types: SolvedType.Store.View,
@@ -8861,6 +8869,7 @@ const Lowerer = struct {
     ) Common.LowerError!LowerStep {
         const callee_ty = try self.lowerExprContextTy(callee_expr);
         const content = self.types.get(callee_ty);
+        if (self.lambda_set_export) |sets| try self.recordLambdaSet(sets, callee_expr, content);
         if (content == .callable) {
             self.noteErasedOwnerAmbiguous(target);
             // Branch lowering can lower argument types that append more variants to
@@ -8881,6 +8890,20 @@ const Lowerer = struct {
             return try self.erasedValueCallStep(where, target, result_ty, callee_expr, callee_ty, self.solved.lifted.exprSpan(arg_span), next);
         } else {
             return Common.invariant("value call callee had no callable direct Lambda Mono representation");
+        }
+    }
+
+    fn recordLambdaSet(self: *Lowerer, sets: *IrExport.LambdaSetExport, callee_expr: Lifted.ExprId, content: Type.Content) Common.LowerError!void {
+        if (content == .callable) {
+            const variants = self.types.fnVariantSpan(content.callable);
+            const members = try self.allocator.alloc(Lifted.FnId, variants.len);
+            defer self.allocator.free(members);
+            for (members, 0..) |*member, index| {
+                member.* = self.fn_specs.items[@backingInt(GuardedList.at(variants, index).target)].source;
+            }
+            try sets.recordFinite(callee_expr, members);
+        } else if (content == .erased_fn) {
+            try sets.recordErased(callee_expr);
         }
     }
 
