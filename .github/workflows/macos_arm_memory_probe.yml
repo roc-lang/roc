@@ -6,47 +6,32 @@ on:
 
 permissions: {}
 
+env:
+  ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache
+  ZIG_LOCAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache
+
 jobs:
   probe:
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.timeout }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-15
-            jobs_flag: ''
-            timeout: 150
-          - os: macos-15
-            jobs_flag: -j1
-            timeout: 360
-          - os: macos-15
-            jobs_flag: -j2
-            timeout: 360
+    runs-on: macos-15
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.17.1
           use-cache: false
-      - name: machine
+      - name: start memory monitor
         run: |
-          sysctl hw.memsize hw.ncpu hw.physicalcpu machdep.cpu.brand_string vm.swapusage || true
-          df -h /
-          vm_stat
-      - name: build roc + release test binaries with memory monitor
-        run: |
-          monitor() {
-            while true; do
-              ts=$(date -u +%H:%M:%S)
-              swap=$(sysctl -n vm.swapusage)
-              vs=$(vm_stat | awk '/Pages free|Pages active|Pages inactive|Pages wired|occupied by compressor|Swapins|Swapouts|Pageouts|Pageins/ {gsub(/\./,"",$NF); printf "%s=%s ", $(NF-1), $NF}')
-              load=$(sysctl -n vm.loadavg)
-              procs=$(ps -axo rss=,comm= | sort -rn | head -4 | awk '{printf "%dM:%s ", $1/1024, $2}')
-              disk=$(df -h / | awk 'NR==2 {print $4}')
-              echo "[mon $ts] swap: $swap | $vs| load $load | free disk $disk | top: $procs"
-              sleep 60
-            done
-          }
-          monitor &
-          zig build ${{ matrix.jobs_flag }} roc build-test-zig -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast --summary all 2>&1
+          nohup bash -c 'while true; do
+            echo "[mon $(date -u +%H:%M:%S)] swap: $(sysctl -n vm.swapusage) | $(vm_stat | awk "/occupied by compressor|Swapouts/ {gsub(/\./,\"\",\$NF); printf \"%s=%s \", \$(NF-1), \$NF}")| load $(sysctl -n vm.loadavg)"
+            sleep 60
+          done' > "$RUNNER_TEMP/mon.log" 2>&1 &
+      - name: build roc + release test binaries
+        run: zig build -j1 roc build-test-zig -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast --summary all
+      - name: roc executable minimal check
+        run: ./zig-out/bin/roc check ./CONTRIBUTING/profiling/bench_repeated_check.roc
+      - name: execute tests in release mode
+        run: zig build -j1 run-test-zig -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false
+      - name: memory monitor log
+        if: always()
+        run: cat "$RUNNER_TEMP/mon.log"
