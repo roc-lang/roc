@@ -1,0 +1,198 @@
+*** SpecConstr pass driver and the three checks.
+***   check 1: type preservation + no new types + loop/jump arity  -> typePres
+***   check 2: semantic preservation on bounded inputs              -> semPres
+***   check 3: termination: lexicographic measure over the drain    -> SC-PASS monitor
+load sc.maude
+
+fmod SC-DRIVER is
+  protecting SC-PHASES .
+  protecting IR-EVAL .
+  protecting QID-LIST .
+
+  vars F W C X : Qid . vars E E1 : Expr . var EL : ExprList . var BL : BranchList . var P : Pat .
+  vars PS PO PG PG2 : Prog . var WS : Specs . vars N K BG : Nat . var LRS : LRegs . var FL : Flags .
+  var NT : String . var SHL : ShL . var B1 : Bool . vars S S2 : St . vars QL : ParamList . var T : Type .
+  var CDS : CtorDecls . var SV1 : SV . var SVS : SVL . var I : Int . var EL2 : ExprList .
+
+  op init : Prog Flags -> St .
+  eq init(PG, FL) = st(PG, none, noSp, 0, 65536, noLR, FL, "") .
+
+  op unwritten : Specs -> Specs .
+  eq unwritten(sp(F, K, SHL, W, false) <> WS) = sp(F, K, SHL, W, false) <> unwritten(WS) .
+  eq unwritten(WS) = noSp [owise] .
+  op specsSt : St -> Specs .
+  eq specsSt(st(PS, PO, WS, N, BG, LRS, FL, NT)) = WS .
+
+  *** deterministic drain (createSpecializations): write until nothing is unwritten
+  op drain : St -> St .
+  ceq drain(S) = drain(writeSpec(SP, S)) if SP <> WS := unwritten(specsSt(S)) /\ SP :: Spec .
+  eq drain(S) = S [owise] .
+  var SP : Spec .
+
+  op fnNames : Prog -> QidList .
+  eq fnNames(fn(F, QL, T, E) PG) = F fnNames(PG) .
+  eq fnNames(PG) = nil [owise] .
+  op normalizeAll : QidList St -> St .
+  eq normalizeAll(nil, S) = S .
+  eq normalizeAll(F QS, S) = normalizeAll(QS, normalize(F, S)) .
+  var QS : QidList .
+
+  *** rewriteExistingCalls: redirect calls inside emitted workers, once, by syntactic values
+  op redirect : St -> St .
+  eq redirect(st(PS, PO, WS, N, BG, LRS, FL, NT)) = st(PS, redirFns(PO, WS), WS, N, BG, LRS, FL, NT) .
+  op isWorker : Qid -> Bool .
+  eq isWorker(F) = find(string(F), "#w", 0) =/= notFound .
+  op redirFns : Prog Specs -> Prog .
+  eq redirFns(fn(F, QL, T, E) PG, WS) = fn(F, QL, T, if isWorker(F) then redirE(E, WS) else E fi) redirFns(PG, WS) .
+  eq redirFns(PG, WS) = PG [owise] .
+  op redirE : Expr Specs -> Expr .
+  op redirL : ExprList Specs -> ExprList .
+  op redirB : BranchList Specs -> BranchList .
+  eq redirE(cl(F, EL), WS) = redirCall(F, redirL(EL, WS), WS) .
+  eq redirE(tg(C, EL), WS) = tg(C, redirL(EL, WS)) . eq redirE(tp(EL), WS) = tp(redirL(EL, WS)) .
+  eq redirE(pr(F, EL), WS) = pr(F, redirL(EL, WS)) . eq redirE(pj(E, N), WS) = pj(redirE(E, WS), N) .
+  eq redirE(lt(X, E, E1), WS) = lt(X, redirE(E, WS), redirE(E1, WS)) .
+  eq redirE(mt(E, BL), WS) = mt(redirE(E, WS), redirB(BL, WS)) .
+  eq redirE(lp(T, QL, EL, E), WS) = lp(T, QL, redirL(EL, WS), redirE(E, WS)) .
+  eq redirE(ct(EL), WS) = ct(redirL(EL, WS)) . eq redirE(bk(E), WS) = bk(redirE(E, WS)) .
+  eq redirE(jn(W, QL, E, E1), WS) = jn(W, QL, redirE(E, WS), redirE(E1, WS)) .
+  eq redirE(jp(W, EL), WS) = jp(W, redirL(EL, WS)) .
+  eq redirE(E, WS) = E [owise] .
+  eq redirL(enil, WS) = enil . eq redirL((E, EL), WS) = redirE(E, WS), redirL(EL, WS) .
+  eq redirB(bnil, WS) = bnil . eq redirB((P => E) | BL, WS) = (P => redirE(E, WS)) | redirB(BL, WS) .
+  op synVal : Expr -> SV .
+  op synVals : ExprList -> SVL .
+  eq synVal(tg(C, EL)) = kc(C, synVals(EL)) .
+  eq synVal(tp(EL)) = kt(synVals(EL)) .
+  eq synVal(E) = at(E, tBot) [owise] .
+  eq synVals(enil) = svnil . eq synVals((E, EL)) = synVal(E) ~ synVals(EL) .
+  op redirCall : Qid ExprList Specs -> Expr .
+  ceq redirCall(F, EL, WS) = cl(W, leaves(SHL, synVals(EL))) if sp(F, K, SHL, W, B1) := bestSpec(WS, F, synVals(EL), noSp) .
+  eq redirCall(F, EL, WS) = cl(F, EL) [owise] .
+
+  *** Pass.run order: collect -> drain -> redirect -> normalize originals -> drain -> exit selection
+  op scSt : Prog Flags -> St .
+  eq scSt(PG, FL) = exitPhase(drain(normalizeAll(fnNames(PG), redirect(drain(collect(init(PG, FL))))))) .
+  op typeDecls : Prog -> Prog .
+  eq typeDecls(ty(X, CDS) PG) = ty(X, CDS) typeDecls(PG) .
+  eq typeDecls(PG) = none [owise] .
+  op outProg : St -> Prog .
+  eq outProg(st(PS, PO, WS, N, BG, LRS, FL, NT)) = typeDecls(PS) PO .
+  op sc : Prog Flags -> Prog .
+  eq sc(PG, FL) = outProg(scSt(PG, FL)) .
+
+  *** ------------------------- checks -------------------------
+  *** check 1: the output is well typed (this covers continue/jump arity and pass invariants) and
+  ***     mentions no type the frozen store does not hold
+  op newTypes : Prog Prog -> TypeSet .
+  eq newTypes(PG, PG2) = closeT(typesOf(PG2)) minus closeT(typesOf(PG) + tInt + tN('Bool)) .
+  op typePres : Prog Prog -> Bool .
+  eq typePres(PG, PG2) = wellTyped(PG2) and newTypes(PG, PG2) == tsnil .
+  op badFns : Prog Prog -> TypeList .     *** diagnostics: the type error of each ill-typed fn
+  eq badFns(PG, fn(F, QL, T, E) PG2) =
+     (if fits(whyFn(PG, F), T) then tnil else whyFn(PG, F) fi) ; badFns(PG, PG2) .
+  eq badFns(PG, PG2) = tnil [owise] .
+
+  *** check 2: same result on every input, at a fuel where the source terminates
+  sort Inputs . subsort ValList < Inputs .
+  op inil : -> Inputs [ctor] .
+  op _;;_ : Inputs Inputs -> Inputs [ctor assoc id: inil] .
+  var VL : ValList . var IN : Inputs .
+  sort Mismatch .
+  op agree : -> Mismatch [ctor] .
+  op differ : ValList Res Res -> Mismatch [ctor] .
+  op semPres : Prog Prog Qid Inputs Nat -> Mismatch .
+  eq semPres(PG, PG2, F, inil, K) = agree .
+  eq semPres(PG, PG2, F, VL ;; IN, K) =
+     cmpRes(VL, run(PG, F, VL, K), run(PG2, F, VL, K), PG, PG2, F, IN, K) .
+  op cmpRes : ValList Res Res Prog Prog Qid Inputs Nat -> Mismatch .
+  eq cmpRes(VL, oof, R2, PG, PG2, F, IN, K) = semPres(PG, PG2, F, IN, K) .
+  eq cmpRes(VL, R1, R2, PG, PG2, F, IN, K) =
+     if R1 == R2 then semPres(PG, PG2, F, IN, K) else differ(VL, R1, R2) fi [owise] .
+  vars R1 R2 : Res .
+
+  *** integer inputs 0..N-1 for a one-Int entry point
+  op ints : Nat -> Inputs .
+  eq ints(0) = inil .
+  eq ints(s N) = ints(N) ;; vi(N) .
+  *** natural-number values 0..N-1 for a one-Nat entry point
+  op natv : Nat -> Val .
+  eq natv(0) = vt('Z, vnil) .
+  eq natv(s N) = vt('S, natv(N)) .
+  op nats : Nat -> Inputs .
+  eq nats(0) = inil .
+  eq nats(s N) = nats(N) ;; natv(N) .
+
+  *** sizes for growth/termination evidence
+  op size : Prog -> Nat .
+  eq size(PG) = progSize(PG) .
+  op workers : Prog -> Nat .
+  eq workers(fn(F, QL, T, E) PG) = (if isWorker(F) then 1 else 0 fi) + workers(PG) .
+  eq workers(PG) = 0 [owise] .
+
+  *** combined verdict
+  sort Report .
+  op report : Bool TypeSet Mismatch Nat Nat -> Report [ctor] .   *** well-typed, new types, semantics, size, workers
+  op check : Prog Flags Qid Inputs Nat -> Report .
+  eq check(PG, FL, F, IN, K) = check2(PG, sc(PG, FL), F, IN, K) .
+  op passes : Report -> Bool .          *** well typed, no new types, same results
+  var RW RS : Nat .
+  eq passes(report(true, tsnil, agree, RW, RS)) = true .
+  eq passes(RP) = false [owise] .
+  var RP : Report .
+  op check2 : Prog Prog Qid Inputs Nat -> Report .
+  eq check2(PG, PG2, F, IN, K) =
+     report(wellTyped(PG2), newTypes(PG, PG2), semPres(PG, PG2, F, IN, K), size(PG2), workers(PG2)) .
+endfm
+
+*** ---------------------------------------------------------------------
+*** Nondeterministic drain for `search`, with a termination-measure monitor.
+*** measure = (free worker capacity, originals left to normalize, unwritten workers), lexicographic
+*** ---------------------------------------------------------------------
+mod SC-PASS is
+  protecting SC-DRIVER .
+
+  sorts Phase Cfg Mu .
+  ops pDrain1 pNorm pDrain2 pDone : -> Phase [ctor] .
+  op mu : Nat Nat Nat -> Mu [ctor] .
+  op cfg : Phase St QidList Mu Bool Nat -> Cfg [ctor] .   *** phase, state, originals left, last measure, violated?, steps
+
+  vars F W : Qid . var QS QS2 : QidList . vars S S2 : St . var M M2 : Mu . var V : Bool . vars N N2 K A B C A2 B2 C2 : Nat .
+  var PG : Prog . var FL : Flags . var SP : Spec . var WS : Specs . var SHL : ShL .
+  vars PS PO : Prog . var BG : Nat . var LRS : LRegs . var NT : String .
+
+  op cap : Specs QidList -> Nat .
+  eq cap(WS, nil) = 0 .
+  eq cap(WS, F QS) = sd(3, min(3, countSpecs(WS, F))) + cap(WS, QS) .
+  op nUnwritten : Specs -> Nat .
+  eq nUnwritten(sp(F, K, SHL, W, false) <> WS) = s nUnwritten(WS) .
+  eq nUnwritten(WS) = 0 [owise] .
+  op muOf : St QidList QidList -> Mu .
+  eq muOf(S, QS, QS2) = mu(cap(specsSt(S), QS), size(QS2), nUnwritten(specsSt(S))) .
+  op size : QidList -> Nat .
+  eq size(nil) = 0 . eq size(F QS) = s size(QS) .
+  op _<<_ : Mu Mu -> Bool .
+  eq mu(A, B, C) << mu(A2, B2, C2) = A < A2 or (A == A2 and (B < B2 or (B == B2 and C < C2))) .
+
+  op start : Prog Flags -> Cfg .
+  eq start(PG, FL) = cfg(pDrain1, collect(init(PG, FL)), fnNames(PG), mu(1000000, 1000000, 1000000), false, 0) .
+
+  op origs : St -> QidList .
+  eq origs(st(PS, PO, WS, N, BG, LRS, FL, NT)) = fnNames(PS) .
+
+  op step : Phase St QidList Mu Bool Nat -> Cfg .
+  eq step(pDrain1, S, QS, M, V, N) = cfg(pDrain1, S, QS, muOf(S, origs(S), QS), V or not (muOf(S, origs(S), QS) << M), s N) .
+  eq step(pDrain2, S, QS, M, V, N) = cfg(pDrain2, S, QS, muOf(S, origs(S), QS), V or not (muOf(S, origs(S), QS) << M), s N) .
+  eq step(pNorm, S, QS, M, V, N) = cfg(pNorm, S, QS, muOf(S, origs(S), QS), V or not (muOf(S, origs(S), QS) << M), s N) .
+
+  rl [write1] : cfg(pDrain1, st(PS, PO, sp(F, K, SHL, W, false) <> WS, N2, BG, LRS, FL, NT), QS, M, V, N)
+             => step(pDrain1, writeSpec(sp(F, K, SHL, W, false), st(PS, PO, sp(F, K, SHL, W, false) <> WS, N2, BG, LRS, FL, NT)), QS, M, V, N) .
+  crl [drained1] : cfg(pDrain1, S, QS, M, V, N) => cfg(pNorm, redirect(S), QS, M, V, N)
+    if nUnwritten(specsSt(S)) == 0 .
+  rl [norm] : cfg(pNorm, S, QS F QS2, M, V, N) => step(pNorm, normalize(F, S), QS QS2, M, V, N) .
+  rl [normDone] : cfg(pNorm, S, nil, M, V, N) => cfg(pDrain2, S, nil, M, V, N) .
+  rl [write2] : cfg(pDrain2, st(PS, PO, sp(F, K, SHL, W, false) <> WS, N2, BG, LRS, FL, NT), QS, M, V, N)
+             => step(pDrain2, writeSpec(sp(F, K, SHL, W, false), st(PS, PO, sp(F, K, SHL, W, false) <> WS, N2, BG, LRS, FL, NT)), QS, M, V, N) .
+  crl [drained2] : cfg(pDrain2, S, QS, M, V, N) => cfg(pDone, exitPhase(S), QS, M, V, N)
+    if nUnwritten(specsSt(S)) == 0 .
+endm

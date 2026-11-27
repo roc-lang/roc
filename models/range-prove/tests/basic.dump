@@ -1,0 +1,210 @@
+RPD P 0 1
+B 99
+S 99 havoc 98 l68:str
+S 98 ref 97 l69:str local l68 0 0
+S 97 ll 96 l58:list str_to_utf8 0 l69:str
+S 96 ref 95 l67:str local l68 0 0
+S 95 ll 94 l66:str str_trim 0 l67:str
+S 94 ref 93 l65:str local l66 0 0
+S 93 ll 92 l64:other u64_from_str 0 l65:str
+S 92 join j6 81 91 l57:u64
+S 91 ref 90 l59:other local l64 0 0
+S 90 ref 89 l60:other local l59 0 0
+S 89 ref 88 l61:u32 discriminant l60 0 0
+S 88 switch l61 87 1:85
+S 85 ref 84 l62:u64 tag_payload_struct l60 0 1
+S 84 ref 83 l63:u64 local l62 0 0
+S 83 ref 82 l57:u64 local l63 0 0
+S 82 jump j6
+S 87 lit 86 l57:u64 3
+S 86 jump j6
+S 81 ref 80 l7:list local l58 0 0
+S 80 ref 79 l8:u64 local l57 0 0
+S 79 ref 78 l56:list local l7 0 0
+S 78 ll 77 l21:u64 list_len 0 l56:list
+S 77 join j0 2 76 l6:u64
+S 76 lit 75 l54:u64 0
+S 75 ref 74 l53:u64 local l21 0 0
+S 74 ll 73 l52:bool num_is_gt 0 l53:u64 l54:u64
+S 73 switch l52 4 1:72
+S 72 join j5 61 71 l39:u64
+S 71 ref 70 l50:u64 local l8 0 0
+S 70 ref 69 l51:u64 local l21 0 0
+S 69 ll 68 l49:bool num_is_lt 0 l50:u64 l51:u64
+S 68 switch l49 65 1:67
+S 67 ref 66 l39:u64 local l8 0 0
+S 66 jump j5
+S 65 lit 64 l48:u64 1
+S 64 ref 63 l47:u64 local l21 0 0
+S 63 ll 62 l39:u64 num_int_sub_crash_on_overflow 0 l47:u64 l48:u64
+S 62 jump j5
+S 61 join j4 46 60 l35:u8
+S 60 ref 59 l46:list local l7 0 0
+S 59 ll 58 l44:u64 list_len 0 l46:list
+S 58 ref 57 l43:u64 local l39 0 0
+S 57 ll 56 l42:bool num_is_lt 0 l43:u64 l44:u64
+S 56 ref 55 l41:bool local l42 0 0
+S 55 ll 54 l40:bool bool_likely 0 l41:bool
+S 54 switch l40 48 1:53
+S 53 ref 52 l37:list local l7 0 0
+S 52 ref 51 l38:u64 local l39 0 0
+S 51 ll 50 l36:u8 list_get_unsafe 0 l37:list l38:u64
+S 50 ref 49 l35:u8 local l36 0 0
+S 49 jump j4
+S 48 lit 47 l35:u8 13
+S 47 jump j4
+S 46 ref 45 l34:u8 local l35 0 0
+S 45 ll 44 l32:u64 u8_to_u64 0 l34:u8
+S 44 lit 43 l33:u64 10
+S 43 ll 42 l14:u64 num_int_add_crash_on_overflow 0 l32:u64 l33:u64
+S 42 join j3 29 41 l18:u64
+S 41 lit 40 l31:u64 300
+S 40 ref 39 l30:u64 local l14 0 0
+S 39 ll 38 l29:bool num_is_gt 0 l30:u64 l31:u64
+S 38 switch l29 35 1:37
+S 37 lit 36 l18:u64 1
+S 36 jump j3
+S 35 lit 34 l28:u64 1
+S 34 ref 33 l27:u64 local l14 0 0
+S 33 ll 32 l26:u64 num_int_add_crash_on_overflow 0 l27:u64 l28:u64
+S 32 ref 31 l25:u64 local l14 0 0
+S 31 ll 30 l18:u64 num_div_trunc_by_checked 0 l25:u64 l26:u64
+S 30 jump j3
+S 29 join j2 18 28 l17:u64
+S 28 lit 27 l24:u64 8
+S 27 ref 26 l23:u64 local l21 0 0
+S 26 ll 25 l22:bool num_is_gte 0 l23:u64 l24:u64
+S 25 switch l22 20 1:24
+S 24 lit 23 l20:u64 8
+S 23 ref 22 l19:u64 local l21 0 0
+S 22 ll 21 l17:u64 num_int_sub_crash_on_overflow 0 l19:u64 l20:u64
+S 21 jump j2
+S 20 lit 19 l17:u64 0
+S 19 jump j2
+S 18 ref 17 l15:u64 local l18 0 0
+S 17 ref 16 l16:u64 local l17 0 0
+S 16 ll 15 l9:u64 num_int_add_crash_on_overflow 0 l15:u64 l16:u64
+S 15 join j1 6 14 l10:u64
+S 14 lit 13 l13:u64 1
+S 13 ref 12 l12:u64 local l14 0 0
+S 12 ll 11 l11:bool num_int_add_overflows 0 l12:u64 l13:u64
+S 11 switch l11 8 1:10
+S 10 lit 9 l10:u64 5
+S 9 jump j1
+S 8 lit 7 l10:u64 6
+S 7 jump j1
+S 6 ll 5 l6:u64 num_int_add_crash_on_overflow 0 l9:u64 l10:u64
+S 5 jump j0
+S 4 lit 3 l6:u64 0
+S 3 jump j0
+S 2 ll 1 l5:str u64_to_str 0 l6:u64
+S 1 havoc 0 l4:zst
+S 0 ret l4:zst
+E proven 63 0 0
+E cmp 57 1 0
+E switch 54 1 0
+E proven 43 0 0
+E cmp 39 0 0
+E switch 38 0 0
+E proven 33 0 0
+E div 31 0 0
+E proven 22 0 0
+E ovf 12 0 0
+E switch 11 0 0
+RPD END
+RPD P 0 2
+B 99
+S 99 havoc 98 l68:str
+S 98 ref 97 l69:str local l68 0 0
+S 97 ll 96 l58:list str_to_utf8 0 l69:str
+S 96 ref 95 l67:str local l68 0 0
+S 95 ll 94 l66:str str_trim 0 l67:str
+S 94 ref 93 l65:str local l66 0 0
+S 93 ll 92 l64:other u64_from_str 0 l65:str
+S 92 join j6 81 91 l57:u64
+S 91 ref 90 l59:other local l64 0 0
+S 90 ref 89 l60:other local l59 0 0
+S 89 ref 88 l61:u32 discriminant l60 0 0
+S 88 switch l61 87 1:85
+S 85 ref 84 l62:u64 tag_payload_struct l60 0 1
+S 84 ref 83 l63:u64 local l62 0 0
+S 83 ref 82 l57:u64 local l63 0 0
+S 82 jump j6
+S 87 lit 86 l57:u64 3
+S 86 jump j6
+S 81 ref 80 l7:list local l58 0 0
+S 80 ref 79 l8:u64 local l57 0 0
+S 79 ref 78 l56:list local l7 0 0
+S 78 ll 77 l21:u64 list_len 0 l56:list
+S 77 join j0 2 76 l6:u64
+S 76 lit 75 l54:u64 0
+S 75 ref 74 l53:u64 local l21 0 0
+S 74 ll 73 l52:bool num_is_gt 0 l53:u64 l54:u64
+S 73 switch l52 4 1:72
+S 72 join j5 61 71 l39:u64
+S 71 ref 70 l50:u64 local l8 0 0
+S 70 ref 69 l51:u64 local l21 0 0
+S 69 ll 68 l49:bool num_is_lt 0 l50:u64 l51:u64
+S 68 switch l49 65 1:67
+S 67 ref 66 l39:u64 local l8 0 0
+S 66 jump j5
+S 65 lit 64 l48:u64 1
+S 64 ref 63 l47:u64 local l21 0 0
+S 63 ll 62 l39:u64 num_int_sub_proven_cannot_overflow 0 l47:u64 l48:u64
+S 62 jump j5
+S 61 join j4 46 60 l35:u8
+S 60 ref 59 l46:list local l7 0 0
+S 59 ll 58 l44:u64 list_len 0 l46:list
+S 58 ref 57 l43:u64 local l39 0 0
+S 57 tag 56 l42:bool 1 1
+S 56 ref 55 l41:bool local l42 0 0
+S 55 ll 54 l40:bool bool_likely 0 l41:bool
+S 54 ref 52 l37:list local l7 0 0
+S 52 ref 51 l38:u64 local l39 0 0
+S 51 ll 50 l36:u8 list_get_unsafe 0 l37:list l38:u64
+S 50 ref 49 l35:u8 local l36 0 0
+S 49 jump j4
+S 46 ref 45 l34:u8 local l35 0 0
+S 45 ll 44 l32:u64 u8_to_u64 0 l34:u8
+S 44 lit 43 l33:u64 10
+S 43 ll 42 l14:u64 num_int_add_proven_cannot_overflow 0 l32:u64 l33:u64
+S 42 join j3 29 41 l18:u64
+S 41 lit 40 l31:u64 300
+S 40 ref 39 l30:u64 local l14 0 0
+S 39 tag 38 l29:bool 0 0
+S 38 lit 34 l28:u64 1
+S 34 ref 33 l27:u64 local l14 0 0
+S 33 ll 32 l26:u64 num_int_add_proven_cannot_overflow 0 l27:u64 l28:u64
+S 32 ref 31 l25:u64 local l14 0 0
+S 31 ll 30 l18:u64 num_div_trunc_by 0 l25:u64 l26:u64
+S 30 jump j3
+S 29 join j2 18 28 l17:u64
+S 28 lit 27 l24:u64 8
+S 27 ref 26 l23:u64 local l21 0 0
+S 26 ll 25 l22:bool num_is_gte 0 l23:u64 l24:u64
+S 25 switch l22 20 1:24
+S 24 lit 23 l20:u64 8
+S 23 ref 22 l19:u64 local l21 0 0
+S 22 ll 21 l17:u64 num_int_sub_proven_cannot_overflow 0 l19:u64 l20:u64
+S 21 jump j2
+S 20 lit 19 l17:u64 0
+S 19 jump j2
+S 18 ref 17 l15:u64 local l18 0 0
+S 17 ref 16 l16:u64 local l17 0 0
+S 16 ll 15 l9:u64 num_int_add_crash_on_overflow 0 l15:u64 l16:u64
+S 15 join j1 6 14 l10:u64
+S 14 lit 13 l13:u64 1
+S 13 ref 12 l12:u64 local l14 0 0
+S 12 tag 11 l11:bool 0 0
+S 11 lit 7 l10:u64 6
+S 7 jump j1
+S 6 ll 5 l6:u64 num_int_add_crash_on_overflow 0 l9:u64 l10:u64
+S 5 jump j0
+S 4 lit 3 l6:u64 0
+S 3 jump j0
+S 2 ll 1 l5:str u64_to_str 0 l6:u64
+S 1 havoc 0 l4:zst
+S 0 ret l4:zst
+E proven 16 0 0
+E proven 6 0 0
+RPD END
