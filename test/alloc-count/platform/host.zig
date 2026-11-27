@@ -1,6 +1,5 @@
-//! Host that counts the allocations the running app performs and exposes the
-//! count to the app as a hosted function (`Host.alloc_count!`), so Roc test
-//! apps can assert how many allocations a region of code performed.
+//! Counts allocation requests and requested bytes so Roc test apps can
+//! distinguish copying a collection from allocating a small wrapper.
 
 const std = @import("std");
 const shim_io = @import("shim_io");
@@ -61,9 +60,11 @@ var g_roc_ops = RocOps{
 /// own uses of builtins helpers (e.g. RocStr.fromSlice) call the vtable
 /// callbacks directly and are deliberately not counted.
 var g_alloc_count: u64 = 0;
+var g_alloc_bytes: u64 = 0;
 
-fn countAlloc() void {
+fn countAlloc(bytes: usize) void {
     g_alloc_count += 1;
+    g_alloc_bytes += bytes;
 }
 
 /// Host.alloc_count! (hosted): () => U64 involves no refcounted values, so
@@ -72,12 +73,17 @@ fn hostedAllocCount() callconv(.c) u64 {
     return g_alloc_count;
 }
 
+fn hostedAllocBytes() callconv(.c) u64 {
+    return g_alloc_bytes;
+}
+
 fn getOps() *RocOps {
     return &g_roc_ops;
 }
 
 comptime {
     @export(&hostedAllocCount, .{ .name = "roc_host_alloc_count", .visibility = .hidden });
+    @export(&hostedAllocBytes, .{ .name = "roc_host_alloc_bytes", .visibility = .hidden });
     host_alloc.exportRuntimeSymbols(getOps, .{ .on_alloc = countAlloc });
 }
 

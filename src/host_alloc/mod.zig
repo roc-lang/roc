@@ -100,7 +100,7 @@ pub const ExportOptions = struct {
     /// Runs before each exported `roc_alloc`/`roc_realloc` call (allocation
     /// counting). Host-internal builtins-helper calls go through the vtable
     /// directly and deliberately bypass this hook.
-    on_alloc: ?fn () void = null,
+    on_alloc: ?fn (requested_bytes: usize) void = null,
 };
 
 /// The six runtime-symbol implementations, typed directly from
@@ -128,7 +128,7 @@ pub fn exportRuntimeFns(comptime fns: RuntimeFns) void {
 pub fn exportRuntimeSymbols(comptime getOps: fn () *RocOps, comptime options: ExportOptions) void {
     const wrappers = struct {
         fn hostAlloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
-            if (options.on_alloc) |on_alloc| on_alloc();
+            if (options.on_alloc) |on_alloc| on_alloc(length);
             const ops = getOps();
             return ops.roc_alloc(ops, length, alignment);
         }
@@ -139,7 +139,7 @@ pub fn exportRuntimeSymbols(comptime getOps: fn () *RocOps, comptime options: Ex
         }
 
         fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
-            if (options.on_alloc) |on_alloc| on_alloc();
+            if (options.on_alloc) |on_alloc| on_alloc(new_length);
             const ops = getOps();
             return ops.roc_realloc(ops, ptr, new_length, alignment);
         }
@@ -201,6 +201,7 @@ test "small alignments still keep the size prefix aligned" {
 
 const AccountingTestHost = struct {
     count: usize = 0,
+    requested_bytes: usize = 0,
     var env: @This() = .{};
     var ops: RocOps = undefined;
 
@@ -210,8 +211,9 @@ const AccountingTestHost = struct {
     fn getOps() *RocOps {
         return &ops;
     }
-    fn countAlloc() void {
+    fn countAlloc(bytes: usize) void {
         env.count += 1;
+        env.requested_bytes += bytes;
     }
 };
 
@@ -245,6 +247,7 @@ test "alloc-count counts exported alloc and realloc but not private callbacks or
     try std.testing.expectEqual(@as(usize, 3), Host.env.count);
     exported.roc_dealloc(shrunk, 8);
     try std.testing.expectEqual(@as(usize, 3), Host.env.count);
+    try std.testing.expectEqual(@as(usize, 20 + 40 + 5), Host.env.requested_bytes);
 }
 
 test "realloc failure preserves the live allocation and its bytes" {

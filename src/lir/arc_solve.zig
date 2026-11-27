@@ -593,14 +593,14 @@ pub const Solution = struct {
     /// Whether a call from any emission unit may demand `proc`'s
     /// outcome-restitution variant (design.md "Outcome-Conditioned Argument
     /// Restitution", published outcome variants): a publishing worker
-    /// (`LIR.LirProcSpec.outcome_publisher`) this program emits whose solved
+    /// (`LIR.LirProcSpec.module_worker`) this program emits whose solved
     /// capability is nonempty and whose signature nothing pins, or an
     /// external procedure whose object published one
     /// (`LIR.LirProcSpec.rc_outcomes`).
     pub fn publishesOutcomeVariant(self: *const Solution, store: *const LirStore, proc: LIR.LirProcSpecId) bool {
         if (self.availableOutcomeSpanOf(proc).isEmpty()) return false;
         const spec = store.getProcSpec(proc);
-        return spec.external or (spec.outcome_publisher and !self.isPinnedProc(proc));
+        return spec.external or (spec.module_worker and !self.isPinnedProc(proc));
     }
 
     pub fn availableOutcomeSpanOf(self: *const Solution, proc: LIR.LirProcSpecId) arc_sig.OutcomeSpan {
@@ -1404,7 +1404,7 @@ const OutcomeWalkState = struct {
     stmt: u32,
     present: bool,
     /// The discriminant the returned local was last tagged with, absent
-    /// when no `assign_tag` witnesses it.
+    /// when no fixed-discriminant constructor witnesses it.
     discriminant: OptionalU32,
 };
 
@@ -1500,12 +1500,16 @@ pub const RefinementRcStatements = enum { absent, skipped };
 pub fn findOutcomeRefinement(
     allocator: Allocator,
     store: *const LirStore,
+    layouts: *const layout_mod.Store,
     target: LIR.LocalId,
     next: LIR.CFStmtId,
     outcomes: arc_sig.OutcomeSpan,
     rc_statements: RefinementRcStatements,
 ) SolveError!?LIR.CFStmtId {
     if (outcomes.isEmpty()) return null;
+    // A descriptor-backed callee may instantiate to a scalar-only union.
+    // Such a result has no tracked RC value to carry a restitution receipt.
+    if (!layouts.layoutContainsRefcounted(layouts.getLayout(store.getLocal(target).layout_idx))) return null;
     var aliases = std.ArrayList(LIR.LocalId).empty;
     defer aliases.deinit(allocator);
     try aliases.append(allocator, target);
@@ -1679,13 +1683,18 @@ fn computeOutcomeRestitution(
         }
         if (solution.isPinnedProc(proc_id) and !solution.stability_pinned.isSet(proc_index)) continue;
         const body = proc.arcBody() orelse continue;
-        if (layouts.getLayout(proc.ret_layout).tag != .tag_union) continue;
+        if (layouts.getLayout(proc.ret_layout).tag != .tag_union and proc.dyn_result == .none) continue;
 
         const proc_stmts = statements_by_proc.of(proc_index);
         var returned_local: ?LIR.LocalId = null;
+        const dyn_result = proc.dyn_result.get();
+        var has_result_constructor = dyn_result == null;
         var return_shape_valid = true;
         for (proc_stmts) |stmt_id| {
             const stmt = store.getCFStmtImmediate(stmt_id);
+            if (!has_result_constructor and stmt.* == .dyn and stmt.dyn.target == dyn_result) {
+                has_result_constructor = body_clone.constructedDiscriminant(store, stmt.*) != null;
+            }
             if (stmt.* != .ret) continue;
             const local = stmt.ret.value;
             if (returned_local) |expected| {
@@ -1697,8 +1706,9 @@ fn computeOutcomeRestitution(
                 returned_local = local;
             }
         }
-        if (!return_shape_valid or returned_local == null) continue;
+        if (!return_shape_valid or returned_local == null or !has_result_constructor) continue;
         const ret_local = returned_local.?;
+        if (dyn_result != null and dyn_result != ret_local) continue;
         const ret_index = @backingInt(ret_local);
         if (ret_index >= rc_local.len or !rc_local[ret_index]) continue;
 
@@ -1767,10 +1777,10 @@ fn computeOutcomeRestitution(
                 const current: LIR.CFStmtId = @fromBackingInt(@intCast(walk.stmt));
                 const stmt = store.getCFStmtImmediate(current);
                 var next_state = walk;
-                // Only `assign_tag` witnesses a result discriminant; every
-                // other write to the returned local kills the witness first.
+                // A constructor with a fixed discriminant can establish a new
+                // witness. Every write first kills the previous one.
                 if (body_clone.writtenLocal(stmt.*)) |target| {
-                    if (target == ret_local) next_state.discriminant = .none;
+                    if (target == ret_local) next_state.discriminant = .of(body_clone.constructedDiscriminant(store, stmt.*));
                 }
 
                 const pushNext = struct {
@@ -1866,7 +1876,6 @@ fn computeOutcomeRestitution(
                             valid = false;
                             break;
                         }
-                        if (assign.target == ret_local) next_state.discriminant = .some(assign.discriminant);
                     },
                     .store_tag => |assign| {
                         if (assign.payload) |payload| {

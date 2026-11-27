@@ -662,7 +662,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     // would retain each unit where the variant takes it, so borrowing saves
     // no caller any work and would only emit a second body. A position that
     // lends the return, or holds a demand hole, keeps its borrowed mode.
-    // Exported workers additionally own positions with a field-take benefit:
+    // Cross-unit workers additionally own positions with a field-take benefit:
     // their importers cannot demand an owned variant. The producer commits
     // this convention independently of callers, which retain kept arguments.
     for (0..store.procSpecCount()) |proc_index| {
@@ -670,7 +670,8 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         if (solution.isPinnedProc(proc)) continue;
         const sig = solution.sigOf(proc);
         var mask = dismantles.ownedOnlyParamTotals(proc);
-        if (store.getProcSpecImmediate(proc).exported) mask |= dismantles.ownedOnlyParamBenefits(proc);
+        const spec = store.getProcSpecImmediate(proc);
+        if (spec.exported or spec.module_worker) mask |= dismantles.ownedOnlyParamBenefits(proc);
         mask &= sig.borrowed_params;
         if (sig.ret_mode == .borrowed) mask &= ~sig.ret_lenders;
         if (mask == 0) continue;
@@ -7028,7 +7029,7 @@ const Inserter = struct {
         sig: arc_sig.RcSig,
     ) ResourceError!?OutcomeRestitution {
         const bit = arc_sig.paramBit(position) orelse return null;
-        const refinement = try arc_solve.findOutcomeRefinement(self.emission_allocator, self.store, target, next, sig.outcomes, .absent) orelse return null;
+        const refinement = try arc_solve.findOutcomeRefinement(self.emission_allocator, self.store, self.layouts, target, next, sig.outcomes, .absent) orelse return null;
         const switch_stmt = self.store.getCFStmtImmediate(refinement).switch_stmt;
         const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
         const outcomes = self.solution.sigTable().outcomesOf(sig);
@@ -7092,7 +7093,7 @@ const Inserter = struct {
             self.outcomeArgumentsHaveDistinctPlaces(span, outcome_sig);
         const outcome_mask = self.outcomeRestitutableMask(outcome_sig);
         const outcome_refinement = if (outcome_places_distinct)
-            try arc_solve.findOutcomeRefinement(self.emission_allocator, self.store, target, next, outcome_sig.outcomes, .absent)
+            try arc_solve.findOutcomeRefinement(self.emission_allocator, self.store, self.layouts, target, next, outcome_sig.outcomes, .absent)
         else
             null;
 
@@ -8756,8 +8757,9 @@ test "arc insertion boundary exists" {
     std.testing.refAllDecls(@This());
 }
 
-test "RC exported field-take convention owns conditional partial consumers" {
-    for ([_]bool{ false, true }) |exported| {
+test "RC cross-unit field-take convention owns conditional partial consumers" {
+    const Boundary = enum { private, program_worker, exported };
+    for (std.enums.values(Boundary)) |boundary| {
         var f = try ArcTest.init(testing.allocator);
         defer f.deinit();
         const pair_layout = try f.layouts.putStructFields(&.{
@@ -8777,12 +8779,13 @@ test "RC exported field-take convention owns conditional partial consumers" {
         ));
         const untouched = try f.assignList(empty, &.{}, try f.ret(empty));
         const proc = try f.addProc(&.{ pair, condition }, try f.switchStmt(condition, consuming, untouched, null), f.list_i64);
-        f.store.getProcSpecPtr(proc).exported = exported;
+        f.store.getProcSpecPtr(proc).exported = boundary == .exported;
+        f.store.getProcSpecPtr(proc).module_worker = boundary != .private;
         _ = try insert(&f.store, &f.layouts, .{ .specialize = false });
 
-        const borrowed: u64 = if (exported) 0 else 1;
+        const borrowed: u64 = @intFromBool(boundary == .private);
         try testing.expectEqual(borrowed, f.store.getProcSpecImmediate(proc).rc_borrowed_params);
-        try testing.expectEqual(@as(usize, if (exported) 0 else 1), f.countRc(field, .incref));
+        try testing.expectEqual(@as(usize, @intCast(borrowed)), f.countRc(field, .incref));
         try testing.expectEqual(@as(usize, 1), f.store.procSpecCount());
         // Certification is explicit so the ReleaseFast unit test checks both
         // paths, including the untouched residual field and early return.
@@ -16460,7 +16463,7 @@ test "RC emission units: a call demands an outcome-restitution variant within it
         _ = try addFailureReadingCaller(&f, .{ .callee = callee, .result_layout = try_list, .input = input, .reads_on_failure = case.reads_on_failure, .unit = case.caller });
         f.store.getProcSpecPtr(callee).emission_unit = case.callee;
         f.store.getProcSpecPtr(callee).exported = case.exported;
-        f.store.getProcSpecPtr(callee).outcome_publisher = case.exported or case.publisher;
+        f.store.getProcSpecPtr(callee).module_worker = case.exported or case.publisher;
 
         const base_proc_count = f.store.procSpecCount();
         _ = try insert(&f.store, &f.layouts, .{ .specialize = case.specialize });
@@ -16619,7 +16622,7 @@ test "RC published outcome variant: a failure join reached after a retained subl
     const worker = try f.addProc(&.{bytes}, body, try_list);
     f.store.getProcSpecPtr(worker).emission_unit = LIR.EmissionUnit.module(0);
     f.store.getProcSpecPtr(worker).exported = true;
-    f.store.getProcSpecPtr(worker).outcome_publisher = true;
+    f.store.getProcSpecPtr(worker).module_worker = true;
 
     const base_proc_count = f.store.procSpecCount();
     _ = try insert(&f.store, &f.layouts, .{ .specialize = false });
@@ -20648,6 +20651,48 @@ const DynFixture = struct {
         }
     }
 };
+
+test "ARC descriptor-backed outcome publishes only instantiation-independent discriminants" {
+    for ([_]bool{ false, true }) |fixed| {
+        var d = try DynFixture.init();
+        defer d.deinit();
+        const desc = try d.desc();
+        const input = try d.f.local(.str);
+        const choice = try d.f.local(.u32);
+        const result = try d.value(desc, .result);
+        const success = try d.op(result, .{ .tag = .{
+            .desc = desc,
+            .discriminant = .{ .immediate = 1 },
+            .payloads = try d.f.span(&.{input}),
+        } }, try d.f.ret(result));
+        const failure = try d.op(result, .{ .tag = .{
+            .desc = desc,
+            .discriminant = if (fixed) .{ .immediate = 0 } else .{ .local = choice },
+            .payloads = try d.f.span(&.{}),
+        } }, try d.f.ret(result));
+        const proc = try d.proc(&.{ input, choice, desc }, try d.f.switchStmt(choice, success, failure, null), d.dynamic, result);
+        const spec = d.f.store.getProcSpecPtr(proc);
+        spec.exported = true;
+        spec.module_worker = true;
+        try d.run(&.{});
+        try expectU32Span(&d.f.store, d.f.store.getProcSpec(proc).rc_outcomes, if (fixed) &.{ 0, 1, 1, 0 } else &.{});
+    }
+}
+
+test "ARC descriptor-backed outcome requires a tracked result at its call site" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    for ([_]layout_mod.Idx{ .u64, f.list_i64 }) |payload| {
+        const result_layout = try f.layouts.putTagUnion(&.{ try f.layouts.ensureZstLayout(), payload });
+        const result = try f.local(result_layout);
+        const disc = try f.local(.u32);
+        const ret = try f.ret(result);
+        const refine = try f.switchStmt(disc, ret, ret, null);
+        const read = try f.assignDiscriminant(disc, result, refine);
+        const actual = try arc_solve.findOutcomeRefinement(testing.allocator, &f.store, &f.layouts, result, read, .{ .start = 0, .len = 2 }, .absent);
+        try testing.expectEqual(if (payload == .u64) null else @as(?LIR.CFStmtId, refine), actual);
+    }
+}
 
 test "ARC dynamic product takes independently stored fields and preserves aliases" {
     for ([_]bool{ false, true }) |keep_record| {

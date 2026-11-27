@@ -1542,7 +1542,7 @@ pub const StaticDescs = struct {
         return current;
     }
 
-    /// The discriminant of the tag `name` of the closed tag union `ty`
+    /// The discriminant of the tag `name` of the fixed-row tag union `ty`
     /// (through nominal wrappers): its position among the union's tags,
     /// which is its variant's position in the union's descriptor.
     pub fn variantPosition(self: *StaticDescs, ty: TypeId, name: NameId) Allocator.Error!u32 {

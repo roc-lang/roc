@@ -1521,6 +1521,13 @@ pub const Builder = struct {
     /// The discriminant of the tag `name` under the tag union `ty`'s
     /// descriptor (through nominal wrappers), as an index operand.
     pub fn tagIndex(self: *Builder, ty: TypeId, name: types.NameId) Allocator.Error!LIR.DynIndex {
+        // Only the row extension can change label order. Open payload types
+        // affect storage, not the discriminant; expose its value in LIR.
+        const structural = try self.structuralType(try self.program.rowNodesAsVariables(self.worker_id, ty));
+        const represented = self.program.store.get(structural);
+        if (represented == .tag_union and represented.tag_union.ext == null) {
+            return .{ .immediate = try self.program.static_descs.variantPosition(structural, name) };
+        }
         return try self.tagIndexIn(try self.descWord(ty), name);
     }
 

@@ -28548,7 +28548,7 @@ and moving one that dies. A position that lends a borrowed return, or holds a
 demand hole, keeps its borrowed mode, and a pinned signature is never
 changed.
 
-An exported worker additionally commits owned parameter positions for which
+A worker callable from another module additionally commits owned parameter positions for which
 dismantle analysis proved an owned-only field-take benefit, including benefits
 forwarded through its callees. This is a producer-selected boundary convention:
 the module emits it whether or not any importer exists, and records that
@@ -28561,6 +28561,9 @@ early-error path the owning convention can add a retain/drop pair for a caller
 that keeps its argument; on a consuming path it permits the field transfer
 that a fixed borrowed import convention would prevent. No importer requests
 another body, and no extra vector combinations are enumerated for export.
+Whole-program `.boxy` lowering marks the same kinds of workers as module
+lowering (`LirProcSpec.module_worker`): their linkage is local, but their
+base convention must agree with the corresponding module export.
 
 Variant bodies are cloned with the existing statement-cloning machinery and
 added with `LirStore.addProcSpec`. Root procs are never specialized; their
@@ -28715,7 +28718,7 @@ failure path and `List.set` would copy it on every call. Every exported
 worker (`LIR.LirProcSpec.exported`: the template, integer list, lambda,
 dictionary-entry and default workers a module unit defines for other
 objects, of which the erased-ABI dictionary entries are pinned) is an
-outcome publisher (`LIR.LirProcSpec.outcome_publisher`), and a publisher
+outcome publisher (`LIR.LirProcSpec.module_worker`), and a publisher
 whose signature nothing pins and whose solved capability is nonempty
 publishes its outcome-restitution variant
 (`Solution.publishesOutcomeVariant`). ARC reserves an exported worker's
@@ -28768,10 +28771,9 @@ is needed. A nonempty
 capability retains every outcome row, including zero masks on consuming paths.
 
 The initial closed capability is deliberately exact and total. It applies only
-to a direct Roc procedure whose committed return layout is a top-level tag
-union whose committed representation contains RC state (so the certifier can
-track the result value), whose every normal return is reached with one
-statically known `assign_tag` discriminant for the current binding of the
+to a direct Roc procedure whose result is an RC-bearing tag union or
+descriptor-backed result storage, whose every normal return is reached with one
+statically known tag-constructor discriminant for the current binding of the
 returned local, and whose ownership-neutral
 control-flow graph can account mechanically for every ownership-moving
 statement on every path. The solver propagates one bit per represented owned
@@ -28813,7 +28815,11 @@ parameter mask is forbidden, because independent branches can otherwise
 materialize every subset of sixteen parameters.
 
 Every write to the returned local first kills the current discriminant witness;
-only an `assign_tag` to that exact binding establishes a replacement. Thus an
+only an `assign_tag` or a `dyn.tag` with an immediate discriminant to that
+exact binding establishes a replacement. A fixed tag row has the same
+label-ordered discriminants at every instantiation, even if a payload needs a
+descriptor. Lowering emits those indices directly; when the row itself is
+open, a table-supplied index proves no outcome. Thus an
 alias, `set_local`, call result, store, or other rebind between tag construction
 and return rejects the capability rather than reusing stale tag information.
 The initial join rule carries a known witness only across a jump whose body is
@@ -28829,7 +28835,8 @@ for the staged feature, not a fallback that later stages may compensate for.
 Expanding the boundary requires declaring the additional transfer equation
 here first and pinning both its accepted and rejected cases with tests.
 
-A caller uses restitution only when the result-control relation is explicit in
+A caller uses restitution only when its instantiated result carries RC state
+(so the certifier can track the call receipt) and the result-control relation is explicit in
 LIR. Until that proof succeeds the call continues to target the unconditional
 base procedure, which releases every unreturned owned argument itself. The
 direct call result may pass through pure same-value aliases and join

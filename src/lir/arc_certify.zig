@@ -5380,7 +5380,7 @@ const Certifier = struct {
             self.current_stmt = body;
             const return_local = self.current_return_local orelse
                 return self.fail("outcome-specialized proc did not have one exact return local", .{});
-            if (!self.isRc(return_local) or self.layouts.getLayout(proc.ret_layout).tag != .tag_union) {
+            if (!self.isRc(return_local) or (self.layouts.getLayout(proc.ret_layout).tag != .tag_union and proc.dyn_result.get() != return_local)) {
                 return self.fail("outcome-specialized proc did not return an RC-bearing top-level tag union", .{});
             }
             const params = self.store.getLocalSpan(proc.args);
@@ -5828,14 +5828,11 @@ const Certifier = struct {
                     } else _ = self.segment_scalars.remove(target);
                 }
             }
-            // Any write to the returned local kills its discriminant witness;
-            // `assign_tag` establishes a replacement after this kill.
+            // Check the constructor on the emitted path, never the solver's
+            // witness. Any other write invalidates the previous tag.
             if (self.current_return_local) |return_local| {
-                // Emission rebinding of the returned local kills its witness exactly
-                // as it does in the solver's outcome domain; `assign_tag`
-                // establishes a replacement witness after this generic kill.
                 if (body_clone.writtenLocal(stmt.*)) |target| {
-                    if (target == return_local) state.result_discriminant = .none;
+                    if (target == return_local) state.result_discriminant = .of(body_clone.constructedDiscriminant(self.store, stmt.*));
                 }
             }
             if (state.outcomeDiscriminantCount() != 0) {
@@ -5998,9 +5995,6 @@ const Certifier = struct {
                     } else {
                         const operands = [_]LIR.LocalId{};
                         try self.applyAggregate(&state, assign.target, &operands);
-                    }
-                    if (self.current_return_local != null and assign.target == self.current_return_local.?) {
-                        state.result_discriminant = .some(assign.discriminant);
                     }
                     // A constructor is as strong a witness as a switch arm.
                     // Track the value (not the local) so copies see the same
@@ -6867,7 +6861,7 @@ const Certifier = struct {
                 RestitutionReceipt,
                 receipts_buffer[0..receipt_len],
             );
-            const refinement = try arc_solve.findOutcomeRefinement(self.allocator, self.store, target, next, callee_sig.outcomes, .skipped);
+            const refinement = try arc_solve.findOutcomeRefinement(self.allocator, self.store, self.layouts, target, next, callee_sig.outcomes, .skipped);
             const info = &self.values.items[target_value];
             info.call_outcomes = callee_sig.outcomes;
             info.call_restitution = receipts;
