@@ -3603,6 +3603,18 @@ const Pass = struct {
         var cloner = Cloner.initForOriginalBodyRewrite(self);
         defer cloner.deinit();
         cloner.crossing_root_fn = fn_id;
+        // Record the function being rewritten as active on the inline stack so
+        // self-recursive and mutually recursive calls back to `fn_id` stay
+        // residual instead of unrolling `fn_id` into its own body. Keep
+        // `result_boundary` above this root frame so crossing queries start at
+        // `crossing_root_fn` and original-body subtree reuse still recognizes
+        // positions outside any inlined callee.
+        try cloner.inline_stack.append(self.allocator, .{ .fn_id = fn_id, .known_size = null });
+        cloner.result_boundary = cloner.inline_stack.items.len;
+        defer {
+            const popped = cloner.inline_stack.pop() orelse Common.invariant("whole-body inline stack underflow while rewriting function");
+            if (popped.fn_id != fn_id) Common.invariant("whole-body inline stack was corrupted while rewriting function");
+        }
         cloner.inline_calls = switch (self.clone_inlining) {
             .all_calls => .all,
             .no_calls => .none,
@@ -12201,12 +12213,12 @@ const Cloner = struct {
     fn placeSourceExpr(self: *Cloner, expr_id: Ast.ExprId) Allocator.Error!Ast.ExprId {
         if (@backingInt(expr_id) >= self.output_start) return expr_id;
         if (self.pass.program.getExpr(expr_id).data.isLeaf()) return expr_id;
-        if (self.source_reuse == .original_body and self.inline_stack.items.len == 0) return expr_id;
+        if (self.source_reuse == .original_body and self.inline_stack.items.len == self.result_boundary) return expr_id;
         return try body_copy.copyBindingOwnLocals(self.pass.program, expr_id, &self.pass.symbols);
     }
 
     fn canReuseOriginalExpr(self: *const Cloner, expr_id: Ast.ExprId) bool {
-        if (self.source_reuse != .original_body or self.inline_stack.items.len != 0) return false;
+        if (self.source_reuse != .original_body or self.inline_stack.items.len != self.result_boundary) return false;
 
         // Reuse is valid only when cloning would preserve the source metadata.
         // Missing child metadata otherwise inherits the surrounding clone's
@@ -18386,6 +18398,76 @@ test "a direct call inlines only where its surroundings consume the result it co
     cloner.crossing_root_fn = matching;
     try std.testing.expect((try cloner.cloneExprValueDemandingShape(matched_call)).value == .tag);
     try std.testing.expect((try cloner.cloneExprValue(matched_call)).value == .tag);
+}
+
+test "whole-body normalization does not inline a recursive function into itself" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const union_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+    const tag_done = try program.names.internTagLabel("Done");
+    const tag_step = try program.names.internTagLabel("Step");
+
+    const rec_fn = try program.reserveFnSlot();
+    const arg = try program.addLocal(@fromBackingInt(@intCast(1)), union_ty);
+    const arg_ref = try program.addExpr(.{ .ty = union_ty, .data = .{ .local = arg } });
+    const done_expr = try program.addExpr(.{ .ty = union_ty, .data = .{ .tag = .{ .name = tag_done, .payloads = .empty() } } });
+    const self_call = try program.addExpr(.{ .ty = union_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = rec_fn },
+        .args = try program.addExprSpan(&.{arg_ref}),
+    } } });
+    const inner_done_pat = try program.addPat(.{ .ty = union_ty, .data = .{ .tag = .{ .name = tag_done, .payloads = .empty() } } });
+    const inner_other_pat = try program.addPat(.{ .ty = union_ty, .data = .wildcard });
+    const match_self = try program.addExpr(.{ .ty = union_ty, .data = .{ .match_ = .{
+        .scrutinee = self_call,
+        .branches = try program.addBranchSpan(&.{
+            .{ .pat = inner_done_pat, .body = done_expr },
+            .{ .pat = inner_other_pat, .body = done_expr },
+        }),
+    } } });
+    const step_pat = try program.addPat(.{ .ty = union_ty, .data = .{ .tag = .{ .name = tag_step, .payloads = .empty() } } });
+    const outer_other_pat = try program.addPat(.{ .ty = union_ty, .data = .wildcard });
+    const body = try program.addExpr(.{ .ty = union_ty, .data = .{ .match_ = .{
+        .scrutinee = arg_ref,
+        .branches = try program.addBranchSpan(&.{
+            .{ .pat = step_pat, .body = match_self },
+            .{ .pat = outer_other_pat, .body = done_expr },
+        }),
+    } } });
+    program.setFn(rec_fn, .{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(@intCast(2)),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = arg, .ty = union_ty }}),
+        .captures = .empty(),
+        .body = .{ .roc = body },
+        .ret = union_ty,
+    });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    const crossing_index = try pass.buildCrossingIndex();
+    defer crossing_index.deinit();
+    var crossing_session = try InlineCrossing.Session.init(pass.allocator, crossing_index, pass.program);
+    defer crossing_session.deinit();
+    try crossing_index.classifyWrappers(&crossing_session);
+    pass.crossing_index = crossing_index;
+    pass.crossing_session = &crossing_session;
+
+    // Even though `rec_fn` constructs `Done` on every path and matches its own
+    // recursive call, rewriting `rec_fn` keeps the self-call residual instead
+    // of unrolling `rec_fn` into itself.
+    try pass.cloneFnBody(rec_fn);
+    const rewritten = switch (program.getFn(rec_fn).body) {
+        .roc => |expr| expr,
+        .hosted => return error.TestUnexpectedResult,
+    };
+    const outer_match = program.getExpr(rewritten).data.match_;
+    const step_arm = program.branchAt(outer_match.branches, 0).body;
+    const inner_match = program.getExpr(step_arm).data.match_;
+    try std.testing.expect(program.getExpr(inner_match.scrutinee).data == .call_proc);
+    // Unchanged non-leaf subtrees outside any inlined callee are still reused in place.
+    try std.testing.expectEqual(done_expr, program.branchAt(outer_match.branches, 1).body);
 }
 
 test "issue 10168 SpecConstr clones every capture when nested cloning grows the capture store" {

@@ -41,10 +41,13 @@ pub const Consumer = enum {
     /// known record or tuple gains nothing here; the walk follows its
     /// fields through the loop variable to the consumers that read them.
     loop,
-    /// A field or item read, or a record or tuple pattern. A call-pattern
-    /// worker already takes a known record or tuple argument apart without
-    /// inlining, so a read makes an inline productive only when it reads a
-    /// part of the call's result.
+    /// A field or item read, or a record or tuple pattern. Neither argument
+    /// nor result projection makes an inline productive by itself: a
+    /// call-pattern worker already takes a known record or tuple argument
+    /// apart, and returning a record or tuple of opaque values is a flat value
+    /// return whose fields the caller reads directly. Records and tuples still
+    /// count as `known_parts` so the walk descends through their fields to any
+    /// `match`, `call`, or `loop` on a known tag or callable inside them.
     project,
 };
 
@@ -55,7 +58,7 @@ pub const Consumers = std.EnumSet(Consumer);
 pub const argument_consumers: Consumers = .initMany(&.{ .match, .call, .loop });
 
 /// The consumers a part of a call's result can meet.
-pub const result_consumers: Consumers = .initMany(&.{ .match, .call, .loop, .project });
+pub const result_consumers: Consumers = .initMany(&.{ .match, .call, .loop });
 
 /// Every consumer. A part some consumer gains from is known structure, which
 /// a walk follows into and through.
@@ -2042,4 +2045,37 @@ test "a deep recursive walk over a wide recursive type follows only known struct
         .{ .steps = &.{ left, v7 }, .kinds = record_kinds },
     } };
     try std.testing.expect(try testConsumes(&t, &read, entry));
+}
+
+test "a projected record result is productive only when a known tag or callable inside it meets a consumer" {
+    const gpa = std.testing.allocator;
+    var t = try TestProgram.init(gpa);
+    defer t.deinit();
+    const field = Step.field(try t.fieldName("value"));
+    const callee = try t.function(&.{}, &.{}, try t.unit());
+    const call_plain = try t.call(callee, &.{});
+    const caller_project = try t.function(&.{}, &.{}, try t.access(call_plain, "value"));
+    const call_matched = try t.call(callee, &.{});
+    const caller_match = try t.function(&.{}, &.{}, try t.matchOne(try t.access(call_matched, "value"), try t.tagPat("A", &.{}), try t.unit()));
+    const bodies = try t.bodies(gpa);
+    defer gpa.free(bodies);
+    const index = try Index.build(gpa, &t.program, bodies);
+    defer index.deinit();
+    var session = try Session.init(gpa, index, &t.program);
+    defer session.deinit();
+
+    // Reading a field of a returned record of opaque values is not productive by itself.
+    var opaque_record: TestSeed = .{ .known_paths = &.{
+        .{ .steps = &.{}, .kinds = record_kinds },
+    } };
+    try std.testing.expect(!try session.resultCrosses(opaque_record.oracle(), caller_project, &.{}, call_plain));
+    try std.testing.expect(!try session.resultCrosses(opaque_record.oracle(), caller_match, &.{}, call_matched));
+
+    // A known tag inside the returned record still crosses through the field read to the match.
+    var tagged_record: TestSeed = .{ .known_paths = &.{
+        .{ .steps = &.{}, .kinds = record_kinds },
+        .{ .steps = &.{field}, .kinds = tag_kinds },
+    } };
+    try std.testing.expect(!try session.resultCrosses(tagged_record.oracle(), caller_project, &.{}, call_plain));
+    try std.testing.expect(try session.resultCrosses(tagged_record.oracle(), caller_match, &.{}, call_matched));
 }
