@@ -960,7 +960,7 @@ const Resolver = struct {
 
         if (entry.has(DeferredImportRef.Flags.file_import_is_bytes)) {
             const literal = try self.env.insertString(file_contents);
-            self.env.store.resolveDeferredExprToBytesLiteral(expr_idx, literal);
+            self.env.store.resolveDeferredExprToBytesLiteral(expr_idx, literal, @backingInt(dependency_idx));
             return;
         }
 
@@ -968,7 +968,7 @@ const Resolver = struct {
             return self.failFileImport(expr_idx, relative_path, region, .file_import_not_utf8);
         }
         const literal = try self.env.insertString(file_contents);
-        self.env.store.resolveDeferredExprToStringSegment(expr_idx, literal);
+        self.env.store.resolveDeferredExprToStringSegment(expr_idx, literal, @backingInt(dependency_idx));
     }
 
     const FileImportFailure = enum { file_import_not_found, file_import_io_error, file_import_not_utf8 };

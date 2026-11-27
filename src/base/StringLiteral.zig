@@ -314,6 +314,72 @@ pub const BuilderState = struct {
     }
 };
 
+/// Physical offsets stay valid when workers' literal pools are concatenated.
+/// Runtime backings, unlike those offsets, must not depend on worker count.
+/// Build this view of the finished pool before assigning output addresses.
+pub const OutputBackings = struct {
+    aliases: std.AutoHashMapUnmanaged(Idx, Idx) = .empty,
+    alignments: std.AutoHashMapUnmanaged(Idx, u32) = .empty,
+
+    pub fn init(gpa: Allocator, store: *const Store, builder: *const BuilderState) Allocator.Error!OutputBackings {
+        var result: OutputBackings = .{};
+        errdefer result.deinit(gpa);
+        // Count headers, not bytes. An already-interned pool needs no
+        // allocations, content hashes, or byte comparisons at output time.
+        var it = store.iterator();
+        var count: usize = 0;
+        while (it.next() != null) count += 1;
+        if (count == builder.index.count()) return result;
+
+        it = store.iterator();
+        while (it.next()) |entry| {
+            const id = builder.index.lookup(.{ .store = store }, entry.bytes) orelse
+                unreachable; // every appended literal is registered with the builder
+            if (id == entry.idx) continue;
+            try result.aliases.putNoClobber(gpa, entry.idx, id);
+            if (entry.alignment > store.alignment(id)) {
+                const slot = try result.alignments.getOrPut(gpa, id);
+                slot.value_ptr.* = if (slot.found_existing) @max(slot.value_ptr.*, entry.alignment) else entry.alignment;
+            }
+        }
+        return result;
+    }
+
+    pub fn resolve(self: *const OutputBackings, store: *const Store, original: Idx) struct { id: Idx, alignment: u32 } {
+        const id = self.aliases.get(original) orelse original;
+        return .{ .id = id, .alignment = self.alignments.get(id) orelse store.alignment(id) };
+    }
+
+    pub fn deinit(self: *OutputBackings, gpa: Allocator) void {
+        self.aliases.deinit(gpa);
+        self.alignments.deinit(gpa);
+    }
+};
+
+test "output shares equal worker backings at their strongest alignment" {
+    const gpa = testing.allocator;
+    var store: Store = .{};
+    defer store.deinit(gpa);
+    var builder: BuilderState = .{};
+    defer builder.deinit(gpa);
+    const first = try builder.insert(&store, gpa, "shared");
+    const other = try builder.insert(&store, gpa, "unique");
+    var direct = try OutputBackings.init(testing.failing_allocator, &store, &builder);
+    defer direct.deinit(testing.failing_allocator);
+    try testing.expectEqual(other, direct.resolve(&store, other).id);
+
+    const second = try store.appendFresh(gpa, "shared");
+    store.requireAlignment(second, 16);
+    try builder.ensureAdditionalCapacity(&store, gpa, 1);
+    builder.registerExistingAssumeCapacity(&store, second);
+    var output = try OutputBackings.init(gpa, &store, &builder);
+    defer output.deinit(gpa);
+    try testing.expectEqual(first, output.resolve(&store, second).id);
+    try testing.expectEqual(@as(u32, 16), output.resolve(&store, first).alignment);
+    try testing.expectEqual(@as(u32, 16), output.resolve(&store, second).alignment);
+    try testing.expectEqual(other, output.resolve(&store, other).id);
+}
+
 const BuilderOwner = struct {
     store: *Store,
 };

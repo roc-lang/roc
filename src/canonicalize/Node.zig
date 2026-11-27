@@ -900,7 +900,8 @@ pub const Payload = extern union {
     /// expr_string_segment: string segment reference
     pub const ExprStringSegment = extern struct {
         segment_idx: u32,
-        _padding: [12]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        file_dependency: collections.OptionalU32 = .none,
+        _padding: [8]u8 = @splat(0),
     };
 
     /// expr_nominal: nominal type expression

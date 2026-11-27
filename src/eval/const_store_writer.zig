@@ -996,7 +996,7 @@ pub const Writer = struct {
                 // literal store, which the store borrows.
                 if (segments.len == 1) {
                     const text = checkedSegmentText(bodies, segments[0]);
-                    break :blk .{ .str = .{ .bytes = try self.store.addBorrowedBlobData(text), .capacity = text.len } };
+                    break :blk .{ .str = .{ .bytes = try self.storeLiteralBlob(bodies, segments[0], text), .capacity = text.len } };
                 }
                 const text = try self.checkedStrText(segments);
                 break :blk .{ .str = .{ .bytes = try self.storeBytes(text), .capacity = text.len } };
@@ -1450,7 +1450,15 @@ pub const Writer = struct {
     /// content, and otherwise its bytes interned there.
     fn copyBlob(self: *Writer, source: *const const_store.ConstStore, blob: const_store.ConstBlobDataId) Allocator.Error!const_store.ConstBlobDataId {
         if (source == @as(*const const_store.ConstStore, self.store)) return blob;
-        return try self.store.addBlobData(source.blobData(blob));
+        const id = try self.store.addBlobData(source.blobData(blob));
+        if (source.fileDigest(blob)) |digest| try self.store.recordFileBlob(id, digest);
+        return id;
+    }
+
+    fn storeLiteralBlob(self: *Writer, bodies: checked.CheckedBodies, expr: CIR.Expr.Idx, bytes: []const u8) Allocator.Error!const_store.ConstBlobDataId {
+        const id = try self.store.addBorrowedBlobData(bytes);
+        if (bodies.importedLiteralDigest(expr)) |digest| try self.store.recordFileBlob(id, digest);
+        return id;
     }
 
     /// Store the list of packed items `items`, which `stored` holds, as
@@ -1709,7 +1717,7 @@ pub const Writer = struct {
                 if (self.checkedListBytes(expr)) |bytes| {
                     if (builtin.mode == .debug) std.debug.assert(element.byteWidth() == 1);
                     self.store.fill(target_node, .{ .list = .{ .items = .{ .packed_bytes = .{
-                        .bytes = try self.store.addBorrowedBlobData(bytes),
+                        .bytes = try self.storeLiteralBlob(self.checkedValues().bodies, checked.valueFormValueExpr(self.checkedValues().bodies, expr), bytes),
                         .len = try checkedU32(bytes.len),
                         .element = element,
                     } }, .capacity = capacity } });

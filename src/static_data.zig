@@ -213,6 +213,7 @@ const StaticInitializerMachine = struct {
     static_active: []bool,
     frozen_roots: collections.OptionalIndexColumn(StaticDataSymbolId),
     string_backings: std.AutoHashMapUnmanaged(@import("base").StringLiteral.Idx, SymbolicAllocationId),
+    output_backings: ?@import("base").StringLiteral.OutputBackings = null,
     /// Frames for initializers that are running, followed by released frames
     /// kept for reuse. An initializer reading a static value evaluates that
     /// value's initializer in the next frame.
@@ -1333,16 +1334,18 @@ const StaticInitializerMachine = struct {
         self: *StaticInitializerMachine,
         backing_id: @import("base").StringLiteral.Idx,
     ) Allocator.Error!SymbolicAllocationId {
-        if (self.string_backings.get(backing_id)) |id| return id;
+        if (self.output_backings == null) self.output_backings = try @import("base").StringLiteral.OutputBackings.init(self.allocator(), &self.store().strings, &self.store().string_builder);
+        const literal = self.output_backings.?.resolve(&self.store().strings, backing_id);
+        if (self.string_backings.get(literal.id)) |id| return id;
         const backing = self.store().getString(backing_id);
         // A shared blob holds a packed scalar list as well as text, so its
         // elements may need more than a word's alignment (Dec, I128, U128).
         // The allocation's header is padded to it (`staticDataPtrOffset`), as
         // the dev backend's StaticStringData.build pads its own.
-        const alignment = @max(self.word_size, self.store().strings.alignment(backing_id));
+        const alignment = @max(self.word_size, literal.alignment);
         const allocation = try self.addAllocation(.u8, backing.len, alignment, false, null);
         @memcpy(allocation.payload.bytes, backing);
-        try self.string_backings.put(self.allocator(), backing_id, allocation.id);
+        try self.string_backings.put(self.allocator(), literal.id, allocation.id);
         return allocation.id;
     }
 

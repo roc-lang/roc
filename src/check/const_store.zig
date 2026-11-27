@@ -1481,6 +1481,39 @@ pub const ConstStore = struct {
     /// once, so equal bytes name one blob. Stored with the store, so a
     /// loaded store deduplicates new blobs against the ones it loaded.
     blob_index: collections.HashedProbeTable = .{},
+    /// Whole-file identities, ordered by blob ID. Most constants have none.
+    file_blobs: collections.SafeList(FileBlob) = .{},
+
+    const FileBlob = extern struct { blob: ConstBlobDataId, digest: [32]u8 };
+
+    fn filePosition(self: *const ConstStore, blob: ConstBlobDataId) usize {
+        const entries = self.file_blobs.items();
+        var lo: usize = 0;
+        var hi = entries.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (@backingInt(entries[mid].blob) < @backingInt(blob)) lo = mid + 1 else hi = mid;
+        }
+        return lo;
+    }
+
+    /// Preserve the import identity only when copying a whole, unmodified backing.
+    pub fn recordFileBlob(self: *ConstStore, blob: ConstBlobDataId, digest: base.SourceDigest) Allocator.Error!void {
+        const pos = self.filePosition(blob);
+        const entries = self.file_blobs.items();
+        if (pos < entries.len and entries[pos].blob == blob) {
+            std.debug.assert(std.meta.eql(entries[pos].digest, digest.bytes));
+            return;
+        }
+        try self.file_blobs.insert(self.allocator, pos, .{ .blob = blob, .digest = digest.bytes });
+    }
+
+    /// The content identity supplied by the reader of an imported asset.
+    pub fn fileDigest(self: *const ConstStore, blob: ConstBlobDataId) ?base.SourceDigest {
+        const pos = self.filePosition(blob);
+        const entries = self.file_blobs.items();
+        return if (pos < entries.len and entries[pos].blob == blob) .{ .bytes = entries[pos].digest } else null;
+    }
 
     /// Compares a candidate's bytes with an indexed blob's.
     const BlobBytesContext = struct {
@@ -1886,11 +1919,12 @@ pub const ConstStore = struct {
         blob_backing: BlobBacking.Serialized = .{},
         blob_views: artifact_serialize.SerializedSlice(ConstRange) = .{},
         blob_index: collections.HashedProbeTable.Serialized = .{},
+        file_blobs: artifact_serialize.SerializedSlice(FileBlob) = .{},
 
         comptime {
             // 11 value/function side lists + 7 nested type-store lists + the
-            // blob index's cells.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 19);
+            // blob index's cells and whole-file identities.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 20);
         }
 
         /// Every blob is indexed, so the index holds exactly as many entries
@@ -2136,6 +2170,7 @@ pub const ConstStore = struct {
         self.blob_backing.deinit(self.allocator);
         self.blob_views.deinit(self.allocator);
         self.blob_index.deinit(self.allocator);
+        self.file_blobs.deinit(self.allocator);
         self.* = ConstStore.init(self.allocator);
     }
 
@@ -2638,6 +2673,8 @@ test "a loaded ConstStore keeps its blob ids and deduplicates new blobs against 
     defer store.deinit();
     const hello = try store.addBlobData("hello");
     const world = try store.addBlobData("world");
+    const digest = base.SourceDigest.of("hello");
+    try store.recordFileBlob(hello, digest);
     try std.testing.expectEqual(hello, try store.addBlobData("hello"));
 
     var arena = base.SingleThreadArena.init(gpa);
@@ -2655,6 +2692,8 @@ test "a loaded ConstStore keeps its blob ids and deduplicates new blobs against 
     defer loaded.deinit();
     try std.testing.expectEqual(hello, try loaded.addBlobData("hello"));
     try std.testing.expectEqual(world, try loaded.addBlobData("world"));
+    try std.testing.expectEqual(digest, loaded.fileDigest(hello).?);
+    try std.testing.expect(loaded.fileDigest(world) == null);
     const fresh = try loaded.addBlobData("fresh");
     try std.testing.expectEqual(fresh, try loaded.addBlobData("fresh"));
     const reserved = try loaded.reserveBlobData(5);

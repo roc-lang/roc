@@ -350,6 +350,7 @@ rc_queue_local: ?u32 = null,
 proc_table_indices: collections.DenseMap(u32, u32),
 /// Map from LIR string backing id → wasm data offset for the backing bytes.
 static_str_offsets: std.AutoHashMap(u32, DataAddress),
+output_backings: ?base.StringLiteral.OutputBackings = null,
 /// Map from LIR static-data id -> undefined/defined wasm data symbol.
 static_data_symbols: std.AutoHashMap(u32, SymbolIndex),
 /// Owned names used by generated data segments and local data symbols.
@@ -641,6 +642,7 @@ pub fn deinit(self: *Self) void {
     self.rc_helper_table_indices.deinit();
     self.proc_table_indices.deinit();
     self.static_str_offsets.deinit();
+    if (self.output_backings) |*pool| pool.deinit(self.allocator);
     self.static_data_symbols.deinit();
     for (self.static_data_names.items) |name| {
         self.allocator.free(name);
@@ -14504,12 +14506,14 @@ fn messageDataAddress(self: *Self, msg: []const u8) Allocator.Error!DataAddress 
 }
 
 fn staticStrDataOffset(self: *Self, backing_idx: base.StringLiteral.Idx) Allocator.Error!DataAddress {
-    const key: u32 = @backingInt(backing_idx);
-    if (self.recorder) |recorder| return .{ .offset = 0, .symbol = SymbolIndex.fromRaw(try recorder.placeholder(.{ .static_str = key })) };
+    if (self.recorder) |recorder| return .{ .offset = 0, .symbol = SymbolIndex.fromRaw(try recorder.placeholder(.{ .static_str = @backingInt(backing_idx) })) };
+    if (self.output_backings == null) self.output_backings = try base.StringLiteral.OutputBackings.init(self.allocator, &self.store.strings, &self.store.string_builder);
+    const literal = self.output_backings.?.resolve(&self.store.strings, backing_idx);
+    const key: u32 = @backingInt(literal.id);
     if (self.static_str_offsets.get(key)) |offset| return offset;
 
     const backing_bytes = self.store.getString(backing_idx);
-    const backing_alignment = @max(@as(u32, 4), self.store.strings.alignment(backing_idx));
+    const backing_alignment = @max(@as(u32, 4), literal.alignment);
     const data_offset: u32 = @intCast(std.mem.alignForward(usize, 4, backing_alignment));
     var segment_data = std.ArrayList(u8).empty;
     defer segment_data.deinit(self.allocator);

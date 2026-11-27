@@ -694,13 +694,19 @@ test "a value-form literal's stored bytes are the module's literal itself" {
     for (app.compile_time_roots.roots.items()) |root| {
         if (rootName(app, root) == null) continue;
         try std.testing.expectEqual(check.CheckedArtifact.CompileTimeRootCompletion.write_value, root.completion);
-        const blob = switch (app.const_store.get(root.payload.const_node)) {
+        const value = app.const_store.get(root.payload.const_node);
+        const blob = switch (value) {
             .str => |string| string.bytes,
             .list => |list| list.items.packed_bytes.bytes,
             .pending, .zst, .scalar, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => return error.UnexpectedStoredValue,
         };
         const stored = app.const_store.strBytes(blob);
         try std.testing.expect(stored.len != 0);
+        if (value == .list) {
+            try std.testing.expectEqual(base.SourceDigest.of(stored), app.const_store.fileDigest(blob).?);
+        } else {
+            try std.testing.expect(app.const_store.fileDigest(blob) == null);
+        }
         // The store holds a view of the module's string literal store, not
         // bytes of its own.
         const start = @intFromPtr(literals.ptr);

@@ -125,22 +125,23 @@ pub fn build(allocator: Allocator, store: *const lir.LirStore, target: RocTarget
     defer allocator.free(demanded);
     // Literal backings are named by content so the same literal has the same
     // symbol in every program, which is what lets an object-cache entry that
-    // references one link against the program that pulls it in. Two literal
-    // ids with the same bytes and alignment share one backing.
-    var by_name = std.StringHashMap(u32).init(allocator);
-    defer by_name.deinit();
+    // references one link against the program that pulls it in.
+    var pool = try base.StringLiteral.OutputBackings.init(allocator, &store.strings, &store.string_builder);
+    defer pool.deinit(allocator);
+    var emitted: std.AutoHashMapUnmanaged(base.StringLiteral.Idx, u32) = .empty;
+    defer emitted.deinit(allocator);
     for (demanded) |id| {
-        const entry = .{ .idx = id, .bytes = store.getString(id), .alignment = store.strings.alignment(id) };
+        const backing = pool.resolve(&store.strings, id);
+        const slot = try emitted.getOrPut(allocator, backing.id);
+        if (slot.found_existing) {
+            try index.putNoClobber(id, slot.value_ptr.*);
+            continue;
+        }
+        slot.value_ptr.* = @intCast(entries.items.len);
+        const entry = .{ .idx = id, .bytes = store.getString(backing.id), .alignment = backing.alignment };
         const symbol_name = try literalSymbolName(allocator, entry.bytes, entry.alignment);
         var symbol_owned = true;
         errdefer if (symbol_owned) allocator.free(symbol_name);
-        if (by_name.get(symbol_name)) |existing| {
-            try index.putNoClobber(entry.idx, existing);
-            allocator.free(symbol_name);
-            symbol_owned = false;
-            continue;
-        }
-        try by_name.putNoClobber(symbol_name, @intCast(entries.items.len));
 
         const backing_alignment = @max(word_size, entry.alignment);
         const data_offset = staticDataPtrOffset(word_size, backing_alignment, false);
@@ -215,6 +216,32 @@ fn writeSignedWord(word_size: u32, bytes: []u8, offset: u32, value: isize) void 
         8 => std.mem.writeInt(i64, bytes[offset..][0..8], @intCast(value), .little),
         else => unreachable, // build derives word_size from RocTarget.ptrBitWidth, which is 32 or 64
     }
+}
+
+test "a worker and a coordinator literal use one runtime backing at the stronger alignment" {
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    const text = "the same bytes seen by two workers";
+    const first = try store.insertString(text);
+    const local = try store.addLocal(.{ .layout_idx = .str });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+    const tail = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = first, .offset = 0, .len = text.len } }, .next = ret } }, .test_fixture);
+    var worker = try store.cloneForBodyShard(allocator);
+    defer worker.deinit();
+    const second = try worker.insertStringAligned(text, 16);
+    const root = try worker.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = second, .offset = 2, .len = 5 } }, .next = tail } }, .test_fixture);
+    const body = try store.appendBodyShard(try worker.captureBodyShard(worker.captureBodyPrefix()), root, .empty(), null);
+    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .body = .of(body.root), .ret_layout = .str }, .none);
+
+    var table = try build(allocator, &store, .x64linux);
+    defer table.deinit();
+    const view = store.getCFStmt(body.root.?).assign_literal.value.str_literal;
+    try std.testing.expect(first != view.backing);
+    try std.testing.expectEqualStrings(text[2..7], store.getStringLiteral(view));
+    try std.testing.expectEqual(@as(usize, 1), table.exports.len);
+    try std.testing.expectEqual(@as(u32, 16), table.exports[0].alignment);
+    try std.testing.expectEqual(table.view().ordinal(first).?, table.view().ordinal(view.backing).?);
 }
 
 test "build emits demanded literal backing with static refcount headers" {

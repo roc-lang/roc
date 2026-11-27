@@ -5418,7 +5418,10 @@ corrupt and is a miss.
 
 A data file a module imports is likewise hashed once, when the canonicalize
 task reads it. Its digest is the file dependency's `content_hash`, which both
-the module's source-input hash and watch mode read.
+the module's source-input hash and watch mode read. The resolved literal names
+that dependency. Storing or copying its exact bytes as a checked constant
+preserves the digest; evaluating a new value does not infer one. Monotype
+uses equal file digests to give those literals one immutable backing owner.
 
 Watch mode's file state for a readable file is the source digest of the file's
 bytes exactly as they are on disk, because that is what a refresh check can
@@ -12180,6 +12183,16 @@ alignment required by every view. Each view offset must also satisfy its own
 item alignment. Static-data materialization aligns the backing to that
 maximum while keeping the Roc list length and capacity in items rather than
 bytes.
+
+Workers may give equal literal bytes different store offsets. When assigning
+runtime addresses, equal bytes share one backing at the maximum alignment of
+all their entries. Neither the emitted constants nor their alignment depend
+on how many workers lowered the program.
+
+String literals and unchanged `U8` literal views known during Solved-LIR
+preparation refer to the coordinator's backing. A worker copies the view, not
+the asset bytes. Packed products that need decoding or realignment still get
+the backing required by their committed layout, not the file's identity.
 
 Monotype lowering also packs source lists whose items are all checked builtin
 numeric literals, before constructing per-item IR. It consumes the checked

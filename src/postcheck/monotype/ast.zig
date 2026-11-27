@@ -2287,6 +2287,7 @@ pub const ProgramBuilder = struct {
     /// Backing pool for `FnBody.hosted` spans.
     signature_var_steps: ProgramList(SignatureVarStep, "signature_var_steps") = .empty,
     const_blob_backings: std.AutoHashMapUnmanaged(ConstBlobKey, *SharedLiteralBacking) = .empty,
+    file_backings: std.AutoHashMapUnmanaged([32]u8, *SharedLiteralBacking) = .empty,
     proc_debug_names: ProcDebugNameMap,
     roots: ProgramList(Root, "roots"),
     literal_roots: ProgramList(LiteralRoot, "literal_roots"),
@@ -2456,6 +2457,9 @@ pub const ProgramBuilder = struct {
         var backings = self.const_blob_backings.valueIterator();
         while (backings.next()) |owner| owner.*.release();
         self.const_blob_backings.deinit(self.allocator);
+        var files = self.file_backings.valueIterator();
+        while (files.next()) |owner| owner.*.release();
+        self.file_backings.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
         self.signature_var_steps.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
@@ -2764,6 +2768,19 @@ pub const ProgramBuilder = struct {
 
     pub fn addStringLiteral(self: *ProgramBuilder, text: []const u8) std.mem.Allocator.Error!StringLiteralId {
         return try self.addStringView(text, 0, @intCast(text.len));
+    }
+
+    /// The importer already identified these exact bytes. Give all modules'
+    /// references one immutable owner, without comparing their copies again.
+    pub fn addFileLiteral(self: *ProgramBuilder, digest: base.SourceDigest, bytes: []const u8) std.mem.Allocator.Error!StringLiteralId {
+        const slot = try self.file_backings.getOrPut(self.allocator, digest.bytes);
+        if (!slot.found_existing) {
+            errdefer _ = self.file_backings.remove(digest.bytes);
+            slot.value_ptr.* = try SharedLiteralBacking.init(self.allocator, bytes);
+        }
+        const owner = slot.value_ptr.*;
+        std.debug.assert(owner.bytes.len == bytes.len);
+        return self.addSharedStringView(owner, 0, @intCast(bytes.len), 0, @intCast(bytes.len));
     }
 
     /// Restore a checked blob as a literal, copying each owner-relative
@@ -3097,6 +3114,19 @@ pub const Program = ProgramBuilder;
 
 test "monotype ast declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "whole-file imports share their owner across modules" {
+    var program = ProgramBuilder.init(std.testing.allocator);
+    defer program.deinit();
+    const a = "example";
+    const b = try std.testing.allocator.dupe(u8, a);
+    defer std.testing.allocator.free(b);
+    const digest = base.SourceDigest.of(a);
+    const first = try program.addFileLiteral(digest, a);
+    const second = try program.addFileLiteral(digest, b);
+    try std.testing.expectEqual(program.stringLiteral(first).shared.?, program.stringLiteral(second).shared.?);
+    try std.testing.expectEqualStrings(a, program.stringLiteral(second).text());
 }
 
 test "restored constant blob views share storage across IR ownership transfers" {
