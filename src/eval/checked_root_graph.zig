@@ -352,7 +352,7 @@ pub const Walker = struct {
             },
             .use => |expr| blk: {
                 const ref_id = artifact.resolved_value_refs.lookupIdByExpr(expr) orelse break :blk null;
-                break :blk switch (artifact.resolved_value_refs.records.items()[@backingInt(ref_id)].ref) {
+                break :blk switch (artifact.resolved_value_refs.ref(ref_id)) {
                     .top_level_const, .imported_const => |const_use| self.constWrapper(const_use),
                     .selected_hoisted_const => |selected| self.constWrapper(selected.const_use),
                     .platform_required_const => |required| self.constWrapper(required.const_use),
@@ -433,8 +433,8 @@ pub const Walker = struct {
         if (end > module.resolved_value_refs.template_refs.items().len) base.invariant("compile-time finalization invariant violated: a template's value reference span is outside its checked table", .{});
         for (module.resolved_value_refs.template_refs.items()[refs.start..end]) |ref_id| {
             const raw = @backingInt(ref_id);
-            if (raw >= module.resolved_value_refs.records.items().len) base.invariant("compile-time finalization invariant violated: a value reference id is outside its checked table", .{});
-            const record = module.resolved_value_refs.records.items()[raw];
+            if (raw >= module.resolved_value_refs.len()) base.invariant("compile-time finalization invariant violated: a value reference id is outside its checked table", .{});
+            const record = module.resolved_value_refs.get(@fromBackingInt(@intCast(raw)));
             try self.walkRef(record.ref);
             if (module.static_dispatch_plans.siteEvidence(record.expr)) |evidence| {
                 try self.walkEntries(key.module, evidence);
@@ -538,7 +538,7 @@ pub const Walker = struct {
             },
             .use => |expr| {
                 const ref_id = artifact.resolved_value_refs.lookupIdByExpr(expr) orelse return;
-                try self.walkRef(artifact.resolved_value_refs.records.items()[@backingInt(ref_id)].ref);
+                try self.walkRef(artifact.resolved_value_refs.ref(ref_id));
             },
             .requirement => |requirement| try self.pushTemplate(artifact.checked_procedure_templates.templateRef(artifact.key.digest(), requirement.template)),
             .canonical => |template| try self.pushTemplate(artifact.checked_procedure_templates.templateRef(artifact.key.digest(), template)),

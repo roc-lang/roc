@@ -688,7 +688,7 @@ pub const CheckedBodies = struct {
     pub fn constLookupRef(self: *const CheckedBodies, id: ExprId) ?checked_artifact.ConstRef {
         const refs = self.tables.refs orelse return null;
         const ref_id = refs.lookupIdByExpr(id) orelse return null;
-        return switch (refs.records.items()[@backingInt(ref_id)].ref) {
+        return switch (refs.ref(ref_id)) {
             .top_level_const, .imported_const => |use| use.const_ref,
             .selected_hoisted_const => |selected| selected.const_use.const_ref,
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => null,

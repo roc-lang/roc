@@ -11,8 +11,10 @@
 //! failure path: every column holds the same entries whichever storage backs
 //! it.
 //!
-//! No reader relies on a column's address across appends. `seal` returns the
-//! unused tail of a reservation to the kernel and forbids further growth.
+//! No reader relies on a column's address across appends. `seal` releases the
+//! column's unused capacity (a reservation's unused tail goes back to the
+//! kernel, and an allocated column moves into a block that holds exactly its
+//! entries) and forbids further growth.
 //! Serialization writes the logical length only, and `deserializeInto`
 //! returns a borrowed view over the serialized bytes. A borrowed view reads
 //! and writes its entries where they lie and owns nothing. The first growth of
@@ -292,13 +294,47 @@ pub fn ReservedList(comptime T: type, comptime density: Density) type {
             return cloned;
         }
 
-        /// Return a reservation's unused tail to the kernel and forbid growth.
-        pub fn seal(self: *Self) void {
-            if (self.storage == .reserved and self.reservation.bytes.len != 0) {
-                self.reservation.trim(self.items.len * @sizeOf(T));
-                self.refreshFromReservation();
+        /// Release the column's unused capacity and forbid growth: a
+        /// reservation returns its unused tail to the kernel, and an allocated
+        /// column moves into a block that holds exactly its entries.
+        pub fn seal(self: *Self, gpa: Allocator) Allocator.Error!void {
+            switch (self.storage) {
+                .reserved => if (self.reservation.bytes.len != 0) {
+                    self.reservation.trim(self.items.len * @sizeOf(T));
+                    self.refreshFromReservation();
+                },
+                .allocated => try self.releaseUnusedAllocation(gpa),
+                .borrowed => {},
             }
             self.sealed = true;
+        }
+
+        /// Forbid growth of a view over serialized bytes, which owns nothing
+        /// to release.
+        pub fn sealView(self: *Self) void {
+            std.debug.assert(self.storage == .borrowed);
+            self.sealed = true;
+        }
+
+        fn releaseUnusedAllocation(self: *Self, gpa: Allocator) Allocator.Error!void {
+            if (self.capacity == self.items.len) return;
+            const old_block = self.items.ptr[0..self.capacity];
+            const length = self.items.len;
+            if (length == 0) {
+                gpa.free(old_block);
+                self.items = &.{};
+                self.capacity = 0;
+                return;
+            }
+            const block = if (gpa.remap(old_block, length)) |remapped| remapped else blk: {
+                const fresh = try gpa.alloc(T, length);
+                @memcpy(fresh, self.items);
+                storage_work.add(.bytes_copied, length * @sizeOf(T));
+                gpa.free(old_block);
+                break :blk fresh;
+            };
+            self.items = block[0..length];
+            self.capacity = block.len;
         }
 
         /// A range from `start_int` to the end of the column.
@@ -578,9 +614,15 @@ pub fn ReservedColumns(comptime T: type, comptime density: Density) type {
             return cloned;
         }
 
-        /// Seal every column.
-        pub fn seal(self: *Self) void {
-            inline for (field_names) |name| @field(self.columns, name).seal();
+        /// Seal every column, releasing its unused capacity.
+        pub fn seal(self: *Self, gpa: Allocator) Allocator.Error!void {
+            inline for (field_names) |name| try @field(self.columns, name).seal(gpa);
+            self.refreshCapacity();
+        }
+
+        /// Forbid growth of views over serialized bytes.
+        pub fn sealView(self: *Self) void {
+            inline for (field_names) |name| @field(self.columns, name).sealView();
             self.refreshCapacity();
         }
 
@@ -706,7 +748,7 @@ test "sealing trims the reservation, and serialization round-trips the logical l
     var list = try ReservedList(u32, .dense).init(testing.allocator, 1 << 18);
     defer list.deinit(testing.allocator);
     for (0..5000) |i| _ = try list.append(testing.allocator, @intCast(i * 7));
-    list.seal();
+    try list.seal(testing.allocator);
     try testing.expect(list.reservation.bytes.len < (1 << 20));
     try testing.expectEqual(@as(u32, 4999 * 7), list.items[4999]);
 
@@ -737,6 +779,21 @@ test "sealing trims the reservation, and serialization round-trips the logical l
     defer copied.deinit(testing.allocator);
     _ = try copied.append(testing.allocator, 1);
     try testing.expectEqual(@as(u64, 5001), copied.len());
+}
+
+test "sealing an allocated column releases its unused capacity" {
+    var list = try ReservedList(u32, .dense).init(testing.allocator, 4);
+    defer list.deinit(testing.allocator);
+    for (0..100) |i| _ = try list.append(testing.allocator, @intCast(i * 3));
+    try testing.expect(list.capacity > list.items.len);
+    try list.seal(testing.allocator);
+    try testing.expectEqual(list.items.len, list.capacity);
+    for (list.items, 0..) |item, i| try testing.expectEqual(@as(u32, @intCast(i * 3)), item);
+
+    var empty = try ReservedList(u64, .dense).init(testing.allocator, 16);
+    defer empty.deinit(testing.allocator);
+    try empty.seal(testing.allocator);
+    try testing.expectEqual(@as(usize, 0), empty.capacity);
 }
 
 test "a borrowed view copies itself into allocated storage on its first growth" {
@@ -928,7 +985,7 @@ test "parallel columns serialize live rows in declared field order" {
     defer original.deinit(testing.allocator);
     _ = try original.append(testing.allocator, .{ .wide = 19, .narrow = 2, .mid = 41 });
     _ = try original.append(testing.allocator, .{ .wide = 23, .narrow = 3, .mid = 43 });
-    original.seal();
+    try original.seal(testing.allocator);
     var writer = CompactWriter.init();
     defer writer.deinit(testing.allocator);
     var header: Columns.Serialized = undefined;

@@ -242,6 +242,16 @@ pub const SealedTypeKeys = struct {
         allocator.destroy(self);
     }
 
+    /// Free the key writer and the classes and keys it kept between
+    /// requests. Computed keys stay in their slots; a later request starts a
+    /// fresh writer.
+    pub fn releaseWriter(self: *SealedTypeKeys) void {
+        self.writer_mutex.lockUncancelable(self.io);
+        defer self.writer_mutex.unlock(self.io);
+        if (self.writer) |*writer| writer.deinit();
+        self.writer = null;
+    }
+
     /// A diagnostic snapshot of this unique source-key owner. No allocations,
     /// slot claims, key computations or memo changes. Shared views print the
     /// same owner address: consumers deduplicate by (phase, owner).

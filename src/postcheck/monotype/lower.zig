@@ -1893,13 +1893,13 @@ fn resolvedRecord(view: ModuleView, resolved: ResolvedUse) ResolvedRecord {
         .lookup => |expr| return resolvedRecord(view, .{ .source = view.bodies.resolvedRef(expr) orelse Common.invariant("checked lookup had no resolved value ref") }),
         .source => |id| {
             const raw = @backingInt(id);
-            if (raw >= view.resolved_refs.records.items().len) Common.invariant("checked lookup referenced a missing resolved value ref");
-            const record = view.resolved_refs.records.items()[raw];
+            if (raw >= view.resolved_refs.len()) Common.invariant("checked lookup referenced a missing resolved value ref");
+            const record = view.resolved_refs.get(@fromBackingInt(@intCast(raw)));
             return .{
                 .expr = record.expr,
                 .ref = record.ref,
                 .checked_ty = record.checked_ty,
-                .scope_depth = record.scope_depth,
+                .scope_depth = 0,
                 .recursive_reference = record.recursive_reference,
             };
         },
@@ -30242,7 +30242,7 @@ const BodyContext = struct {
         replay_state: *InterfaceReplayState,
     ) Allocator.Error!?*DirectCalleeExpansion {
         self.builder.count("interface_relation_requests");
-        const record = self.view.resolved_refs.records.items()[@backingInt(target)];
+        const record = self.view.resolved_refs.get(target);
         const procedure, const root_evidence = switch (record.ref) {
             .top_level_proc,
             .imported_proc,
@@ -46584,10 +46584,10 @@ const BodyContext = struct {
 
     fn directCallTargetIsLocalProc(self: *const BodyContext, target: checked.ResolvedValueId) bool {
         const raw = @backingInt(target);
-        if (raw >= self.view.resolved_refs.records.items().len) {
+        if (raw >= self.view.resolved_refs.len()) {
             Common.invariant("checked direct call target is outside resolved value table");
         }
-        return switch (self.view.resolved_refs.records.items()[raw].ref) {
+        return switch (self.view.resolved_refs.ref(@fromBackingInt(@intCast(raw)))) {
             .local_proc => true,
             .platform_required_proc, .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .promoted_top_level_proc => false,
         };
@@ -46599,10 +46599,10 @@ const BodyContext = struct {
         fallback: checked.CheckedTypeId,
     ) checked.CheckedTypeId {
         const raw = @backingInt(target);
-        if (raw >= self.view.resolved_refs.records.items().len) {
+        if (raw >= self.view.resolved_refs.len()) {
             Common.invariant("checked direct call target is outside resolved value table");
         }
-        return switch (self.view.resolved_refs.records.items()[raw].ref) {
+        return switch (self.view.resolved_refs.ref(@fromBackingInt(@intCast(raw)))) {
             .platform_required_proc => |required| required.procedure.source_fn_ty_payload orelse
                 Common.invariant("platform-required procedure call missing relation-owned requested function type"),
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .promoted_top_level_proc => fallback,
@@ -47100,10 +47100,10 @@ const BodyContext = struct {
         request_fn_node: NodeId,
     ) Allocator.Error!DraftFnSlot {
         const raw = @backingInt(target);
-        if (raw >= self.view.resolved_refs.records.items().len) {
+        if (raw >= self.view.resolved_refs.len()) {
             Common.invariant("checked direct call target is outside resolved value table");
         }
-        const record = self.view.resolved_refs.records.items()[raw];
+        const record = self.view.resolved_refs.get(@fromBackingInt(@intCast(raw)));
         return switch (record.ref) {
             .local_proc => |local| if (local.is_alias)
                 try self.forwardedLocalAliasCalleeAtNode(local, record.expr, request_fn_node)
@@ -47256,17 +47256,17 @@ const BodyContext = struct {
 
     fn finalDirectTarget(self: *BodyContext, target: checked.ResolvedValueId) FinalDirectTarget {
         const raw = @backingInt(target);
-        if (raw >= self.view.resolved_refs.records.items().len) {
+        if (raw >= self.view.resolved_refs.len()) {
             Common.invariant("checked direct call target is outside resolved value table");
         }
         var view = self.view;
-        var record = view.resolved_refs.records.items()[raw];
+        var record = view.resolved_refs.get(@fromBackingInt(@intCast(raw)));
         while (true) {
             switch (record.ref) {
                 .local_proc => |local| if (local.is_alias) {
                     const final = local.alias_target orelse
                         Common.invariant("callable alias has no published target");
-                    record = view.resolved_refs.records.items()[@backingInt(final)];
+                    record = view.resolved_refs.get(final);
                     continue;
                 },
                 .top_level_proc,
@@ -47278,7 +47278,7 @@ const BodyContext = struct {
                     const template = view.callable_eval_templates.templates[@backingInt(alias.template)];
                     const lookup = view.resolved_refs.lookupIdByExpr(template.forwarded_lookup.get().?) orelse
                         Common.invariant("forwarded procedure alias lookup had no resolved value");
-                    record = view.resolved_refs.records.items()[@backingInt(lookup)];
+                    record = view.resolved_refs.get(lookup);
                     continue;
                 },
                 .platform_required_proc => |required| if (self.builder.forwardingCallableEvalForProcedureUse(required.procedure)) |alias| {
@@ -47286,7 +47286,7 @@ const BodyContext = struct {
                     const template = view.callable_eval_templates.templates[@backingInt(alias.template)];
                     const lookup = view.resolved_refs.lookupIdByExpr(template.forwarded_lookup.get().?) orelse
                         Common.invariant("forwarded procedure alias lookup had no resolved value");
-                    record = view.resolved_refs.records.items()[@backingInt(lookup)];
+                    record = view.resolved_refs.get(lookup);
                     continue;
                 },
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => {},
@@ -56869,7 +56869,7 @@ const BodyContext = struct {
             const ref_id = view.resolved_refs.lookupIdByExpr(lookup) orelse
                 Common.invariant("forwarded procedure alias lookup had no resolved value");
             const done: AliasComposition = .{ .subst = next, .vector = next_vector };
-            step = switch (view.resolved_refs.records.items()[@backingInt(ref_id)].ref) {
+            step = switch (view.resolved_refs.ref(ref_id)) {
                 .local_proc => |local| if (local.is_alias)
                     .{ .local = .{ .view = view, .lookup = local.expr, .dispatch_scope = local.dispatch_scope } }
                 else

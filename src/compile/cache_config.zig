@@ -449,7 +449,10 @@ pub const Constants = struct {
     /// 210: a default app records its `echo!` among its hosted definitions.
     /// 211: each module's node store records which expressions are
     /// literal-only.
-    pub const CACHE_VERSION = 211;
+    /// 212: a type store keeps each slot's kind in its payload word, and a
+    /// sealed store keeps only the descriptors and pool entries its classes
+    /// reach.
+    pub const CACHE_VERSION = 212;
 };
 
 /// Configuration for the Roc cache system.

@@ -112,7 +112,8 @@ fn openBoth(walked: *Store, replayed: *Store, idents: *Ident.Store, var_map: *Va
 }
 
 /// `args` as the args of an application in `store`'s vars pool, with the
-/// pool filled to its capacity so that the next append moves it.
+/// pool filled so that the next non-empty range appended moves it: such a
+/// range needs room for its length slot and at least one var.
 fn poolArgs(store: *Store, idents: *Ident.Store, args: []const Var) std.mem.Allocator.Error![]const Var {
     const content = try store.mkNominalWithSourceDeclAndBuiltinOrigin(
         .{ .ident_idx = try idents.insert(store.gpa, Ident.for_text("App")) },
@@ -122,7 +123,7 @@ fn poolArgs(store: *Store, idents: *Ident.Store, args: []const Var) std.mem.Allo
         false,
         false,
     );
-    while (store.vars.capacity > store.vars.items.len) _ = try store.appendVars(&.{});
+    while (store.vars.capacity - store.vars.items.len >= 2) _ = try store.appendVars(args[0..1]);
     return store.sliceNominalArgs(content.structure.nominal_type);
 }
 

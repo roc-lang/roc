@@ -6134,6 +6134,26 @@ function's use, would be quantified by that function while the value still
 shares it. Pinned by `src/check/test/issue_13011_test.zig`, the rank tests
 in `src/check/test/unify_test.zig`, and `test/cli/Issue13011StoreWrites.roc`.
 
+### Type Store Pools
+
+A type store keeps the variables, record fields and tags its descriptors
+hold in three pools, and while checking runs it only appends to them: no
+entry is rewritten once appended, and a discarded probe drops only what it
+appended. A range is therefore interchangeable with any other range holding
+the same entries, and ranges may be shared by several descriptors and tags.
+Two consequences keep checking from appending entries no class will hold:
+
+- An empty vars range is `Range.empty()`, which a descriptor stores as
+  `stored_empty_var_range`. Appending no variables appends nothing, not even
+  the length slot a non-empty range keeps before its start.
+- A row merge whose merged row comes out equal, entry for entry, to the own
+  row of either operand stores that operand's range instead of a copy
+  (`Unifier.storedRowEntries`). Merging two rows with the same labels gives
+  the second row's entries whenever their payloads and marks are the second's,
+  so most merges append no row. A merged row that differs from both, such as
+  one whose shared tag stops being pattern-only or whose field takes a kind
+  variable from one side and a value variable from the other, is appended.
+
 ### Descriptor Words
 
 A type store keeps each descriptor as a 16-byte row: a 32-bit word and a
@@ -7370,11 +7390,14 @@ pool, or a nominal declaration holds becomes its class's checked
 representative; and every record and tag union row a reader
 can name absorbs the rows its extension chain reaches, so such a row is flat
 and its extension is never itself a row. Canonicalization walks the slots
-once, the variable and field pools once, and the live descriptors once. The
+once and the live descriptors once before any row is flattened. The
 descriptor pass reads each descriptor's kind and goes further only for a
 function, a record or a tag union, the kinds that hold a variable inline: it
 replaces a function's return or a row's extension by its representative, and
-resolving an extension also tells whether the extension is itself a row.
+resolving an extension also tells whether the extension is itself a row. Pool
+entries are not canonicalized in place: closing the gaps (below) rewrites
+each surviving entry to its representative as it moves, so an entry no class
+reaches is never canonicalized.
 
 When some row's extension is a row, sealing traces the store from its roots
 and flattens each row the trace reaches, before reading that row's children.
@@ -7460,7 +7483,14 @@ These buffers are reset to empty owners so later destruction is safe. The
 solved columns, nominal declarations, derived-map selections, stable variable
 ids, and borrowed slices into the solved pools remain owned by the sealed
 store until its last consumer is done. No serialized layout changes at this
-boundary, and releasing checker buffers neither allocates nor walks types.
+boundary, and releasing checker buffers walks no types.
+
+Once the gaps have closed, sealing moves every column into storage that
+holds exactly its entries: an allocated column is reallocated to its length
+and a reservation returns its unused tail ("Table Storage Lifecycles"). When
+checking finishes a module it does the same for the module's CIR node store,
+string literal bytes and side lists (`ModuleEnv.releaseUnusedCapacity`), so
+no finished module keeps growth room alive for the rest of the build.
 
 There is no second representation of any of this. No pass copies types,
 bodies, templates, names, plans or roots into another table after checking.
@@ -7661,6 +7691,9 @@ type is created the first time something asks for it, through the module's
 slot for that request ("On-Demand Analyses And Write-Once Slots"), and lives
 as long as the module. A type id names either a solver variable of a module or
 an entry of its synthesized-type store; readers never need to know which.
+Publication ends by moving the store's columns, and those of the module's
+published tables, into allocations that hold exactly their entries; a column
+that a later request grows regrows from its length.
 
 Ids are not interned across solver classes: two solver variables whose types
 are equal keep two ids, and creating a synthesized type computes no key, so
@@ -7759,7 +7792,10 @@ its variables, equal across modules for equal types, and stable across
 compilations. Keys exist because procedure identities, evidence digests,
 generated-codec content digests and the constant store need an identity with
 exactly those properties. A key is computed on first demand for one root,
-through that root's key slot, and never eagerly for a whole module.
+through that root's key slot, and never eagerly for a whole module. A
+synthesized-type store keeps its key slots in pages of 64 behind a
+write-once page directory, so a page is allocated only when a key of one of
+its roots is first requested.
 In-workspace memos that only need "the same type within this program" use
 in-workspace structural identity, not keys.
 
@@ -7914,6 +7950,13 @@ after the key writer succeeds. Key hits do no extra work, and tracing does not
 scan the native mapping. A concurrent snapshot can count a successful result
 before its slot reaches `done`; quiescent counts equal completed keys. No key
 storage, diagnostic counter or derived result is serialized.
+
+A module's key writers (the source-key writer and the synthesized-key writer)
+keep the descriptions, classes and keys of every type they have digested, so
+later requests share that work. Publication ends by freeing both writers
+(`releaseWriter`): the slots keep every key it computed, and a request made
+after publication starts a fresh writer under the same lock. The writers'
+descriptions therefore never outlive publication alongside the module.
 
 There is no scheduling edge between modules. A module's analyses are never
 ordered after its importers, nothing waits for demand to flow top-down, and
