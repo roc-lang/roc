@@ -137,14 +137,24 @@ test "ELF PIE prelink and patch relocate host app and provided pointers at start
             if (kind != .shared) try std.testing.expect(read64(exe, 24) != 0);
             const phoff: usize = @intCast(read64(exe, 32));
             // The table stays right after the ELF header, before every
-            // section, where `strip` and `objcopy` write it (#13567).
+            // section, and no two sections share bytes, so `strip` and
+            // `objcopy` keep the layout (#13567).
             try std.testing.expectEqual(@as(usize, 64), phoff);
             const table_end = phoff + @as(usize, read16(exe, 56)) * 56;
             const shoff: usize = @intCast(read64(exe, 40));
             for (1..read16(exe, 60)) |index| {
                 const sh = shoff + index * 64;
-                if (read64(exe, sh + 8) & 2 == 0) continue; // not SHF_ALLOC
-                try std.testing.expect(read64(exe, sh + 24) >= table_end);
+                // Only allocated sections with file bytes (not SHT_NOBITS).
+                if (read64(exe, sh + 8) & 2 == 0 or std.mem.readInt(u32, exe[sh + 4 ..][0..4], .little) == 8) continue;
+                const start = read64(exe, sh + 24);
+                const end = start + read64(exe, sh + 32);
+                try std.testing.expect(start >= table_end);
+                for (1..index) |other_index| {
+                    const other = shoff + other_index * 64;
+                    if (read64(exe, other + 8) & 2 == 0 or std.mem.readInt(u32, exe[other + 4 ..][0..4], .little) == 8) continue;
+                    const other_start = read64(exe, other + 24);
+                    try std.testing.expect(end <= other_start or other_start + read64(exe, other + 32) <= start);
+                }
             }
             for (0..read16(exe, 56)) |index| {
                 const ph = phoff + index * 56;

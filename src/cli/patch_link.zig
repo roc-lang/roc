@@ -235,7 +235,8 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     }
     // A position-independent image's dynamic relocation table, the host's entries then
     // one relative relocation per absolute word the app holds, follows the
-    // code.
+    // code. `.text.roc` ends with the code, so the two sections never overlap.
+    const code_size = rx_size;
     var rela_vaddr: u64 = 0;
     var rela_size: u64 = 0;
     if (host.positionIndependent()) {
@@ -340,7 +341,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     defer headers.deinit(gpa);
     for (0..host.header.shnum) |index| try headers.append(gpa, host.section(@intCast(index)));
     const text_index: u32 = @intCast(headers.items.len);
-    try headers.append(gpa, .{ .name = try addName(gpa, &names, ".text.roc"), .type = SHT_PROGBITS, .flags = SHF_ALLOC | SHF_EXECINSTR, .addr = host_prelink.app_base, .offset = app_offset, .size = rx_size, .link = 0, .info = 0, .addralign = segment_align, .entsize = 0 });
+    try headers.append(gpa, .{ .name = try addName(gpa, &names, ".text.roc"), .type = SHT_PROGBITS, .flags = SHF_ALLOC | SHF_EXECINSTR, .addr = host_prelink.app_base, .offset = app_offset, .size = code_size, .link = 0, .info = 0, .addralign = segment_align, .entsize = 0 });
     const data_index: u32 = @intCast(headers.items.len);
     try headers.append(gpa, .{ .name = try addName(gpa, &names, ".data.roc"), .type = SHT_PROGBITS, .flags = SHF_ALLOC | SHF_WRITE, .addr = rw_base, .offset = rw_offset, .size = rw_file_size, .link = 0, .info = 0, .addralign = segment_align, .entsize = 0 });
     const bss_index: u32 = @intCast(headers.items.len);
