@@ -428,7 +428,9 @@ const StaticInitializerMachine = struct {
     /// The value frozen from each part of an image that owns an allocation,
     /// which every reader of that part shares.
     image_parts: std.AutoHashMapUnmanaged(StaticInitializerMachine.ImagePartKey, *SymbolicValue) = .empty,
+    file_backings: std.AutoHashMapUnmanaged([32]u8, SymbolicAllocationId) = .empty,
     string_backings: std.AutoHashMapUnmanaged(@import("base").StringLiteral.Idx, SymbolicAllocationId),
+    output_backings: ?@import("base").StringLiteral.OutputBackings = null,
     /// Frames for initializers that are running, followed by released frames
     /// kept for reuse. An initializer reading a static value evaluates that
     /// value's initializer in the next frame.
@@ -742,7 +744,7 @@ const StaticInitializerMachine = struct {
         // target's, or a tag row an LSS row join widened) re-encodes the
         // image through the read's plan.
         if (store_.imageOf(stored.node)) |image| {
-            if (self.word_size == check.ConstStore.image_word_size and try self.sameLayout(value_layout, store_.image(image).layout_digest)) return try self.freezeImage(store_, image, value_layout);
+            if (try self.canFreezeBlock(store_.image(image), value_layout)) return try self.freezeImage(store_, image, value_layout);
             return try self.reencodeImage(stored.module, store_, image, stored.plan, value_layout);
         }
         const root = try self.newValue(value_layout);
@@ -788,6 +790,23 @@ const StaticInitializerMachine = struct {
         if (self.layout_digests == null) self.layout_digests = layout.Digests.init(self.allocator(), self.layouts());
         const own = try self.layout_digests.?.get(value_layout);
         return std.mem.eql(u8, &own, &digest);
+    }
+
+    /// An emitted block can stand alone only when no payload in it belongs
+    /// to a shared file backing. Otherwise materialize its relocations through
+    /// the same layout plan as a cross-width read.
+    fn canFreezeBlock(self: *StaticInitializerMachine, image: check.ConstStore.ConstImageView, value_layout: layout.Idx) Allocator.Error!bool {
+        return image.files.len == 0 and self.word_size == check.ConstStore.image_word_size and try self.sameLayout(value_layout, image.layout_digest);
+    }
+
+    fn fileBacking(self: *StaticInitializerMachine, digest: [32]u8, bytes: []const u8) Allocator.Error!SymbolicAllocationId {
+        const entry = try self.file_backings.getOrPut(self.allocator(), digest);
+        if (!entry.found_existing) {
+            const backing = try self.addAllocation(.u8, bytes.len, self.word_size, false, null);
+            @memcpy(backing.payload.bytes, bytes);
+            entry.value_ptr.* = backing.id;
+        }
+        return entry.value_ptr.*;
     }
 
     /// One part of a stored image still to write: where its bytes go, at the
@@ -928,7 +947,8 @@ const StaticInitializerMachine = struct {
                         descriptor[size - 1] = builtins.str.RocStr.smallStrFlagByte(bytes.len);
                         return;
                     }
-                    const value = try self.rememberImagePart(key, try self.storedStr(bytes, capacity, write.layout_idx));
+                    const digest = if (bytes.len == 0) null else image.fileAt(@intCast(@intFromPtr(bytes.ptr) - @intFromPtr(image.bytes.ptr)), bytes.len);
+                    const value = try self.rememberImagePart(key, try self.storedStrWithFile(bytes, capacity, write.layout_idx, digest));
                     try self.copyInto(write.dest, write.offset, value, size);
                 },
                 // A number is the same bytes at every width.
@@ -952,6 +972,13 @@ const StaticInitializerMachine = struct {
                     const elem_layout = abi.elem_layout_idx orelse staticDataInvariant("non-ZST stored list had no element layout");
                     const source_elem = source_abi.elem_layout_idx orelse staticDataInvariant("non-ZST image list had no element layout");
                     const items: u32 = @intCast(imageWord(image.bytes, source));
+                    if (source_abi.elem_size == 1 and abi.elem_size == 1) {
+                        if (image.fileAt(items, len)) |file| {
+                            const backing = try self.fileBacking(file.bytes, image.bytes[items..][0..len]);
+                            try descriptor.relocations.append(a, .{ .offset = 0, .target = .{ .allocation = backing } });
+                            return try self.copyInto(write.dest, write.offset, try self.rememberImagePart(key, descriptor), size);
+                        }
+                    }
                     const allocation = try self.addAllocation(
                         elem_layout,
                         @as(usize, abi.elem_size) * len,
@@ -1175,7 +1202,7 @@ const StaticInitializerMachine = struct {
         if (store_.imageOf(write.request.node)) |image| {
             const value_layout = self.layoutValue(write.request.layout_idx);
             if (value_layout.tag == .zst) return;
-            const value = if (self.word_size == check.ConstStore.image_word_size and try self.sameLayout(write.request.layout_idx, store_.image(image).layout_digest))
+            const value = if (try self.canFreezeBlock(store_.image(image), write.request.layout_idx))
                 try self.freezeImage(store_, image, write.request.layout_idx)
             else
                 try self.reencodeImage(module, store_, image, write.request.plan, write.request.layout_idx);
@@ -1451,6 +1478,10 @@ const StaticInitializerMachine = struct {
     /// which the first copy of the string allocates
     /// (`builtins.str.RocStr.copyCapacity`).
     fn storedStr(self: *StaticInitializerMachine, bytes: []const u8, capacity: u64, layout_idx: layout.Idx) Allocator.Error!*SymbolicValue {
+        return self.storedStrWithFile(bytes, capacity, layout_idx, null);
+    }
+
+    fn storedStrWithFile(self: *StaticInitializerMachine, bytes: []const u8, capacity: u64, layout_idx: layout.Idx, file: ?@import("base").SourceDigest) Allocator.Error!*SymbolicValue {
         if (capacity < bytes.len) staticDataInvariant("stored string capacity was below its length");
         const result = try self.newValue(layout_idx);
         const roc_str_size = self.word_size * builtins.str.RocStr.word_count;
@@ -1463,11 +1494,14 @@ const StaticInitializerMachine = struct {
         if (encoded > self.targetWordMax() or builtins.str.RocStr.decodeCapacityForWidth(encoded) != capacity) return error.OutOfMemory;
         // A string with no bytes still points into an allocation, whose
         // static refcount is what keeps the runtime from writing through it.
-        const allocation = try self.addAllocation(.u8, bytes.len, self.word_size, false, null);
-        @memcpy(allocation.payload.bytes, bytes);
+        const backing = if (file) |digest| try self.fileBacking(digest.bytes, bytes) else blk: {
+            const allocation = try self.addAllocation(.u8, bytes.len, self.word_size, false, null);
+            @memcpy(allocation.payload.bytes, bytes);
+            break :blk allocation.id;
+        };
         try result.relocations.append(self.allocator(), .{
             .offset = 0,
-            .target = .{ .allocation = allocation.id },
+            .target = .{ .allocation = backing },
         });
         self.writeTargetWord(result.bytes, self.word_size, encoded);
         self.writeTargetWord(result.bytes, self.word_size * 2, bytes.len);
@@ -1897,16 +1931,18 @@ const StaticInitializerMachine = struct {
         self: *StaticInitializerMachine,
         backing_id: @import("base").StringLiteral.Idx,
     ) Allocator.Error!SymbolicAllocationId {
-        if (self.string_backings.get(backing_id)) |id| return id;
+        if (self.output_backings == null) self.output_backings = try @import("base").StringLiteral.OutputBackings.init(self.allocator(), &self.store().strings, &self.store().string_builder);
+        const literal = self.output_backings.?.resolve(&self.store().strings, backing_id);
+        if (self.string_backings.get(literal.id)) |id| return id;
         const backing = self.store().getString(backing_id);
         // A shared blob holds a packed scalar list as well as text, so its
         // elements may need more than a word's alignment (Dec, I128, U128).
         // The allocation's header is padded to it (`staticDataPtrOffset`), as
         // the dev backend's StaticStringData.build pads its own.
-        const alignment = @max(self.word_size, self.store().strings.alignment(backing_id));
+        const alignment = @max(self.word_size, literal.alignment);
         const allocation = try self.addAllocation(.u8, backing.len, alignment, false, null);
         @memcpy(allocation.payload.bytes, backing);
-        try self.string_backings.put(self.allocator(), backing_id, allocation.id);
+        try self.string_backings.put(self.allocator(), literal.id, allocation.id);
         return allocation.id;
     }
 

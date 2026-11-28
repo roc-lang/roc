@@ -1020,9 +1020,13 @@ const Lowerer = struct {
     /// Persistent scratch is indexed by executor lane, whose callbacks are
     /// exclusive. Escaping body shards never borrow storage from these entries.
     worker_workspaces: []?FnBodyWorkspace,
+    /// Immutable lifted backing extents remain alive for the entire lowering.
+    /// File imports with the same digest already share one such extent.
+    literal_backings: std.AutoHashMapUnmanaged(BackingExtent, base.StringLiteral.Idx) = .empty,
 
     aggregate_bindings: ?*AggregateBindings = null,
 
+    const BackingExtent = struct { address: usize, len: usize };
     const ProcLocalSet = collections.DenseMap(LIR.LocalId, void);
 
     /// Scratch one lowering lane reuses across the procedures and
@@ -1417,6 +1421,9 @@ const Lowerer = struct {
     }
 
     fn packedListLiteral(self: *Lowerer, literal: Mono.PackedListLiteral, element: layout.Idx) Common.LowerError!LIR.ListLiteral {
+        if (literal.element == .u8 and element == .u8) {
+            return .{ .bytes = try self.lirStrLiteral(literal.literal), .len = literal.len };
+        }
         const source = self.stringLiteral(literal.literal);
         const key = PackedLiteralKey{
             .shared_backing = if (source.shared != null) source.backing.ptr else null,
@@ -1475,6 +1482,7 @@ const Lowerer = struct {
 
     fn deinitLoweringState(self: *Lowerer) void {
         self.deinitWorkerWorkspaces();
+        self.literal_backings.deinit(self.allocator);
         self.prepared_worker_types.deinit();
         self.prepared_worker_fns.deinit();
         self.worker_discovered_fns.deinit(self.allocator);
@@ -2665,14 +2673,16 @@ const Lowerer = struct {
                 .return_ => |ret| try self.add(.{ .expr = ret.value }),
                 .expect_err => |expect_err| try self.add(.{ .expr = expect_err.msg }),
                 .literal_rejected => |rejected| try self.add(.{ .expr = rejected.msg }),
+                .str_lit => |literal| _ = try l.lirStrLiteral(literal),
+                .bytes_lit => |literal| if (literal.element == .u8) {
+                    _ = try l.lirStrLiteral(literal.literal);
+                },
                 .unit,
                 .@"unreachable",
                 .int_lit,
                 .frac_f32_lit,
                 .frac_f64_lit,
                 .dec_lit,
-                .str_lit,
-                .bytes_lit,
                 .uninitialized,
                 .crash,
                 .checked_error,
@@ -2795,10 +2805,15 @@ const Lowerer = struct {
                     try self.add(.{ .pattern = pattern });
                 },
                 .nominal => |inner| try self.add(.{ .pattern = inner }),
-                .str_pattern => |pattern| for (view.strPatternStepSpan(pattern.steps)) |step| {
-                    if (step.capture.get()) |capture| try self.add(.{ .pattern = capture });
+                .str_pattern => |pattern| {
+                    _ = try self.lowerer.lirStrLiteral(pattern.prefix);
+                    for (view.strPatternStepSpan(pattern.steps)) |step| {
+                        _ = try self.lowerer.lirStrLiteral(step.delimiter);
+                        if (step.capture.get()) |capture| try self.add(.{ .pattern = capture });
+                    }
                 },
-                .wildcard, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => {},
+                .str_lit => |literal| _ = try self.lowerer.lirStrLiteral(literal),
+                .wildcard, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit => {},
             }
         }
     };
@@ -4229,7 +4244,14 @@ const Lowerer = struct {
     fn lirStrLiteral(self: *Lowerer, id: Lifted.StringLiteralId) Common.LowerError!LIR.StrLiteral {
         if (self.worker_callback and self.parallel_metrics != null) self.worker_features.literal = true;
         const str_lit = self.stringLiteral(id);
-        return try self.result.store.insertStringView(str_lit.backing, str_lit.offset, str_lit.len);
+        const key: BackingExtent = .{ .address = @intFromPtr(str_lit.backing.ptr), .len = str_lit.backing.len };
+        const backing = self.literal_backings.get(key) orelse blk: {
+            if (self.worker_callback) Common.invariant("worker literal backing was not prepared");
+            const backing = try self.result.store.insertString(str_lit.backing);
+            try self.literal_backings.put(self.allocator, key, backing);
+            break :blk backing;
+        };
+        return .{ .backing = backing, .offset = str_lit.offset, .len = str_lit.len };
     }
 
     fn noteLocal(self: *Lowerer, local: LIR.LocalId) Common.LowerError!void {
@@ -7519,10 +7541,9 @@ const Lowerer = struct {
                 .next = next,
             } }, where.source()) },
             .str_lit => |literal| blk: {
-                const str_lit = self.stringLiteral(literal);
                 break :blk .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
                     .target = target,
-                    .value = .{ .str_literal = try self.result.store.insertStringView(str_lit.backing, str_lit.offset, str_lit.len) },
+                    .value = .{ .str_literal = try self.lirStrLiteral(literal) },
                     .next = next,
                 } }, where.source()) };
             },
@@ -12331,10 +12352,9 @@ const Lowerer = struct {
                 .next = next,
             } }, where.source()),
             .str_lit => |value| blk: {
-                const str_lit = self.stringLiteral(value);
                 break :blk try self.result.store.addCFStmt(.{ .assign_literal = .{
                     .target = target,
-                    .value = .{ .str_literal = try self.result.store.insertStringView(str_lit.backing, str_lit.offset, str_lit.len) },
+                    .value = .{ .str_literal = try self.lirStrLiteral(value) },
                     .next = next,
                 } }, where.source());
             },

@@ -238,6 +238,33 @@ test "two equal compile-time tables freeze to one backing in the continued runti
     try std.testing.expect(countListSlots(&lowered.restored.lir_result) > 0);
 }
 
+test "distinct constant images emit one copy of their imported file" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const payload = "shared file bytes, long enough that every target needs an allocation";
+    try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "asset.bin", .data = payload });
+    var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\import "asset.bin" as asset : List(U8)
+        \\first = [asset, [1.U8]]
+        \\second = [[2.U8], asset]
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(List.get(first, List.len(args))))
+        \\    Echo.line!(Str.inspect(List.get(second, List.len(args))))
+        \\    Ok({})
+        \\}
+    , .wrappers, .evaluation);
+    defer lowered.deinit();
+    var copies: usize = 0;
+    for (lowered.image) |node| copies += std.mem.count(u8, node.bytes, payload);
+    try std.testing.expectEqual(@as(usize, 1), copies);
+}
+
 test "an empty compile-time list stays immutable even when a consumer appends" {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;

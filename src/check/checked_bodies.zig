@@ -581,6 +581,14 @@ pub const CheckedBodies = struct {
         return self.env.getString(literal);
     }
 
+    /// Only a resolved whole-file literal has the digest computed when its bytes were read.
+    pub fn importedLiteralDigest(self: CheckedBodies, id: ExprId) ?base.SourceDigest {
+        const node = self.env.store.sourceNode(ModuleEnv.nodeIdxFrom(id));
+        if (node.tag != .expr_string_segment and node.tag != .expr_bytes_literal) return null;
+        const dep = node.getPayload().expr_string_segment.file_dependency.get() orelse return null;
+        return .{ .bytes = self.env.file_dependencies.items()[dep].content_hash };
+    }
+
     /// The text a quote literal node carries: a string expression's
     /// segments, or a string literal pattern's literal.
     pub fn quoteText(self: *const CheckedBodies, raw_node: u32) Text {

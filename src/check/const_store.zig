@@ -660,6 +660,7 @@ pub const ConstImage = struct {
     /// Block offsets of the pointer words, ascending, in
     /// `ConstStore.image_pointers`.
     pointers: ConstRange,
+    files: ConstRange,
     /// The block's alignment: the largest alignment of anything in it.
     alignment: u32,
     /// The size of the value at offset 0; the rest of the block is its
@@ -681,6 +682,7 @@ pub const ConstImage = struct {
 pub const ConstImageView = struct {
     bytes: []const u8,
     pointers: []const u32,
+    files: []const base.SourceDigest.Range = &.{},
     alignment: u32,
     root_size: u32,
     root_type: ConstTypeId,
@@ -690,6 +692,13 @@ pub const ConstImageView = struct {
     /// The bytes of the value at offset 0.
     pub fn rootBytes(self: ConstImageView) []const u8 {
         return self.bytes[0..self.root_size];
+    }
+
+    /// Identity only for the exact bytes the reader supplied, never a slice.
+    pub fn fileAt(self: ConstImageView, offset: u32, len: usize) ?base.SourceDigest {
+        const i = std.sort.lowerBound(base.SourceDigest.Range, self.files, offset, base.SourceDigest.Range.orderOffset);
+        if (i == self.files.len or self.files[i].offset != offset or self.files[i].len != len) return null;
+        return .{ .bytes = self.files[i].digest };
     }
 
     /// The bytes of the `Str` whose 64-bit descriptor (bytes pointer,
@@ -727,7 +736,7 @@ pub const ImageLiteral = union(enum) {
     scalar: ConstScalar,
     /// The tag, as the root type's tag union names it.
     tag: names.TagNameId,
-    str: struct { bytes: []const u8, capacity: u64 },
+    str: struct { bytes: []const u8, capacity: u64, image: ConstImageId, file: ?base.SourceDigest },
 };
 
 /// Compile-time constant stored in checked module data.
@@ -1472,6 +1481,7 @@ pub const ConstStore = struct {
     /// once, so equal bytes name one blob. Stored with the store, so a
     /// loaded store deduplicates new blobs against the ones it loaded.
     blob_index: collections.HashedProbeTable = .{},
+    image_files: collections.SafeList(base.SourceDigest.Range) = .{},
 
     /// Compares a candidate's bytes with an indexed blob's.
     const BlobBytesContext = struct {
@@ -1518,6 +1528,7 @@ pub const ConstStore = struct {
     pub const ImageInput = struct {
         bytes: []const u8,
         pointers: []const u32,
+        files: []const base.SourceDigest.Range = &.{},
         alignment: u32,
         root_size: u32,
         root_type: ConstTypeId,
@@ -1582,10 +1593,12 @@ pub const ConstStore = struct {
         }
         const bytes = try artifact_serialize.appendSpan(ConstRange, u8, &self.image_bytes, self.allocator, input.bytes);
         const pointers = try artifact_serialize.appendSpan(ConstRange, u32, &self.image_pointers, self.allocator, input.pointers);
+        const files = try artifact_serialize.appendSpan(ConstRange, base.SourceDigest.Range, &self.image_files, self.allocator, input.files);
         const image_id: ConstImageId = @fromBackingInt(std.math.cast(u32, self.images.items().len) orelse return error.OutOfMemory);
         _ = try self.images.append(self.allocator, .{
             .bytes = bytes,
             .pointers = pointers,
+            .files = files,
             .alignment = input.alignment,
             .root_size = input.root_size,
             .root_type = input.root_type,
@@ -1601,6 +1614,7 @@ pub const ConstStore = struct {
         return .{
             .bytes = self.image_bytes.items()[stored.bytes.start .. stored.bytes.start + stored.bytes.len],
             .pointers = self.image_pointers.items()[stored.pointers.start .. stored.pointers.start + stored.pointers.len],
+            .files = self.image_files.items()[stored.files.start .. stored.files.start + stored.files.len],
             .alignment = stored.alignment,
             .root_size = stored.root_size,
             .root_type = stored.root_type,
@@ -1619,7 +1633,15 @@ pub const ConstStore = struct {
         while (true) switch (self.type_store.get(ty)) {
             .named => |named| ty = (named.backing.get() orelse return null).ty,
             .primitive => |primitive| return switch (primitive) {
-                .str => .{ .str = .{ .bytes = view.strAt(0), .capacity = view.strCapacityAt(0) } },
+                .str => blk: {
+                    const text = view.strAt(0);
+                    break :blk .{ .str = .{
+                        .bytes = text,
+                        .capacity = view.strCapacityAt(0),
+                        .image = id,
+                        .file = if (text.len == 0) null else view.fileAt(@intCast(@intFromPtr(text.ptr) - @intFromPtr(view.bytes.ptr)), text.len),
+                    } };
+                },
                 .u8 => .{ .scalar = .{ .u8 = bytes[0] } },
                 .i8 => .{ .scalar = .{ .i8 = @bitCast(bytes[0]) } },
                 .u16 => .{ .scalar = .{ .u16 = std.mem.readInt(u16, bytes[0..2], .little) } },
@@ -2003,11 +2025,12 @@ pub const ConstStore = struct {
         images: artifact_serialize.SerializedSlice(ConstImage) = .{},
         image_bytes: artifact_serialize.SerializedSlice(u8) = .{},
         image_pointers: artifact_serialize.SerializedSlice(u32) = .{},
+        image_files: artifact_serialize.SerializedSlice(base.SourceDigest.Range) = .{},
 
         comptime {
-            // 14 value/function/image side lists + 7 nested type-store lists
+            // 15 value/function/image side lists + 7 nested type-store lists
             // + the blob index's cells.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 22);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 23);
         }
 
         /// Every blob is indexed, so the index holds exactly as many entries
@@ -2238,6 +2261,7 @@ pub const ConstStore = struct {
         self.images.deinit(self.allocator);
         self.image_bytes.deinit(self.allocator);
         self.image_pointers.deinit(self.allocator);
+        self.image_files.deinit(self.allocator);
         self.* = ConstStore.init(self.allocator);
     }
 

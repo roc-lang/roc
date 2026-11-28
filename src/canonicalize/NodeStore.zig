@@ -2664,10 +2664,11 @@ pub fn resolveDeferredExprToStringSegment(
     store: *NodeStore,
     expr_idx: CIR.Expr.Idx,
     literal: base.StringLiteral.Idx,
+    dependency: u32,
 ) void {
     const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
     var node = Node.init(.expr_string_segment);
-    node.setPayload(.{ .expr_string_segment = .{ .segment_idx = @backingInt(literal) } });
+    node.setPayload(.{ .expr_string_segment = .{ .segment_idx = @backingInt(literal), .file_dependency = .some(dependency) } });
     store.nodes.set(node_idx, node);
 }
 
@@ -2676,10 +2677,11 @@ pub fn resolveDeferredExprToBytesLiteral(
     store: *NodeStore,
     expr_idx: CIR.Expr.Idx,
     literal: base.StringLiteral.Idx,
+    dependency: u32,
 ) void {
     const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
     var node = Node.init(.expr_bytes_literal);
-    node.setPayload(.{ .expr_string_segment = .{ .segment_idx = @backingInt(literal) } });
+    node.setPayload(.{ .expr_string_segment = .{ .segment_idx = @backingInt(literal), .file_dependency = .some(dependency) } });
     store.nodes.set(node_idx, node);
 }
 

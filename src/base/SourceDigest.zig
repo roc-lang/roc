@@ -22,6 +22,18 @@ const byte_encoding = @import("byte_encoding.zig");
 
 const SourceDigest = @This();
 
+/// An unchanged whole file embedded in a self-contained block. The range
+/// names the payload, not its descriptor or static reference-count header.
+pub const Range = extern struct {
+    offset: u32,
+    len: u32,
+    digest: [32]u8,
+
+    pub fn orderOffset(offset: u32, entry: Range) std.math.Order {
+        return std.math.order(offset, entry.offset);
+    }
+};
+
 bytes: [32]u8,
 
 /// Digest `source`. Callers hold on to the result instead of calling this

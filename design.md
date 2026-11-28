@@ -5421,7 +5421,14 @@ corrupt and is a miss.
 
 A data file a module imports is likewise hashed once, when the canonicalize
 task reads it. Its digest is the file dependency's `content_hash`, which both
-the module's source-input hash and watch mode read.
+the module's source-input hash and watch mode read. The resolved literal names
+that dependency. Storing or copying its exact bytes as a checked constant
+preserves the digest; evaluating a new value does not infer one. A stored
+image remains self-contained: its sorted file ranges name the unchanged
+bytes within it, not a file the loader must reopen. Emission can therefore
+give two different constants one immutable file backing without confusing
+their types, descriptors, or whole-image identities. Bytes that fit inline
+in a string descriptor need no backing allocation.
 
 Watch mode's file state for a readable file is the source digest of the file's
 bytes exactly as they are on disk, because that is what a refresh check can
@@ -12531,6 +12538,16 @@ alignment required by every view. Each view offset must also satisfy its own
 item alignment. Static-data materialization aligns the backing to that
 maximum while keeping the Roc list length and capacity in items rather than
 bytes.
+
+Workers may give equal literal bytes different store offsets. When assigning
+runtime addresses, equal bytes share one backing at the maximum alignment of
+all their entries. Neither the emitted constants nor their alignment depend
+on how many workers lowered the program.
+
+String literals and unchanged `U8` literal views known during Solved-LIR
+preparation refer to the coordinator's backing. A worker copies the view, not
+the asset bytes. Packed products that need decoding or realignment still get
+the backing required by their committed layout, not the file's identity.
 
 Monotype lowering also packs source lists whose items are all checked builtin
 numeric literals, before constructing per-item IR. It consumes the checked
@@ -28632,7 +28649,11 @@ its plan requests no variant. A variant reads its base procedure's prepared
 source, so a wave holds base owners or variants, never both, and every base
 wave precedes every variant wave. The wave then reserves its variants in owner
 order, emits the owners whose plans requested any in a second run, and
-appends every shard in owner order. A source's prepared data and an owner's
+appends every shard in owner order: the coordinator reserves each shard's rows
+in owner order, which fixes every identity it is given, and one more ordered
+run writes the reserved rows, each item writing only its own shard's. A
+failure after any shard is reserved writes every reserved shard before it is
+reported, so no reserved row is left unwritten. A source's prepared data and an owner's
 plan live only as long as an emission reads them: an owner frees its plan as
 soon as its shard is emitted, a base owner's task frees its source once the
 owner is emitted, a variant wave first prepares, in one ordered run, each
@@ -29218,6 +29239,18 @@ match likewise uses only its source:
 a borrowed capture view reaches the source's place through its borrow link,
 and an owned capture retains through the source at the match. Only releases
 use every place.
+
+Each emission settles its ownership places once, before it plans anything
+(`OwnershipPlan`). For every local of the procedure's frame the plan records
+the binding mode this emission gives the local, the local whose ownership unit
+an occurrence of it moves, and the leader of its ownership place: the binding
+reached by following, from the local, the representative its projection alias
+reads or else its solved lender, stopping at the first binding this emission
+owns. The plan is built from the solved modes, the dismantle plan, and the
+bindings the emission's signature overrides to owned, and planning and emission
+read binding modes, units, and places only from it, so no decision of one
+emission can combine answers taken from those sources at different points. A
+Debug compiler checks the plan against its inputs as it is built.
 
 The ownership-place query asks whether a path from a statement reaches a use
 of a root's place before a statement that rebinds the root. Its cost is linear
@@ -30194,19 +30227,26 @@ the base solver's combined definition and use constraints. Direct calls establis
 directed signature dependencies between components rather than merging a call
 graph into one ownership domain.
 
-Every component begins dirty. A dirty component is reseeded and solved against
+Components are settled callees first. A component's level is one more than the
+highest level among the components its procedures call, and components that
+call each other share a level; the levels are settled in ascending order, so a
+component is first analyzed against the final signatures of everything it
+calls outside its own level and is analyzed again only when a signature of its
+own level changes. Every component of a level begins that level dirty. A dirty
+component is reseeded and solved against
 a frozen signature/return-row snapshot; independent components may run on
 workers with private compact domains and query state. The coordinator commits
 results in deterministic procedure order after the wave drains and dirties
-callers only when signature bits or return-row contents change. Moving an
+callers of the same level only when signature bits or return-row contents
+change. Moving an
 unchanged row to a different table offset does not change its contents. Clean
 component results remain valid while those inputs stay fixed; newly discovered
 return capabilities must not inherit a stale poisoned lattice verdict.
 
 A consuming-use proof is reused only while its exact
 consumption inventory is unchanged; holder-adding uses remain
-signature-dependent. Committed takes still require their own settlement, and
-every component starts that settlement dirty. Only the converged result
+signature-dependent. ARC insertion settles once, after its takes are
+committed and against them. Only the converged result
 outlives reusable analysis scratch. The whole-program analysis remains a test
 oracle, not a production replay or fallback.
 
@@ -30296,8 +30336,9 @@ the per-field propagation. A complete aggregate field read whose root's ownershi
 place is used after it is such an occurrence, since emission retains the
 projected value right after the read (see the place rule under field takes);
 the analysis reads that decision rather than re-deriving it. Takes are decided
-after the borrow modes, so the solver settles without
-them and emission re-derives uniqueness against the committed takes, settling
+after the borrow modes, and nothing between the mode solve and emission reads a
+uniqueness verdict, so uniqueness is settled exactly once, after the takes are
+committed and against them, settling
 the unique-return bits and the per-field unique-return mask of each signature
 to a fixpoint; a caller taking a field out of a callee's dying `Try` record
 result thus holds the callee's fresh birth, and a caller taking back a

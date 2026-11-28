@@ -710,11 +710,13 @@ test "a value-form literal's image holds the module's literal bytes" {
         const image = app.const_store.image(app.const_store.imageOf(root.payload.const_node) orelse return error.TestUnexpectedResult);
         if (std.mem.eql(u8, name, "long_text")) {
             try std.testing.expectEqualStrings(long_text, image.strAt(0));
+            try std.testing.expectEqual(@as(usize, 0), image.files.len);
         } else {
             // `RocList`'s 64-bit words: bytes, length, capacity.
             const start = std.mem.readInt(u64, image.bytes[0..8], .little);
             const len = std.mem.readInt(u64, image.bytes[8..16], .little);
             try std.testing.expectEqualStrings(embedded, image.bytes[@intCast(start)..][0..@intCast(len)]);
+            try std.testing.expectEqual(base.SourceDigest.of(embedded), image.fileAt(@intCast(start), @intCast(len)).?);
         }
         seen += 1;
     }

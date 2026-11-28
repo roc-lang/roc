@@ -452,7 +452,8 @@ pub const Constants = struct {
     /// 212: a type store keeps each slot's kind in its payload word, and a
     /// sealed store keeps only the descriptors and pool entries its classes
     /// reach.
-    pub const CACHE_VERSION = 212;
+    /// 213: whole-file literal nodes name their file dependency.
+    pub const CACHE_VERSION = 213;
 };
 
 /// Configuration for the Roc cache system.

@@ -57,10 +57,10 @@ pub const StringLiteralId = enum(u32) { _ };
 /// Identifier for a compile-time-observed control-flow site.
 pub const ComptimeSiteId = enum(u32) { _ };
 
-/// Checked-blob identity borrowed only while a body draft is being built.
-pub const ConstBlobView = struct {
+/// An image-root string borrowed only while a body draft is being built.
+pub const ImageStringView = struct {
     module_bytes: [32]u8,
-    data: check.ConstStore.ConstBlobDataId,
+    image: check.ConstStore.ConstImageId,
     bytes: []const u8,
 };
 
@@ -101,7 +101,7 @@ pub const SharedLiteralBacking = struct {
     }
 };
 
-const ConstBlobKey = struct { module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId };
+const ImageStringKey = struct { module_bytes: [32]u8, image: check.ConstStore.ConstImageId };
 
 /// Owned string bytes plus the exact slice used by this literal.
 pub const StringLiteral = struct {
@@ -2305,7 +2305,8 @@ pub const ProgramBuilder = struct {
     string_literals: ProgramList(StringLiteral, "string_literals"),
     /// Backing pool for `FnBody.hosted` spans.
     signature_var_steps: ProgramList(SignatureVarStep, "signature_var_steps") = .empty,
-    const_blob_backings: std.AutoHashMapUnmanaged(ConstBlobKey, *SharedLiteralBacking) = .empty,
+    image_strings: std.AutoHashMapUnmanaged(ImageStringKey, *SharedLiteralBacking) = .empty,
+    file_backings: std.AutoHashMapUnmanaged([32]u8, *SharedLiteralBacking) = .empty,
     proc_debug_names: ProcDebugNameMap,
     roots: ProgramList(Root, "roots"),
     literal_roots: ProgramList(LiteralRoot, "literal_roots"),
@@ -2472,9 +2473,12 @@ pub const ProgramBuilder = struct {
         self.literal_root_by_identity.deinit(self.allocator);
         self.proc_debug_names.deinit();
         for (self.string_literals.unsafeRawItemsForView()) |literal| literal.deinit(self.allocator);
-        var backings = self.const_blob_backings.valueIterator();
+        var backings = self.image_strings.valueIterator();
         while (backings.next()) |owner| owner.*.release();
-        self.const_blob_backings.deinit(self.allocator);
+        self.image_strings.deinit(self.allocator);
+        var files = self.file_backings.valueIterator();
+        while (files.next()) |owner| owner.*.release();
+        self.file_backings.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
         self.signature_var_steps.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
@@ -2785,14 +2789,26 @@ pub const ProgramBuilder = struct {
         return try self.addStringView(text, 0, @intCast(text.len));
     }
 
-    /// Restore a checked blob as a literal, copying each owner-relative
-    /// checked blob at most once.
-    pub fn addConstBlobView(self: *ProgramBuilder, module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId, bytes: []const u8) std.mem.Allocator.Error!StringLiteralId {
+    /// The importer already identified these exact bytes. Give all modules'
+    /// references one immutable owner, without comparing their copies again.
+    pub fn addFileLiteral(self: *ProgramBuilder, digest: base.SourceDigest, bytes: []const u8) std.mem.Allocator.Error!StringLiteralId {
+        const slot = try self.file_backings.getOrPut(self.allocator, digest.bytes);
+        if (!slot.found_existing) {
+            errdefer _ = self.file_backings.remove(digest.bytes);
+            slot.value_ptr.* = try SharedLiteralBacking.init(self.allocator, bytes);
+        }
+        const owner = slot.value_ptr.*;
+        std.debug.assert(owner.bytes.len == bytes.len);
+        return self.addSharedStringView(owner, 0, @intCast(bytes.len), 0, @intCast(bytes.len));
+    }
+
+    /// Restore a string literal from a checked image, copying its bytes once.
+    pub fn addImageString(self: *ProgramBuilder, module_bytes: [32]u8, image: check.ConstStore.ConstImageId, bytes: []const u8) std.mem.Allocator.Error!StringLiteralId {
         const len = std.math.cast(u32, bytes.len) orelse return error.OutOfMemory;
-        const key = ConstBlobKey{ .module_bytes = module_bytes, .data = data };
-        const owner = self.const_blob_backings.get(key) orelse blk: {
+        const key = ImageStringKey{ .module_bytes = module_bytes, .image = image };
+        const owner = self.image_strings.get(key) orelse blk: {
             const created = try SharedLiteralBacking.init(self.allocator, bytes);
-            self.const_blob_backings.put(self.allocator, key, created) catch |err| {
+            self.image_strings.put(self.allocator, key, created) catch |err| {
                 created.release();
                 return err;
             };
@@ -3118,17 +3134,28 @@ test "monotype ast declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
-test "restored constant blob views share storage across IR ownership transfers" {
+test "whole-file imports share their owner across modules" {
+    var program = ProgramBuilder.init(std.testing.allocator);
+    defer program.deinit();
+    const a = "example";
+    const b = try std.testing.allocator.dupe(u8, a);
+    defer std.testing.allocator.free(b);
+    const digest = base.SourceDigest.of(a);
+    const first = try program.addFileLiteral(digest, a);
+    const second = try program.addFileLiteral(digest, b);
+    try std.testing.expectEqual(program.stringLiteral(first).shared.?, program.stringLiteral(second).shared.?);
+    try std.testing.expectEqualStrings(a, program.stringLiteral(second).text());
+}
+
+test "restored image strings share storage across IR ownership transfers" {
     const gpa = std.testing.allocator;
-    var const_store = check.ConstStore.ConstStore.init(gpa);
-    defer const_store.deinit();
-    const data = try const_store.addBlobData("abcdefgh");
+    const image: check.ConstStore.ConstImageId = @fromBackingInt(7);
 
     var program = ProgramBuilder.init(gpa);
     var program_alive = true;
     defer if (program_alive) program.deinit();
-    const a = try program.addConstBlobView(@splat(0), data, "abcdefgh");
-    const b = try program.addConstBlobView(@splat(0), data, "abcdefgh");
+    const a = try program.addImageString(@splat(0), image, "abcdefgh");
+    const b = try program.addImageString(@splat(0), image, "abcdefgh");
     const first = program.string_literals.get(@backingInt(a));
     const second = program.string_literals.get(@backingInt(b));
     try std.testing.expectEqual(first.backing.ptr, second.backing.ptr);

@@ -9,6 +9,7 @@
 const std = @import("std");
 const compilerInvariant = @import("base").invariant;
 const base_target = @import("base").target;
+const SourceDigest = @import("base").SourceDigest;
 const layout = @import("layout");
 const lir = @import("lir");
 const static_data = @import("static_data");
@@ -225,6 +226,10 @@ pub fn ImageGraph(comptime AllocationKey: type) type {
         alignment_: u32 = 1,
         /// The allocations after the root, in block order.
         segments: std.ArrayList(Segment) = .empty,
+        files: std.ArrayList(SourceDigest.Range) = .empty,
+        /// Set only while copying a stored image through its plan. Evaluated
+        /// memory has no file provenance.
+        source_image: ?struct { base: usize, image: @import("check").ConstStore.ConstImageView } = null,
 
         /// An allocation of the block, from the first byte of its header at
         /// `start`, at `alignment`; `payload` is its first payload byte, what
@@ -236,6 +241,7 @@ pub fn ImageGraph(comptime AllocationKey: type) type {
             self.pointers.deinit(self.allocator);
             self.allocations.deinit(self.allocator);
             self.segments.deinit(self.allocator);
+            self.files.deinit(self.allocator);
         }
 
         /// Images are at the 64-bit layout, whatever the evaluation's
@@ -306,12 +312,37 @@ pub fn ImageGraph(comptime AllocationKey: type) type {
 
         /// A finished image: the block, its pointer words in ascending
         /// order, and its alignment, all owned by the graph.
-        pub const Result = struct { bytes: []const u8, pointers: []const u32, alignment: u32 };
+        pub const Result = struct { bytes: []const u8, pointers: []const u32, alignment: u32, files: []const SourceDigest.Range };
+
+        pub fn recordFile(self: *Self, dest: Destination, len: usize, digest: SourceDigest) Allocator.Error!void {
+            if (len != 0) try self.files.append(self.allocator, .{ .offset = @intCast(dest.offset), .len = @intCast(len), .digest = digest.bytes });
+        }
+
+        pub fn copyFile(self: *Self, address: usize, dest: Destination, len: usize) Allocator.Error!void {
+            const source = self.source_image orelse return;
+            if (len == 0) return;
+            if (source.image.fileAt(@intCast(address - source.base), len)) |digest| try self.recordFile(dest, len, digest);
+        }
+
+        fn fileLessThan(_: void, a: SourceDigest.Range, b: SourceDigest.Range) bool {
+            return a.offset < b.offset;
+        }
 
         pub fn finish(self: *Self) Allocator.Error!Result {
             std.mem.sortUnstable(u32, self.pointers.items, {}, std.sort.asc(u32));
             try self.mergeEqualAllocations();
-            return .{ .bytes = self.block.items, .pointers = self.pointers.items, .alignment = self.alignment_ };
+            std.mem.sortUnstable(SourceDigest.Range, self.files.items, {}, fileLessThan);
+            var unique: usize = 0;
+            for (self.files.items) |file| {
+                if (unique != 0 and self.files.items[unique - 1].offset == file.offset) {
+                    std.debug.assert(std.meta.eql(self.files.items[unique - 1], file));
+                    continue;
+                }
+                self.files.items[unique] = file;
+                unique += 1;
+            }
+            self.files.shrinkRetainingCapacity(unique);
+            return .{ .bytes = self.block.items, .pointers = self.pointers.items, .alignment = self.alignment_, .files = self.files.items };
         }
 
         /// Make allocations of equal content one, and put them in one order:
@@ -441,6 +472,7 @@ pub fn ImageGraph(comptime AllocationKey: type) type {
                 try pointers.append(gpa, @intCast(moved_at));
             }
             std.mem.sortUnstable(u32, pointers.items, {}, std.sort.asc(u32));
+            for (self.files.items) |*file| file.offset = @intCast(self.movedOffset(file.offset, new_start));
             self.block.deinit(gpa);
             self.block = block;
             self.pointers.deinit(gpa);

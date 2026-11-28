@@ -338,6 +338,7 @@ pub const Writer = struct {
         return try self.store.appendImage(.{
             .bytes = result.bytes,
             .pointers = result.pointers,
+            .files = result.files,
             .alignment = result.alignment,
             .root_size = @intCast(image.graph.size(ret_layout)),
             .root_type = root_type,
@@ -1444,14 +1445,17 @@ const ValueFormImage = struct {
                 else
                     checkedStrSegments(bodies, expr);
                 const text = if (segments.len == 1) Writer.checkedSegmentText(bodies, segments[0]) else try writer.checkedStrText(segments);
+                const digest = if (segments.len == 1) bodies.importedLiteralDigest(segments[0]) else null;
                 if (text.len < size) {
                     const descriptor = self.graph.bytes(job.dest, size);
                     @memcpy(descriptor[0..text.len], text);
                     descriptor[size - 1] = RocStr.smallStrFlagByte(text.len);
+                    if (digest) |file| try self.graph.recordFile(job.dest, text.len, file);
                     return;
                 }
                 const bytes = try self.allocation(job.dest, job.plan, job.layout_idx, text.len, 1, false, null);
                 @memcpy(self.graph.bytes(bytes, text.len), text);
+                if (digest) |file| try self.graph.recordFile(bytes, text.len, file);
                 // `RocStr`'s words: bytes, capacity, length.
                 try self.graph.writeWord(job.dest.offsetBy(word), RocStr.encodeCapacityForWidth(text.len));
                 try self.graph.writeWord(job.dest.offsetBy(2 * word), text.len);
@@ -1466,6 +1470,8 @@ const ValueFormImage = struct {
                     if (builtin.mode == .debug) std.debug.assert(self.graph.size(elem_layout) == 1);
                     const elements = try self.allocation(job.dest, elem_plan, elem_layout, literal.len, 1, false, literal.len);
                     @memcpy(self.graph.bytes(elements, literal.len), literal);
+                    const bodies = &writer.checkedValues().bodies;
+                    if (bodies.importedLiteralDigest(checked.valueFormValueExpr(bodies, expr))) |file| try self.graph.recordFile(elements, literal.len, file);
                     return;
                 }
                 const items = writer.checkedListItems(expr);
@@ -1558,7 +1564,11 @@ const ValueFormImage = struct {
         }
         if (image.root_size != size) writerInvariant("a constant's image differs in size from the part reading it");
         // An image that points nowhere is its root's bytes alone.
-        if (image.pointers.len == 0) return @memcpy(self.graph.bytes(dest, size), image.bytes[0..size]);
+        if (image.pointers.len == 0) {
+            @memcpy(self.graph.bytes(dest, size), image.bytes[0..size]);
+            for (image.files) |file| try self.graph.recordFile(dest.offsetBy(file.offset), file.len, .{ .bytes = file.digest });
+            return;
+        }
         // Otherwise the image, relocated into memory, is copied part by part
         // through the reading part's plan, as an evaluation reading the
         // constant leaves it to be copied: each allocation at its own place.
@@ -1570,6 +1580,11 @@ const ValueFormImage = struct {
             const word = memory[offset..][0..8];
             std.mem.writeInt(u64, word, @intFromPtr(memory.ptr) + std.mem.readInt(u64, word, .little), .little);
         }
+        // Source addresses identify allocations only within this temporary
+        // copy. A later stored part can reuse the same address.
+        self.graph.allocations.clearRetainingCapacity();
+        self.graph.source_image = .{ .base = @intFromPtr(memory.ptr), .image = image };
+        defer self.graph.source_image = null;
         try NativeRootExport.imagePart(&self.graph, plan, layout_idx, .{ .ptr = memory.ptr }, dest);
     }
 

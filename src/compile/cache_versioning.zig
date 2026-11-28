@@ -113,7 +113,8 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// literal argument root records no function-holding flag, and a Solved
 /// program's data root is stored as an image at its declared rows' layout.
 /// Platform-pairing entries share it.
-const checked_envelope_version: u32 = 67;
+/// Version 68 records unchanged imported-file ranges in stored images.
+const checked_envelope_version: u32 = 68;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment. Version 5 rejects builtin-conflicting import
@@ -215,8 +216,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x81, 0x6D, 0xDA, 0xEA, 0xA7, 0x09, 0x43, 0xB4, 0x38, 0x32, 0x1E, 0x5D, 0x57, 0x0A, 0xA1, 0xF6,
-        0xD1, 0xF8, 0xAD, 0x7E, 0x08, 0x16, 0x1B, 0xCC, 0x54, 0x15, 0x74, 0xDB, 0xD0, 0x12, 0x23, 0xA1,
+        0x7D, 0x74, 0x88, 0x0E, 0xEA, 0x5F, 0x31, 0x45, 0xEB, 0x13, 0x28, 0xAF, 0x84, 0xC9, 0x05, 0x69,
+        0x3A, 0x93, 0x1C, 0x46, 0xAD, 0xE5, 0x90, 0x2E, 0x9F, 0xB2, 0xC4, 0xA2, 0xE1, 0x19, 0x59, 0x90,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

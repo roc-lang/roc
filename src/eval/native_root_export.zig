@@ -596,6 +596,7 @@ fn BuilderOf(comptime GraphT: type) type {
                 const descriptor = self.graph.bytes(job.dest, descriptor_size);
                 @memcpy(descriptor[0..slice.len], slice);
                 descriptor[descriptor_size - 1] = builtins.str.RocStr.smallStrFlagByte(slice.len);
+                if (@hasDecl(GraphT, "is_image")) try self.graph.copyFile(if (str.isSmallStr()) @intFromPtr(job.source.ptr) else @intFromPtr(slice.ptr), job.dest, slice.len);
                 return;
             }
             const result = try self.graph.reserveAllocation(.{
@@ -606,6 +607,7 @@ fn BuilderOf(comptime GraphT: type) type {
                 .kind = .string,
             }, slice.len, 1, false, null);
             if (result.fresh) @memcpy(self.graph.bytes(result.dest, slice.len), slice);
+            if (@hasDecl(GraphT, "is_image")) try self.graph.copyFile(@intFromPtr(slice.ptr), result.dest, slice.len);
             try self.graph.relocate(job.dest, result.dest);
             // `RocStr`'s words: bytes, capacity, length.
             try self.graph.writeWord(job.dest.offsetBy(self.graph.word()), builtins.str.RocStr.encodeCapacityForWidth(capacity));
@@ -639,6 +641,7 @@ fn BuilderOf(comptime GraphT: type) type {
             }, element_size * list_value.len(), self.graph.alignment(element_layout), self.graph.program.layouts.layoutContainsRefcounted(self.graph.program.layouts.getLayout(element_layout)), list_value.len());
             try self.graph.relocate(job.dest, result.dest);
             if (!result.fresh) return;
+            if (@hasDecl(GraphT, "is_image") and element_size == 1 and self.isScalarPlan(element)) try self.graph.copyFile(@intFromPtr(ptr), result.dest, list_value.len());
             // A list of scalars holds no pointer and nothing to visit: its items
             // are one run of bytes.
             if (self.isScalarPlan(element)) return self.scalars(element_layout, .{ .ptr = ptr }, result.dest, list_value.len());

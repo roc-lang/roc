@@ -415,6 +415,7 @@ pub const MonoLlvmCodeGen = struct {
     cold_depth: u32 = 0,
     static_bytes: std.StringHashMap(LlvmBuilder.Value),
     static_refcounted_backings: collections.DenseMap(u32, LlvmBuilder.Value),
+    output_backings: ?Base.StringLiteral.OutputBackings = null,
     static_data_globals: std.AutoHashMap(u32, LlvmBuilder.Value),
     /// In-process consumers supply a relocated image that outlives execution.
     /// Object emission leaves this null and uses linker-visible data symbols.
@@ -799,6 +800,7 @@ pub const MonoLlvmCodeGen = struct {
         self.clearStaticBytes();
         self.static_bytes.deinit();
         self.static_refcounted_backings.deinit();
+        if (self.output_backings) |*pool| pool.deinit(self.allocator);
         self.static_data_globals.deinit();
         self.static_data_export_rows.deinit();
         self.clearStaticDataSymbols();
@@ -829,6 +831,8 @@ pub const MonoLlvmCodeGen = struct {
         self.cold_depth = 0;
         self.clearStaticBytes();
         self.static_refcounted_backings.clearRetainingCapacity();
+        if (self.output_backings) |*pool| pool.deinit(self.allocator);
+        self.output_backings = null;
         self.static_data_globals.clearRetainingCapacity();
         self.clearStaticDataSymbols();
         self.rc_helpers.clearRetainingCapacity();
@@ -10252,10 +10256,12 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn staticRefcountedBytes(self: *MonoLlvmCodeGen, backing: Base.StringLiteral.Idx) Error!LlvmBuilder.Value {
-        const key: u32 = @backingInt(backing);
+        if (self.output_backings == null) self.output_backings = try Base.StringLiteral.OutputBackings.init(self.allocator, &self.store.strings, &self.store.string_builder);
+        const literal = self.output_backings.?.resolve(&self.store.strings, backing);
+        const key: u32 = @backingInt(literal.id);
         const builder = self.builder orelse return error.CompilationFailed;
         const word_size: usize = self.targetWordSize();
-        const backing_alignment = @max(word_size, @as(usize, self.store.strings.alignment(backing)));
+        const backing_alignment = @max(word_size, @as(usize, literal.alignment));
         const data_offset = std.mem.alignForward(usize, word_size, backing_alignment);
         // Only the backing global may be cached across proc bodies: the GEP to
         // its data offset is an instruction in whichever WipFunction is being

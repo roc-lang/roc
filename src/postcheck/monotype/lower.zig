@@ -19179,8 +19179,11 @@ comptime {
 }
 
 const DraftStringLiteral = struct {
-    backing: DraftSpan(u8),
-    const_blob: ?Ast.ConstBlobView = null,
+    backing: union(enum) {
+        draft: DraftSpan(u8),
+        stored: Ast.ImageStringView,
+        file: struct { bytes: []const u8, digest: base.SourceDigest },
+    },
     offset: u32,
     len: u32,
 };
@@ -20509,7 +20512,7 @@ const BodyDraftStore = struct {
         const id: DraftStringLiteralId = @fromBackingInt(@intCast(@as(u32, @intCast(self.string_literals.items.len))));
         const backing_span = try self.addStringBytes(backing);
         try self.string_literals.append(self.allocator, .{
-            .backing = backing_span,
+            .backing = .{ .draft = backing_span },
             .offset = offset,
             .len = len,
         });
@@ -20867,8 +20870,8 @@ const BodyDraftStore = struct {
         // each other's position.
         var literal_bytes_len: usize = 0;
         for (self.string_literals.items, 0..) |literal, index| {
-            if (!ids.retained(.string_literals, index) or literal.const_blob != null) continue;
-            literal_bytes_len += @max(literal.backing.len, 1);
+            if (!ids.retained(.string_literals, index) or literal.backing != .draft) continue;
+            literal_bytes_len += @max(literal.backing.draft.len, 1);
         }
         const literal_backing = if (literal_bytes_len == 0) null else try Ast.SharedLiteralBacking.initUnfilled(program.allocator, literal_bytes_len);
         defer if (literal_backing) |backing| backing.owner.release();
@@ -20876,16 +20879,18 @@ const BodyDraftStore = struct {
         var literal_cursor: u32 = 0;
         for (self.string_literals.items, 0..) |literal, index| {
             if (!ids.retained(.string_literals, index)) continue;
-            const id = if (literal.const_blob) |blob|
-                try program.addConstBlobView(blob.module_bytes, blob.data, blob.bytes)
-            else blk: {
-                const draft_backing = self.stringBytes(literal.backing);
-                const backing = literal_backing.?;
-                @memcpy(backing.bytes[literal_cursor..][0..draft_backing.len], draft_backing);
-                if (draft_backing.len == 0) backing.bytes[literal_cursor] = 0;
-                const view = try program.addSharedStringView(backing.owner, literal_cursor, @intCast(draft_backing.len), literal.offset, literal.len);
-                literal_cursor += @intCast(@max(draft_backing.len, 1));
-                break :blk view;
+            const id = switch (literal.backing) {
+                .file => |file| try program.addFileLiteral(file.digest, file.bytes),
+                .stored => |str| try program.addImageString(str.module_bytes, str.image, str.bytes),
+                .draft => |span| blk: {
+                    const draft_backing = self.stringBytes(span);
+                    const backing = literal_backing.?;
+                    @memcpy(backing.bytes[literal_cursor..][0..draft_backing.len], draft_backing);
+                    if (draft_backing.len == 0) backing.bytes[literal_cursor] = 0;
+                    const view = try program.addSharedStringView(backing.owner, literal_cursor, @intCast(draft_backing.len), literal.offset, literal.len);
+                    literal_cursor += @intCast(@max(draft_backing.len, 1));
+                    break :blk view;
+                },
             };
             if (@backingInt(id) != ids.core(.string_literals, @intCast(index), ids.string_literal_start)) {
                 Common.invariant("Monotype body draft string literal id did not append contiguously");
@@ -25761,11 +25766,20 @@ const BodyContext = struct {
         return try self.draft.addStringLiteral(text);
     }
 
-    fn addConstBlobView(self: *BodyContext, module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId, bytes: []const u8) Allocator.Error!DraftStringLiteralId {
+    fn addBorrowedLiteral(self: *BodyContext, backing: @FieldType(DraftStringLiteral, "backing"), len: usize) Allocator.Error!DraftStringLiteralId {
         const id: DraftStringLiteralId = @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.string_literals.items.len))));
-        const len = std.math.cast(u32, bytes.len) orelse return error.OutOfMemory;
-        try self.draft.string_literals.append(self.allocator, .{ .backing = .empty(), .const_blob = .{ .module_bytes = module_bytes, .data = data, .bytes = bytes }, .offset = 0, .len = len });
+        try self.draft.string_literals.append(self.allocator, .{ .backing = backing, .offset = 0, .len = std.math.cast(u32, len) orelse return error.OutOfMemory });
         return id;
+    }
+
+    fn literalExpr(self: *BodyContext, expr: ExprSite, id: base.StringLiteral.Idx) Allocator.Error!DraftStringLiteralId {
+        if (exprSourceNode(self.view, expr)) |source| {
+            if (self.view.bodies.importedLiteralDigest(source)) |digest| {
+                const bytes = self.view.bodies.text(id);
+                return self.addBorrowedLiteral(.{ .file = .{ .bytes = bytes, .digest = digest } }, bytes.len);
+            }
+        }
+        return self.lowerStringLiteral(id);
     }
 
     fn addStringView(
@@ -38258,9 +38272,9 @@ const BodyContext = struct {
                 if (self.view.bodies.literalConversionRoot(node)) |root_id| return self.withTypeDone(task, try self.lowerLiteralConversionAtNode(expr_id, root_id, try self.graph.importMono(ty)));
                 return self.withTypeDone(task, try self.lowerQuoteExpr(expr_id, node, ty));
             },
-            .str_segment => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
+            .str_segment => |str| .{ .str_lit = try self.literalExpr(expr_id, str) },
             .bytes_literal => |str| blk: {
-                const literal = try self.lowerStringLiteral(str);
+                const literal = try self.literalExpr(expr_id, str);
                 break :blk .{ .bytes_lit = .{
                     .literal = literal,
                     .len = @intCast(self.view.bodies.text(str).len),
@@ -49465,7 +49479,10 @@ const BodyContext = struct {
                 .payloads = try self.addExprSpan(&.{}),
             } },
             .str => |str| str: {
-                const string: BodyExprData = .{ .str_lit = try self.addStringLiteral(str.bytes) };
+                const string: BodyExprData = .{ .str_lit = if (str.file) |digest|
+                    try self.addBorrowedLiteral(.{ .file = .{ .bytes = str.bytes, .digest = digest } }, str.bytes.len)
+                else
+                    try self.addBorrowedLiteral(.{ .stored = .{ .module_bytes = store_view.key.bytes, .image = str.image, .bytes = str.bytes } }, str.bytes.len) };
                 const spare = str.capacity - str.bytes.len;
                 if (spare == 0) break :str string;
                 break :str try constStrWithSpareCapacity(self, try self.addExprWithTypeCell(cell, string), spare);
@@ -53932,7 +53949,7 @@ const BodyContext = struct {
         str_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         return switch (checkedExpr(self.view, expr_id).data) {
-            .str_segment => |literal| try self.addExpr(.{ .ty = str_ty, .data = .{ .str_lit = try self.lowerStringLiteral(literal) } }),
+            .str_segment => |literal| try self.addExpr(.{ .ty = str_ty, .data = .{ .str_lit = try self.literalExpr(expr_id, literal) } }),
             .numeral, .str_from_quote, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation segment was not a checked string segment"),
         };
     }

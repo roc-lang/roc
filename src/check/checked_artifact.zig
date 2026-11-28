@@ -34621,7 +34621,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 239);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 240);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -41035,8 +41035,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xB4, 0x2F, 0xEA, 0x26, 0xC4, 0xF7, 0xE8, 0x0D, 0xFC, 0x19, 0x6D, 0x2B, 0xAA, 0xD0, 0x3F, 0xBA,
-        0xB3, 0xFA, 0x93, 0x55, 0x90, 0x41, 0x7F, 0x46, 0x37, 0xB4, 0xCC, 0xF9, 0x4B, 0xAC, 0xCE, 0x1B,
+        0xD9, 0xEA, 0x1F, 0xD4, 0xDB, 0x6A, 0x42, 0xC7, 0x6A, 0xB3, 0x75, 0x82, 0x0E, 0x26, 0x09, 0xA1,
+        0xCC, 0x96, 0xE3, 0x7E, 0x46, 0x2E, 0x08, 0xDD, 0x27, 0xBE, 0xF4, 0xE8, 0x84, 0x59, 0x8A, 0x56,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
