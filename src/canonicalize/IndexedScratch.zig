@@ -76,7 +76,7 @@ test "block inventory: restoring duplicate positions is ordered and allocation-f
             return id;
         }
 
-        fn run(gpa: std.mem.Allocator) !void {
+        fn run(gpa: std.mem.Allocator) (std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
             var stack = IndexedScratch(u32, u32, keyOf).init(gpa);
             defer stack.deinit();
             try stack.append(9);
