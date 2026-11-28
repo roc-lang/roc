@@ -3149,7 +3149,7 @@ test "whole-file imports share their owner across modules" {
 
 test "restored image strings share storage across IR ownership transfers" {
     const gpa = std.testing.allocator;
-    const image: check.ConstStore.ConstImageId = @fromBackingInt(0);
+    const image: check.ConstStore.ConstImageId = @fromBackingInt(7);
 
     var program = ProgramBuilder.init(gpa);
     var program_alive = true;
