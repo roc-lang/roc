@@ -19,7 +19,7 @@ name: Perf
 # then re-measures it, and the check fails only if that confirms the
 # regression.
 #
-# bench.roc runs on the Roc nightly pinned in its header, never on the roc
+# bench.roc runs on the Roc release pinned in its header, never on the roc
 # being measured.
 
 jobs:

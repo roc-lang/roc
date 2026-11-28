@@ -1,22 +1,22 @@
 name: 'Set up Roc for ci/perf/bench.roc'
-description: 'Install the Roc nightly that the `roc:` entry in the header of ci/perf/bench.roc pins.'
+description: 'Install the Roc release that the `roc:` entry in the header of ci/perf/bench.roc pins.'
 runs:
   using: 'composite'
   steps:
-    - name: Read the pinned Roc nightly
-      id: nightly
+    - name: Read the pinned Roc release
+      id: pin
       shell: bash
       run: |
         set -euo pipefail
-        tag="$(sed -nE 's/^[[:space:]]*roc: "(nightly-[^"]+)".*/\1/p' ci/perf/bench.roc)"
-        if [ -z "$tag" ]; then
-          echo "::error::ci/perf/bench.roc must pin a nightly with a roc: entry in its header."
+        version="$(sed -nE 's/^[[:space:]]*roc: "([^"]+)".*/\1/p' ci/perf/bench.roc)"
+        if [ -z "$version" ] || [ "$version" = nightly ] || [[ "$version" == nightly-* ]]; then
+          echo "::error::ci/perf/bench.roc must pin a Roc release with a roc: entry in its header."
           exit 1
         fi
-        echo "tag=$tag" >> "$GITHUB_OUTPUT"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
 
-    - uses: roc-lang/setup-roc@dd81390553b0a1236aedb61cdd4c0ed7cf7eaec4 # ratchet:roc-lang/setup-roc@v0.4.0
+    # Release versions are supported on setup-roc main, not yet in a tagged release.
+    - uses: roc-lang/setup-roc@19c9da4f0158ca74c4ac27d8999c17b5c2739cbf # ratchet:roc-lang/setup-roc@main
       with:
-        version: nightly
-        nightly-tag: ${{ steps.nightly.outputs.tag }}
+        version: ${{ steps.pin.outputs.version }}
         cache: 'false'
