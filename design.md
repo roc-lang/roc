@@ -374,6 +374,34 @@ preserve padding and value-byte initialization, prove its lifecycle,
 and pass the corpus performance gate. Reservation thresholds and commit-ahead
 policy remain measurement decisions, not guarantees of a speedup.
 
+### General-Purpose Allocator
+
+`base.defaultGpa()` is the compiler's general-purpose allocator. It is two
+layers. `base.LargeBlockAllocator` owns requests above 32 KiB: it keeps them
+in power-of-two classes and recycles freed blocks through a bounded cache, so
+a list that grows by doubling reuses pages that are already faulted in.
+Smaller requests go to `base.SmallBlockAllocator` on musl, the default ABI of
+every Linux build of the compiler, and on targets without libc; with any other libc they
+go to libc's malloc, so ASan, Valgrind and `LD_PRELOAD` allocators keep
+working there. Freestanding targets use `std.heap.wasm_allocator`. A Debug
+compiler wraps `defaultGpa()` in `base.StaleBorrowAllocator`, and its CLI
+uses the leak-checking `DebugAllocator` (also wrapped) instead, as does a
+compiler built with `-Ddebug-gpa`; under Valgrind the CLI uses libc's malloc.
+
+`SmallBlockAllocator` exists because the compiler frees much of its data on a
+different thread from the one that built it, and grows lists through many
+sizes. Its memory is never tied to a thread: each size class has a central
+store of free slots and of spans with free slots, shared under a per-class
+lock, and a freed slot goes back to the span it came from. A small cache per
+class in each thread slot keeps most requests off the class lock, and is
+bounded so that idle threads hold little. A span whose slots are all free
+returns to a buddy page heap shared by all classes, which releases pages to
+the operating system once the free memory it keeps resident passes a fixed
+bound. Size classes step by a quarter of each power of two, bounding rounding
+at a quarter and averaging about a tenth. The size-class table, the cache
+bounds and the resident bound are measured engineering constants, each
+documented where it is defined; none is a correctness property.
+
 ### Dense IDs and structural keys
 
 Compiler-owned identity domains prefer dense, store-local integer IDs. The
@@ -20012,9 +20040,11 @@ host allocation and free operations.
 - Every memo is a hash map keyed by checked identity (type, expression,
   template, derivation). Linear scans over program-sized tables are forbidden.
 - A worker's body converts its checked types in one environment per scope
-  (`Program.scopeEnv`), whose variables are indexed: a lambda whose scope adds
-  no variable shares its creator's, and conversions in it are remembered per
-  checked type and environment, so a nest of lambdas converts each type once.
+  (`Program.scopeEnv`). A scope indexes only its own variables, which can be
+  sparse across the module's checked type ids, and a repeated variable names
+  its first position in the scope. A lambda whose scope adds no variable shares
+  its creator's environment. Conversions are remembered per checked type and
+  environment, so a nest of lambdas converts each type once.
 - Lowering is iterative under the Stack Safety rules: explicit frames and work
   stacks, no recursion over source structure.
 - The lowerer emits no conversions between representations of one type, no

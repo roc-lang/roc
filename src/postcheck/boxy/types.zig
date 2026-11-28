@@ -508,7 +508,7 @@ pub const Env = struct {
         if (module != self.module) return null;
         if (self.positions) |positions| {
             std.debug.assert(positions.vars.ptr == self.vars.ptr and positions.vars.len == self.vars.len);
-            return positions.map.get(id) orelse return null;
+            return positions.get(id) orelse return null;
         }
         for (self.vars, 0..) |variable, index| {
             if (variable == id) return index;
@@ -705,25 +705,76 @@ pub fn CheckedTypeMap(comptime V: type) type {
 /// The position of each variable of a scope's variable list `vars`, for
 /// `Env.lookup`: a variable listed twice (an enclosing scheme's variable that
 /// a generalized local's scheme lists again) is at its first position, where
-/// a scan finds it.
+/// a scan finds it. A sorted index uses space proportional to the scope's
+/// variable count, independent of how far apart their checked ids are.
 pub const VarPositions = struct {
     vars: []const checked.CheckedTypeId,
-    map: CheckedTypeMap(u32) = .empty,
+    /// The sorted, distinct prefix of an allocation of `vars.len` entries.
+    sorted: []const Entry,
+
+    const Entry = struct {
+        variable: checked.CheckedTypeId,
+        position: u32,
+
+        fn lessThan(_: void, a: Entry, b: Entry) bool {
+            if (a.variable != b.variable) return @backingInt(a.variable) < @backingInt(b.variable);
+            return a.position < b.position;
+        }
+    };
 
     pub fn init(allocator: Allocator, vars: []const checked.CheckedTypeId) Allocator.Error!VarPositions {
-        var positions: VarPositions = .{ .vars = vars };
-        errdefer positions.deinit(allocator);
-        for (vars, 0..) |variable, index| {
-            const entry = try positions.map.getOrPut(allocator, variable);
-            if (!entry.found_existing) entry.value_ptr.* = @intCast(index);
+        const entries = try allocator.alloc(Entry, vars.len);
+        for (entries, vars, 0..) |*entry, variable, index| {
+            entry.* = .{ .variable = variable, .position = @intCast(index) };
         }
-        return positions;
+        std.mem.sortUnstable(Entry, entries, {}, Entry.lessThan);
+        var len: usize = 0;
+        for (entries) |entry| {
+            if (len != 0 and entries[len - 1].variable == entry.variable) continue;
+            entries[len] = entry;
+            len += 1;
+        }
+        return .{ .vars = vars, .sorted = entries[0..len] };
+    }
+
+    fn get(self: *const VarPositions, variable: checked.CheckedTypeId) ?u32 {
+        var low: usize = 0;
+        var high = self.sorted.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const entry = self.sorted[mid];
+            if (entry.variable == variable) return entry.position;
+            if (@backingInt(entry.variable) < @backingInt(variable)) low = mid + 1 else high = mid;
+        }
+        return null;
     }
 
     pub fn deinit(self: *VarPositions, allocator: Allocator) void {
-        self.map.deinit(allocator);
+        allocator.free(self.sorted.ptr[0..self.vars.len]);
     }
 };
+
+test "Boxy scope lookup preserves first positions across sparse checked ids" {
+    const testing = std.testing;
+    const source = check.CheckedTypeIds.fromVar(@fromBackingInt(17));
+    const distant = check.CheckedTypeIds.fromVar(@fromBackingInt(1 << 24));
+    const synthesized = check.CheckedTypeIds.fromSynthesized(17);
+    const vars = [_]checked.CheckedTypeId{ synthesized, distant, source, distant, synthesized };
+    var positions = try VarPositions.init(testing.allocator, &vars);
+    defer positions.deinit(testing.allocator);
+
+    const bound = [_]TypeId{ @fromBackingInt(10), @fromBackingInt(11), @fromBackingInt(12), @fromBackingInt(13), @fromBackingInt(14) };
+    const env: Env = .{ .module = @fromBackingInt(2), .vars = &vars, .bound = &bound, .positions = &positions };
+    try testing.expectEqual(@as(?TypeId, bound[0]), env.lookup(env.module, synthesized));
+    try testing.expectEqual(@as(?TypeId, bound[1]), env.lookup(env.module, distant));
+    try testing.expectEqual(@as(?TypeId, bound[2]), env.lookup(env.module, source));
+    try testing.expectEqual(null, env.lookup(env.module, check.CheckedTypeIds.fromVar(@fromBackingInt(18))));
+    try testing.expectEqual(null, env.lookup(@fromBackingInt(1), source));
+
+    var empty = try VarPositions.init(testing.allocator, &.{});
+    defer empty.deinit(testing.allocator);
+    try testing.expectEqual(null, empty.get(source));
+}
 
 /// How many erased-callable slots a value of a type holds
 /// (`Converter.erasedResultSlots`).

@@ -22,12 +22,13 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Alignment = std.mem.Alignment;
 const PageAllocator = std.heap.PageAllocator;
+const SmallBlockAllocator = @import("SmallBlockAllocator.zig");
 
 /// Requests of at least this many bytes are owned by this allocator.
-/// `SmpAllocator` serves requests of up to half its 64 KiB slab from its size
+/// `SmallBlockAllocator` serves requests of up to 32 KiB from its size
 /// classes and maps every larger request directly, so ownership starts just
-/// above that largest slot.
-pub const large_threshold: usize = 32 * 1024 + 1;
+/// above its largest class.
+pub const large_threshold: usize = SmallBlockAllocator.max_small_len + 1;
 /// A size class: the base-2 logarithm of a length, rounded up. Its type holds
 /// every such logarithm of a `usize` on the target, including the word width.
 const Class = std.math.Log2IntCeil(usize);
