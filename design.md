@@ -4302,6 +4302,13 @@ advances statements one at a time, and `block_finish` performs local
 forward-reference classification, constructs the block expression, exits
 scopes, and restores saved state.
 
+Block-local forward references are keyed by name in the active parser
+inventory, not by the statement currently being lowered. Duplicate names
+select the latest inventoried slot, and leaving a block restores the outer
+slot. Similarly, capture and binder membership is relative to a frame's
+start: an enclosing frame may already contain the same pattern. Membership
+queries must not rescan the growing block or change first-use capture order.
+
 Lists, tuples, calls, method calls, tags, match branches, and other repeated
 child forms should use sequence state instead of nested calls. A sequence state
 tracks the source items, the next item index, output scratch ranges, and the
@@ -17588,11 +17595,18 @@ two uses of `h` share it.
 
 This is a policy rewrite: it accepts programs that rank-minimum unification
 alone rejects with an unresolved requirement at the local function's use. The
-cost is confined to deferred relations whose owning scheme has already
-generalized: one walk of the relation's callable and receiver before it
-resolves, and one walk from each merged variable after. Every other deferred
-relation pays one owner lookup per constraint, and none when no scheme
-boundary has captured.
+snapshot covers the **whole queue entry** before its first relation can
+resolve, not one method at a time: one method can merge an enclosing variable
+that a sibling reaches, including when the sibling re-defers. A flex receiver
+that only waits has nothing to restore. No snapshot survives from one attempt
+to the next; once the receiver grounds, its relations see the current graph.
+
+Repeated drains can leave an unchanged prefix of flex waits in queue order.
+The queue remains visible to diagnostics and boundary judgments. Skipping a
+visit requires that it would neither link nor settle a use, neither consume a
+settled callable nor resolve a receiver. A receiver changing class or kind,
+a rollback, a callable changing use owner, or a newly settled callable can
+invalidate that proof; it is not a test of whether the flex is quantified.
 
 The accepted side is pinned by `issue 12970: returned callback preserves
 captured method requirements across a where use` and `issue 12970: an
@@ -33003,8 +33017,14 @@ instead of rescanning checked bodies and dispatch evidence. Evidence visitation
 belongs to the individual summary, so evidence shared by two templates appears
 in both summaries. Per-root template visitation still terminates recursive
 calls, and each root's final dependency list is sorted, deduplicated, and excludes
-itself. These summaries cache no transitive closure, live only for this graph
-build, and never enter checked modules or cache identities.
+itself. A read that also visits a pending constant's own entry wrapper
+shares the producer's dependencies rather than copying them into the reader.
+This is not a change in which templates the graph reaches: when scheduling
+only part of the graph, a read through an omitted wrapper still orders its
+reader after the producers that wrapper reaches. A value read that names
+only a slot (for example, a literal argument) does not visit its initializer.
+These summaries live only for this graph build and never enter checked
+modules or cache identities.
 
 
 Each level is lowered as its own consumer of the Solved program once every

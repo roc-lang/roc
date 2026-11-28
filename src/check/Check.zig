@@ -1326,6 +1326,8 @@ dispatch_replayed_edges: std.ArrayListUnmanaged(u32) = .empty,
 use_instances: std.ArrayListUnmanaged(UseInstance) = .empty,
 use_owned_fns: std.ArrayListUnmanaged(Var) = .empty,
 use_instance_by_fn_var: collections.DenseMap(Var, u32),
+/// A previously owned callable changes which use would link or settle it.
+use_owner_changes: u64 = 0,
 /// Scheme roots none of whose monomorphic structural nodes reaches a
 /// generalized variable; instantiating them needs no reachability walk.
 reach_free_schemes: collections.DenseMap(Var, void),
@@ -2155,6 +2157,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .use_instances = .keyed,
     .use_owned_fns = .keyed,
     .use_instance_by_fn_var = .keyed,
+    .use_owner_changes = .keyed,
     .own_dispatch_exprs = .keyed,
     .callee_use_calls = .keyed,
     .loop_dispatch_iterables = .keyed,
@@ -9002,6 +9005,12 @@ const Env = struct {
     /// env's clean prefix has accounted for.
     clean_log_cursor: usize = 0,
     clean_generation: u64 = 0,
+    /// A prefix left in place while its receivers are still flexible and
+    /// its already-linked, settled uses still own the same callables.
+    flex_len: usize = 0,
+    flex_generation: u64 = 0,
+    flex_use_changes: u64 = 0,
+    flex_settled_count: usize = 0,
     /// Clean-prefix positions by the triggers that may change their entries:
     /// `clean_index` holds the first link of each trigger's chain through
     /// `clean_links`, so forgetting the prefix clears two flat tables rather
@@ -9048,6 +9057,7 @@ const Env = struct {
     /// Entries at `len` and beyond moved or left the queue.
     fn truncateClean(self: *Env, len: usize) void {
         if (len < self.clean_len) self.clean_len = len;
+        self.flex_len = @min(self.flex_len, len);
     }
 
     /// Resets internal state of env and set rank to generalized
@@ -9060,6 +9070,7 @@ const Env = struct {
         try self.var_pool.ensureRanksThrough(to);
         self.deferred_static_dispatch_constraints.clearRetainingCapacity();
         self.clearClean();
+        self.flex_len = 0;
     }
 
     fn rank(self: *const Env) Rank {
@@ -49766,7 +49777,8 @@ fn settleBoundaryLocalDerivedCodecRecords(
     var open_in_interface = std.ArrayList(OpenRecordCodec).empty;
     defer open_in_interface.deinit(self.gpa);
 
-    for (env.deferred_static_dispatch_constraints.items()) |deferred| {
+    // A flex receiver contains no record fields or extensions to settle.
+    for (env.deferred_static_dispatch_constraints.items()[self.unchangedFlexPrefix(env)..]) |deferred| {
         const codec_constraint = for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |constraint| {
             if (self.staticDispatchConstraintIsInactive(constraint)) continue;
             if (constraint.fn_name.eql(self.cir.idents.parser_for) or
@@ -50325,7 +50337,7 @@ fn dischargedDispatchRelationCount(
 /// `checkStaticDispatchConstraints` pass can make progress (it re-defers only
 /// still-flex receivers; every other receiver is consumed: fired or errored).
 fn anyDeferredDispatchReceiverResolved(self: *Self, env: *Env) Allocator.Error!bool {
-    for (env.deferred_static_dispatch_constraints.items()) |deferred| {
+    for (env.deferred_static_dispatch_constraints.items()[self.unchangedFlexPrefix(env)..]) |deferred| {
         if (self.types.resolveVar(deferred.var_).desc.content == .flex) continue;
         if (deferred.waiting_on_target_def or deferred.waiting_on_repeated_state) continue;
         if (deferred.waiting_on_plain_decision and try self.waitsForPlainDecision(deferred.constraints, deferred.var_)) continue;
@@ -52896,7 +52908,7 @@ fn recordDispatchDerivations(
         // A probe can roll the child back, and its var with it.
         if (self.probe_depth == 0 and !self.commit_probe_active) {
             if (self.use_instance_by_fn_var.get(parent_fn_var)) |use_idx| {
-                try self.use_instance_by_fn_var.put(constraint.fn_var, use_idx);
+                try self.setUseOwner(constraint.fn_var, use_idx);
             }
         }
     }
@@ -55318,13 +55330,19 @@ fn dispatchReplaySourceOwnsDerivation(self: *const Self, source: DispatchTargetI
     return false;
 }
 
+fn setUseOwner(self: *Self, fn_var: Var, use_idx: u32) Allocator.Error!void {
+    const gop = try self.use_instance_by_fn_var.getOrPut(fn_var);
+    if (gop.found_existing and gop.value_ptr.* != use_idx) self.use_owner_changes += 1;
+    gop.value_ptr.* = use_idx;
+}
+
 fn registerUseInstance(self: *Self, scheme_root: Var, instance_root: Var, record: u32) Allocator.Error!void {
     const use_idx: u32 = @intCast(self.use_instances.items.len);
     const owned = self.scratch_use_owned.items;
     const owned_start: u32 = @intCast(self.use_owned_fns.items.len);
     try self.use_owned_fns.appendSlice(self.gpa, owned);
     try self.use_instance_by_fn_var.ensureUnusedCapacity(owned.len);
-    for (owned) |fn_var| self.use_instance_by_fn_var.putAssumeCapacity(fn_var, use_idx);
+    for (owned) |fn_var| try self.setUseOwner(fn_var, use_idx);
     try self.use_instances.append(self.gpa, .{
         .scheme_root = scheme_root,
         .instance_root = instance_root,
@@ -55542,7 +55560,7 @@ fn registerLinkedCopies(self: *Self, use_idx: u32, new_copies: []const LinkedCop
     const owned_start: u32 = @intCast(self.use_owned_fns.items.len);
     try self.use_owned_fns.appendSlice(self.gpa, owned);
     try self.use_instance_by_fn_var.ensureUnusedCapacity(owned.len);
-    for (owned[use.owned_len..]) |fn_var| self.use_instance_by_fn_var.putAssumeCapacity(fn_var, use_idx);
+    for (owned[use.owned_len..]) |fn_var| try self.setUseOwner(fn_var, use_idx);
     const linked = &self.use_instances.items[use_idx];
     linked.owned_start = owned_start;
     linked.owned_len = @intCast(owned.len);
@@ -57388,7 +57406,7 @@ fn extendCleanDeferredPrefix(self: *Self, env: *Env, rebuilt_from: usize) Alloca
     const items = env.deferred_static_dispatch_constraints.items();
     while (env.clean_len < items.len) {
         const entry = items[env.clean_len];
-        if (!entry.retained_unchanged) return;
+        if (entry.retained != .unchanged_target) return;
         const context = self.waiting_obligations.get(waitingObligationKey(entry)) orelse return;
         const position: u32 = @intCast(env.clean_len);
         const target_pattern = self.cir.store.getDef(context.target_def).pattern;
@@ -57412,6 +57430,108 @@ fn indexCleanDeferredEntry(self: *Self, env: *Env, key: u64, position: u32) Allo
     const link: u32 = @intCast(env.clean_links.items.len);
     try env.clean_links.append(self.gpa, .{ .position = position, .next = gop.value_ptr.* });
     gop.value_ptr.* = .some(link);
+}
+
+test "issue 13308: a retained flex dispatch wakes for its own receiver or callable" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var module = try TestEnv.initOpen("Parked", "value = {}");
+    defer module.deinit();
+    const checker = &module.checker;
+    var env = try Env.init(checker.gpa, .outermost);
+    defer env.deinit(checker.gpa);
+    const receiver = try checker.fresh(&env, Region.zero());
+    const fn_var = try checker.fresh(&env, Region.zero());
+    const range = try checker.types.appendStaticDispatchConstraints(&.{.{
+        .fn_var = fn_var,
+        .fn_name = checker.cir.idents.is_eq,
+        .origin = .method_call,
+    }});
+    const use_idx: u32 = @intCast(checker.use_instances.items.len);
+    try checker.use_instances.append(checker.gpa, .{
+        .scheme_root = fn_var,
+        .instance_root = fn_var,
+        .record = 0,
+        .owned_start = 0,
+        .owned_len = 0,
+        .state = .settled,
+    });
+    try checker.setUseOwner(fn_var, use_idx);
+    try checker.enqueueDeferredDispatchConstraint(&env, .{
+        .var_ = receiver,
+        .constraints = range,
+    }, .current_group);
+    try checker.checkStaticDispatchConstraintsFrom(&env, false, 0);
+    try std.testing.expectEqual(1, checker.unchangedFlexPrefix(&env));
+    // Quantifying a receiver does not itself select a method.
+    try checker.types.setDescRank(checker.types.resolveDescIdx(receiver), .generalized);
+    try std.testing.expectEqual(1, checker.unchangedFlexPrefix(&env));
+
+    // A discarded probe must not leave a stale answer in either direction.
+    const shape = try checker.types.freshFromContent(.{ .structure = .empty_record });
+    const mark = checker.types.beginProbe();
+    const was = checker.types.enterUnifier();
+    try checker.types.unifierUnion(receiver, shape, checker.types.resolveVar(shape).desc);
+    checker.types.leaveUnifier(was);
+    try std.testing.expect(try checker.anyDeferredDispatchReceiverResolved(&env));
+    checker.types.endProbeNo(&mark);
+    try std.testing.expect(!try checker.anyDeferredDispatchReceiverResolved(&env));
+    try checker.checkStaticDispatchConstraintsFrom(&env, false, 0);
+    try std.testing.expectEqual(1, checker.unchangedFlexPrefix(&env));
+
+    // A newly owning use must run its own replay/link checks before another
+    // flex wait can be skipped. No receiver changed this time.
+    var next_use = checker.use_instances.items[use_idx];
+    next_use.state = .pending;
+    try checker.use_instances.append(checker.gpa, next_use);
+    try checker.setUseOwner(fn_var, use_idx + 1);
+    try std.testing.expectEqual(0, checker.unchangedFlexPrefix(&env));
+    try checker.extendFlexPrefix(&env);
+    try std.testing.expectEqual(0, checker.unchangedFlexPrefix(&env));
+
+    // Settling the same callable in a sibling entry consumes this entry,
+    // even though its receiver never left the flex class.
+    checker.use_instances.items[use_idx + 1].state = .settled;
+    try checker.extendFlexPrefix(&env);
+    try std.testing.expectEqual(1, checker.unchangedFlexPrefix(&env));
+    try checker.settled_static_dispatch_failure_exprs.put(checker.gpa, fn_var, .none);
+    try checker.checkStaticDispatchConstraintsFrom(&env, false, 0);
+    try std.testing.expectEqual(0, env.deferred_static_dispatch_constraints.items().len);
+}
+
+fn unchangedFlexPrefix(self: *const Self, env: *const Env) usize {
+    return if (env.flex_generation == self.types.watchedClassGeneration() and
+        env.flex_use_changes == self.use_owner_changes and
+        env.flex_settled_count == self.settled_static_dispatch_failure_exprs.count())
+        env.flex_len
+    else
+        0;
+}
+
+/// A stable prefix must need no use linking, whole-use settling or dispatch.
+/// Every indexed relation still has its exact position and ownership, so all
+/// other queue consumers (including failure attribution) see the live queue.
+fn extendFlexPrefix(self: *Self, env: *Env) Allocator.Error!void {
+    if (self.settling_use != null or self.probe_depth != 0) return;
+    env.flex_len = self.unchangedFlexPrefix(env);
+    env.flex_generation = self.types.watchedClassGeneration();
+    env.flex_use_changes = self.use_owner_changes;
+    env.flex_settled_count = self.settled_static_dispatch_failure_exprs.count();
+    for (env.deferred_static_dispatch_constraints.items()[env.flex_len..]) |entry| {
+        if (entry.retained != .flex or entry.waiting_on_target_def) break;
+        const receiver = self.types.resolveVarWord(entry.var_);
+        if (receiver.word.kind != .flex) break;
+        var owner: ?u32 = null;
+        for (self.types.sliceStaticDispatchConstraints(entry.constraints)) |constraint| {
+            if (self.settled_static_dispatch_failure_exprs.contains(constraint.fn_var)) return;
+            const idx = self.use_instance_by_fn_var.get(constraint.fn_var) orelse return;
+            if (owner != null and owner != idx) return;
+            owner = idx;
+        }
+        const use = self.use_instances.items[owner.?];
+        if (use.state != .settled or !use.deferred_linked) break;
+        try self.types.watchClassKind(receiver.desc_idx);
+        env.flex_len += 1;
+    }
 }
 
 fn beginStaticDispatchDrain(self: *Self, is_numeric_default_pass: bool, start: usize) StaticDispatchDrain {
@@ -57454,11 +57574,18 @@ fn resumeStaticDispatchDrain(
     };
     // Leave the clean prefix in place: this pass would retain each of its
     // obligations again unchanged.
+    var initial_owner: problem.RelationOwner = .none;
     if (drain.index == drain.start and drain.stopped_children == null and !self.commit_probe_active) {
         self.syncCleanDeferredPrefix(env);
-        if (drain.start < env.clean_len) {
-            drain.start = env.clean_len;
-            drain.index = env.clean_len;
+        const flex = if (self.settling_use == null and self.probe_depth == 0 and self.use_settled_entries.count() == 0) self.unchangedFlexPrefix(env) else 0;
+        const clean = @max(flex, env.clean_len);
+        if (drain.start < clean) {
+            // Linking or replaying the first actual entry occurs before it
+            // takes over the relation. Preserve the last skipped flex wait's
+            // attribution just as processing it would.
+            if (flex > env.clean_len) initial_owner = env.deferred_static_dispatch_constraints.items()[flex - 1].relation_owner;
+            drain.start = clean;
+            drain.index = clean;
         }
     }
     // A fresh drain with no relation past its start and nothing held for a
@@ -57492,7 +57619,7 @@ fn resumeStaticDispatchDrain(
     // re-entry of the same binding before it can extend the queue further.
     // Each obligation's resolution reports for the relation that queued it,
     // never for the relation whose checking runs the drain.
-    const drain_relation = try self.enterRelation(.none);
+    const drain_relation = try self.enterRelation(initial_owner);
     // The use whose relations are settling (design.md "a use's relations
     // settle as one unit"): the queue position of its first processed
     // relation, and the last of its links in `use_positions` it has consumed.
@@ -57567,7 +57694,10 @@ fn resumeStaticDispatchDrain(
         self.scratch_deferred_static_dispatch_constraints.sliceFromStart(scratch_deferred_top),
     );
     self.scratch_deferred_static_dispatch_constraints.clearFrom(scratch_deferred_top);
-    if (!self.commit_probe_active) try self.extendCleanDeferredPrefix(env, start);
+    if (!self.commit_probe_active) {
+        try self.extendCleanDeferredPrefix(env, start);
+        try self.extendFlexPrefix(env);
+    }
 
     // A discarded instantiating probe must leave checker side tables untouched
     // along with the solved graph. Normal solve passes can retire requirements whose
@@ -57681,7 +57811,7 @@ inline fn processDeferredDispatchEntryRelations(
     const is_numeric_default_pass = drain.is_numeric_default_pass;
     const queued_entry = env.deferred_static_dispatch_constraints.items()[entry_index];
     var deferred_constraint = queued_entry;
-    deferred_constraint.retained_unchanged = false;
+    deferred_constraint.retained = .none;
     deferred_constraint.waiting_on_repeated_state = false;
     deferred_constraint.waiting_on_plain_decision = false;
     // A receiver's relation can be queued once by the unification that
@@ -57695,7 +57825,7 @@ inline fn processDeferredDispatchEntryRelations(
     {
         var retained = deferred_constraint;
         retained.waiting_epoch = self.waiting_context_epoch;
-        retained.retained_unchanged = true;
+        retained.retained = .unchanged_target;
         try self.scratch_deferred_static_dispatch_constraints.append(retained);
         return .next;
     }
@@ -57746,6 +57876,14 @@ inline fn processDeferredDispatchEntryRelations(
         var waiting = deferred_constraint;
         waiting.waiting_on_plain_decision = true;
         try self.scratch_deferred_static_dispatch_constraints.append(waiting);
+        return .next;
+    }
+    // Nothing in this entry has related types. Do not move this test into
+    // the per-constraint loop: an earlier sibling may already have merged
+    // an enclosing variable even if a later sibling has to wait.
+    if (dispatcher_content == .flex) {
+        deferred_constraint.retained = .flex;
+        try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
         return .next;
     }
     if (self.captured_scheme_owners.count() != 0) {
@@ -58199,12 +58337,6 @@ inline fn processDeferredDispatchEntryRelations(
                     ),
                 }
             }
-            break :dispatch_resolution;
-        } else if (dispatcher_content == .flex) {
-            // If the dispatcher is a flex, hold onto the constraint to try again later.
-            // Note: flex vars with from_numeral constraints are validated separately
-            // in checkFlexVarConstraintCompatibility after type checking completes.
-            try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
             break :dispatch_resolution;
         } else {
             // If the root type is anything but a nominal type or anonymous structural type, push an error

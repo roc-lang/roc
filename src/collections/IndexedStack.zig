@@ -131,6 +131,10 @@ pub fn IndexedStack(comptime K: type) type {
             return self.entries.pop().?;
         }
 
+        pub fn count(self: *const Self) usize {
+            return self.entries.items.len;
+        }
+
         pub fn truncate(self: *Self, len: usize) void {
             std.debug.assert(len <= self.entries.items.len);
             self.entries.items.len = len;

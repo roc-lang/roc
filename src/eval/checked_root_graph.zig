@@ -32,9 +32,9 @@ pub const Root = struct {
     request: checked.RootRequest,
 };
 
-/// For each root, the roots its evaluation reads, in ascending order.
+/// For each root, its producer frontier in ascending request order.
 pub const Graph = struct {
-    deps: []const []const u32,
+    deps: []const []const Read,
 
     pub fn deinit(self: *Graph, allocator: Allocator) void {
         for (self.deps) |deps| allocator.free(deps);
@@ -44,6 +44,59 @@ pub const Graph = struct {
 };
 
 const RootKey = struct { module: [32]u8, root: checked.ComptimeRootId };
+
+/// A dependency on a producer's value. `through_wrapper` means that the
+/// reference also reaches the producer's own template: the graph shares
+/// that row instead of copying the template's reads into its reader.
+pub const Read = struct {
+    producer: u32,
+    through_wrapper: bool = false,
+
+    fn lessThan(_: void, a: Read, b: Read) bool {
+        return a.producer < b.producer;
+    }
+};
+
+/// Project reads onto a subset of the producers. Accept a read of a member
+/// of the subset (its own row orders its prerequisites), or `omit` it. Only
+/// an omitted wrapper needs traversal, so the full graph and ordinary
+/// slot reads use no scratch storage. A projection may stop at the first
+/// member (readiness), or consume all of them (scheduling).
+pub const Projection = struct {
+    current: []const Read = &.{},
+    origin: u32 = 0,
+    pending: std.ArrayList([]const Read) = .empty,
+    expanded: std.AutoHashMapUnmanaged(u32, void) = .empty,
+
+    pub fn deinit(self: *Projection, allocator: Allocator) void {
+        self.pending.deinit(allocator);
+        self.expanded.deinit(allocator);
+    }
+
+    pub fn start(self: *Projection, graph: *const Graph, origin: u32) void {
+        self.current = graph.deps[origin];
+        self.origin = origin;
+        self.pending.clearRetainingCapacity();
+        if (self.expanded.count() != 0) self.expanded.clearRetainingCapacity();
+    }
+
+    pub fn next(self: *Projection) ?Read {
+        while (true) {
+            while (self.current.len != 0) {
+                const read = self.current[0];
+                self.current = self.current[1..];
+                if (read.producer != self.origin) return read;
+            }
+            self.current = self.pending.pop() orelse return null;
+        }
+    }
+
+    pub fn omit(self: *Projection, allocator: Allocator, graph: *const Graph, read: Read) Allocator.Error!void {
+        if (!read.through_wrapper or graph.deps[read.producer].len == 0) return;
+        if ((try self.expanded.getOrPut(allocator, read.producer)).found_existing) return;
+        try self.pending.append(allocator, graph.deps[read.producer]);
+    }
+};
 
 /// A template of one listed module.
 pub const TemplateKey = struct { module: u32, template: canonical.CheckedProcedureTemplateId };
@@ -88,7 +141,7 @@ pub fn build(allocator: Allocator, modules: []const *const checked.CheckedModule
 }
 
 fn buildGraph(allocator: Allocator, walker: *Walker, roots: []const Root) Allocator.Error!Graph {
-    const deps = try allocator.alloc([]const u32, roots.len);
+    const deps = try allocator.alloc([]const Read, roots.len);
     errdefer allocator.free(deps);
     var built: usize = 0;
     errdefer {
@@ -133,9 +186,9 @@ pub const Walker = struct {
     evidence_visit: u32 = 0,
     summaries: std.AutoHashMapUnmanaged(TemplateKey, DirectDependencies) = .empty,
     summary_templates: std.ArrayList(TemplateKey) = .empty,
-    summary_reads: std.ArrayList(u32) = .empty,
+    summary_reads: std.ArrayList(Read) = .empty,
     pending: std.ArrayList(TemplateKey) = .empty,
-    reads: std.ArrayList(u32) = .empty,
+    reads: std.ArrayList(Read) = .empty,
     /// The evidence nodes of one module still to walk (`drainNodes`).
     nodes: std.ArrayList(static_dispatch.EvidenceNodeId) = .empty,
     derivations: std.ArrayList(static_dispatch.GeneratedCodecDerivationId) = .empty,
@@ -225,9 +278,8 @@ pub const Walker = struct {
         self.reads.deinit(self.allocator);
     }
 
-    /// The roots `root`'s evaluation reads, in ascending order, without
-    /// itself.
-    pub fn dependencies(self: *Walker, root: Root, ordinal: u32) Allocator.Error![]const u32 {
+    /// The producer frontier of `root`'s wrapper and literal edge, without itself.
+    pub fn dependencies(self: *Walker, root: Root, ordinal: u32) Allocator.Error![]const Read {
         self.visit += 1;
         self.reads.clearRetainingCapacity();
         self.pending.clearRetainingCapacity();
@@ -239,15 +291,18 @@ pub const Walker = struct {
             if (argument.site.kind == .constant_instance) try self.walkConstantInstance(root.module, argument);
         }
         while (self.pending.pop()) |next| try self.walkTemplate(next);
-        std.sort.pdq(u32, self.reads.items, {}, std.sort.asc(u32));
-        var out = std.ArrayList(u32).empty;
-        errdefer out.deinit(self.allocator);
+        std.sort.pdq(Read, self.reads.items, {}, Read.lessThan);
+        var count: usize = 0;
         for (self.reads.items) |read| {
-            if (read == ordinal) continue;
-            if (out.items.len != 0 and out.items[out.items.len - 1] == read) continue;
-            try out.append(self.allocator, read);
+            if (read.producer == ordinal) continue;
+            if (count != 0 and self.reads.items[count - 1].producer == read.producer) {
+                if (read.through_wrapper) self.reads.items[count - 1].through_wrapper = true;
+            } else {
+                self.reads.items[count] = read;
+                count += 1;
+            }
         }
-        return try out.toOwnedSlice(self.allocator);
+        return try self.allocator.dupe(Read, self.reads.items[0..count]);
     }
 
     /// The first listed module with checked identity `key`, if listed.
@@ -531,14 +586,23 @@ pub const Walker = struct {
             // A polymorphic constant is read as the instance its use's edge
             // names, a root the reader's template demands (design.md
             // "Polymorphic Constants"); its own root is never evaluated.
-            .eval_template => |eval| if (artifact.checked_procedure_templates.isPolymorphicConstantWrapper(eval.entry_template.template)) return else try self.pushTemplate(eval.entry_template),
-            .stored_const, .reserved => {},
+            .eval_template => |eval| {
+                if (artifact.checked_procedure_templates.isPolymorphicConstantWrapper(eval.entry_template.template)) return;
+                // Publication seals a constant's body and its entry wrapper
+                // from the same root (`sealConstEvalTemplatesForRoots`).
+                // Its row therefore walks exactly the template a reader
+                // reaches, including when restoring a value holding a function.
+                const root = artifact.checked_const_bodies.get(eval.body).root;
+                if (self.producer(module, root)) |ordinal| {
+                    try self.reads.append(self.allocator, .{ .producer = ordinal, .through_wrapper = true });
+                } else try self.pushTemplate(eval.entry_template);
+            },
+            .stored_const => |stored| try self.readRoot(module, stored.root),
+            .reserved => switch (const_ref.owner) {
+                .top_level_binding => |top| try self.readRoot(module, artifact.compile_time_roots.lookupIdByPattern(top.pattern) orelse return),
+                .hoisted_root => |hoisted| try self.readRoot(module, hoisted.root),
+            },
         }
-        const root: checked.ComptimeRootId = switch (const_ref.owner) {
-            .top_level_binding => |top_level| artifact.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse return,
-            .hoisted_root => |hoisted| (artifact.hoisted_constants.lookupByRoot(hoisted.root) orelse return).root,
-        };
-        try self.readRoot(module, root);
     }
 
     fn procedureUse(self: *Walker, proc_use: checked.ProcedureUseTemplate) Allocator.Error!void {
@@ -578,15 +642,13 @@ pub const Walker = struct {
         }
     }
 
-    /// Record a read of `module`'s root `root`, when a listed root produces
-    /// it. Every read is a dependency, a reference inside a function value
-    /// the evaluation may never call included: the root then runs after the
-    /// value completes, or, when the two read each other, in one group with
-    /// it.
+    /// Record a read of the root's value alone (not its initializer).
     fn readRoot(self: *Walker, module: u32, root: checked.ComptimeRootId) Allocator.Error!void {
-        const artifact = self.modules[module];
-        const ordinal = self.root_ordinals.get(.{ .module = artifact.key.digest().bytes, .root = root }) orelse return;
-        try self.reads.append(self.allocator, ordinal);
+        if (self.producer(module, root)) |ordinal| try self.reads.append(self.allocator, .{ .producer = ordinal });
+    }
+
+    fn producer(self: *const Walker, module: u32, root: checked.ComptimeRootId) ?u32 {
+        return self.root_ordinals.get(.{ .module = self.modules[module].key.digest().bytes, .root = root });
     }
 };
 

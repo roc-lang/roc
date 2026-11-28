@@ -50,6 +50,69 @@ test "nested self-recursion is allowed" {
     try testing.expectEqual(@as(usize, 0), counts.mutual);
 }
 
+test "block inventory: duplicate names share the latest forward-reference slot" {
+    // The first b's body reads a, even though the forward marker is on the
+    // last b. Looking up either declaration by statement identity loses the
+    // mutual-recursion diagnostic and reports a plain forward reference.
+    const counts = try scopingDiagnosticCounts(
+        \\|n| {
+        \\    a = |p| b(p)
+        \\    b = |q| a(q)
+        \\    b = |q| q
+        \\    b(n)
+        \\}
+    );
+    try testing.expectEqual(@as(usize, 1), counts.mutual);
+    try testing.expectEqual(@as(usize, 0), counts.forward_ref);
+}
+
+test "block inventory: leaving a nested block restores the outer declaration" {
+    const counts = try scopingDiagnosticCounts(
+        \\|n| {
+        \\    nested = |v| {
+        \\        inner = |w| b(w)
+        \\        b = |w| inner(w)
+        \\        b(v)
+        \\    }
+        \\    outer = |w| b(w)
+        \\    b = |w| outer(w)
+        \\    b(nested(n))
+        \\}
+    );
+    try testing.expectEqual(@as(usize, 2), counts.mutual);
+    try testing.expectEqual(@as(usize, 0), counts.forward_ref);
+}
+
+test "block inventory: nested capture ranges preserve first-use order and exclude local functions" {
+    var env = try TestEnv.init(
+        \\|left, right| {
+        \\    local = |n| n
+        \\    || {
+        \\        first = right
+        \\        second = {
+        \\            both = right + left
+        \\            both
+        \\        }
+        \\        first + second + left + local(1)
+        \\    }
+        \\}
+    );
+    defer env.deinit();
+    const outer = (try env.canonicalizeExpr()).?;
+    const diagnostics = try env.getDiagnostics();
+    defer testing.allocator.free(diagnostics);
+    try testing.expectEqual(@as(usize, 0), diagnostics.len);
+    const lambda = env.getCanonicalExpr(outer.idx).e_lambda;
+    const block = env.getCanonicalExpr(lambda.body).e_block;
+    const closure = env.getCanonicalExpr(block.final_expr).e_closure;
+    const captures = env.module_env.store.sliceCaptures(closure.captures);
+    const expected = [_][]const u8{ "right", "left" };
+    try testing.expectEqual(expected.len, captures.len);
+    for (expected, captures) |name, capture| {
+        try testing.expectEqualStrings(name, env.module_env.getIdent(env.module_env.store.getCapture(capture).name));
+    }
+}
+
 test "issue 13165: a match branch cannot read its enclosing unfinished binding" {
     // https://github.com/roc-lang/roc/issues/13165
     var test_env = try TestEnv.init(

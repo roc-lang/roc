@@ -647,6 +647,9 @@ pub const ParseOptions = struct {
     /// A Builtin artifact the caller already published and keeps owning.
     pre_published_builtin: ?PrePublishedBuiltin = null,
     problem_reporting: ComptimeProblemReporting = .ignore_comptime_problems,
+    /// Inspect the main module before evaluation replaces its pending
+    /// constant templates with stored values. Imports are still finalized.
+    evaluation_phase: @FieldType(check.CheckedArtifact.PublishInputs, "evaluation_phase") = .immediate,
     /// The strategy whose evaluator completes the compile-time roots of the
     /// program and of every import published with it
     /// (`CompileTimeFinalization.Options.strategy`). The harness's runtime
@@ -1431,6 +1434,7 @@ pub fn parseProgram(
                 .published_only => .selected,
             },
             .compile_time_finalizer = CompileTimeFinalization.finalizerWithOptions(&ctfe_options),
+            .evaluation_phase = options.evaluation_phase,
             .problem_store = switch (options.problem_reporting) {
                 .ignore_comptime_problems => null,
                 .report_comptime_problems => &main_checked.checker.problems,

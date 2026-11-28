@@ -17,6 +17,27 @@ That said, mac and windows can also be ok.
 5. Make sure you have a long enough execution horizon to get good results (sometimes requires looping over the same work multiple times).
 
 
+## Checking how compiler phases scale
+
+`check_scaling.py` generates the inputs from #13308, #13309, #13310 and
+#13315 without checking large generated files into the repo. For example,
+with `BASE` and `CANDIDATE` pointing to two ReleaseFast `roc` executables:
+
+```sh
+work=$(mktemp -d)
+for n in 2000 4000 8000; do
+    python3 CONTRIBUTING/profiling/check_scaling.py interpolation "$n" > "$work/main.roc"
+    "$BASE" check --no-cache --timings "$work/main.roc"
+    "$CANDIDATE" check --no-cache --timings "$work/main.roc"
+done
+```
+
+Compare **Fresh Checking** for `generic-defs` and `interpolation`, **Name
+Resolution** for `block` and `closures`, and **Root Graph** for `constants`.
+**Program Runs** is separate from graph construction, even on the same input.
+Run each size serially, repeat in reversed compiler order, and compare with
+ordinary modules as well: faster stress cases alone do not imply faster builds.
+
 ## Some Nice Tools
 
 These are tools I recommend for profiling that help get a solid picture.
