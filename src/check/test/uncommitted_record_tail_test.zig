@@ -415,6 +415,9 @@ test "a field-use row still lifts at a call" {
 
 // Value bindings share one type
 
+// A record literal's uncommitted tail is no open row, so a polymorphic
+// constant keeps it weak and its uses share one lift (design.md "Polymorphic
+// Constants"): the accepted side here, the rejected side below.
 test "a value binding's uses share its lift" {
     try expectOk(counter ++
         \\shared = { count: 1.U64 }

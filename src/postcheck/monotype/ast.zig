@@ -57,10 +57,10 @@ pub const StringLiteralId = enum(u32) { _ };
 /// Identifier for a compile-time-observed control-flow site.
 pub const ComptimeSiteId = enum(u32) { _ };
 
-/// Checked-blob identity borrowed only while a body draft is being built.
-pub const ConstBlobView = struct {
+/// An image-root string borrowed only while a body draft is being built.
+pub const ImageStringView = struct {
     module_bytes: [32]u8,
-    data: check.ConstStore.ConstBlobDataId,
+    image: check.ConstStore.ConstImageId,
     bytes: []const u8,
 };
 
@@ -101,7 +101,7 @@ pub const SharedLiteralBacking = struct {
     }
 };
 
-const ConstBlobKey = struct { module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId };
+const ImageStringKey = struct { module_bytes: [32]u8, image: check.ConstStore.ConstImageId };
 
 /// Owned string bytes plus the exact slice used by this literal.
 pub const StringLiteral = struct {
@@ -1466,10 +1466,10 @@ pub const StaticDataCandidateValue = union(enum) {
     /// Compiler-only data initializer. Runtime code reads its frozen value.
     runtime: ExprId,
     /// A non-empty list stored in a checked module's `ConstStore` whose items
-    /// reach no function value, crash, or checked error. Static data freezes
-    /// it straight from its stored node, which the candidate's static data
-    /// request names, through the target const plan of the candidate's type,
-    /// so no expression builds it or any of its items.
+    /// reach no function value, crash, or checked error, or a box or product
+    /// stored as an image. Static data freezes it straight from its stored
+    /// node or image, which the candidate's static data request names, so no
+    /// expression builds it or any of its parts.
     stored: StoredStaticList,
 
     /// The compiler-only initializer expression, when one is needed.
@@ -2035,10 +2035,29 @@ pub const RuntimeSchemaRequest = struct {
 pub const StaticDataValue = union(enum) {
     /// A checked constant's stored value, or one stored node of it.
     stored: Common.StaticDataRequest,
+    /// The stored image of a compile-time root that no constant names, such
+    /// as a `literal_argument` root's (design.md "Stored Images").
+    stored_root: StoredRootStaticData,
+    /// A part holding no function of a stored value holding one, stored as
+    /// an image of its own.
+    stored_image: StoredImageStaticData,
     /// A value-form expression its body keeps
     /// (`CompileTimeRootTable.inline_literals`), built by the candidate's
     /// initializer expression.
     inline_literal: InlineLiteralStaticData,
+};
+
+/// The stored image `node` of `module`, at `checked_type` of that module.
+pub const StoredRootStaticData = struct {
+    module: checked.ModuleId,
+    node: checked.ConstNodeId,
+    checked_type: checked.CheckedTypeId,
+};
+
+/// The image node `node` of `module`'s constant store.
+pub const StoredImageStaticData = struct {
+    module: checked.ModuleId,
+    node: checked.ConstNodeId,
 };
 
 /// The value-form expression `expr` of `module` that its body keeps.
@@ -2126,17 +2145,17 @@ pub const ProgramView = struct {
     local_name_table: *const LocalNameTable,
     next_symbol: u32,
 
-    pub fn getComptimeValueRoot(self: ProgramView, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
+    pub fn getComptimeValueRoot(self: *const ProgramView, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
         return self.comptime_value_roots[@backingInt(id)];
     }
 
-    pub fn fnSource(self: ProgramView, id: FnId) FnTemplate {
+    pub fn fnSource(self: *const ProgramView, id: FnId) FnTemplate {
         const raw = @backingInt(id);
         if (raw >= self.fns.len) Common.invariant("Monotype function id referenced a missing specialization");
         return self.fns[raw].source;
     }
 
-    pub fn constFnEvidence(self: ProgramView, spans: ConstEvidenceSpans) check.ConstStore.ConstFnEvidenceVector {
+    pub fn constFnEvidence(self: *const ProgramView, spans: ConstEvidenceSpans) check.ConstStore.ConstFnEvidenceVector {
         return .{
             .nodes = self.const_fn_evidence[spans.nodes.start..][0..spans.nodes.len],
             .targets = self.const_fn_evidence_targets[spans.targets.start..][0..spans.targets.len],
@@ -2144,11 +2163,11 @@ pub const ProgramView = struct {
         };
     }
 
-    pub fn constFnEvidenceFrames(self: ProgramView, span: Span(check.ConstStore.ConstFnEvidenceFrame)) []const check.ConstStore.ConstFnEvidenceFrame {
+    pub fn constFnEvidenceFrames(self: *const ProgramView, span: Span(check.ConstStore.ConstFnEvidenceFrame)) []const check.ConstStore.ConstFnEvidenceFrame {
         return self.const_fn_evidence_frames[span.start..][0..span.len];
     }
 
-    pub fn procDebugName(self: ProgramView, symbol: Common.Symbol) ?names.ExportNameId {
+    pub fn procDebugName(self: *const ProgramView, symbol: Common.Symbol) ?names.ExportNameId {
         return self.proc_debug_names.get(symbol);
     }
 
@@ -2156,7 +2175,7 @@ pub const ProgramView = struct {
     /// ids. Active snapshots are rejected by graph-scoped sealing while the
     /// graph maps still exist; completed views must additionally be frozen and
     /// contain only in-bounds final type ids.
-    pub fn verifyCompletedTypeIds(self: ProgramView) ?CompletedTypeIdVerifyError {
+    pub fn verifyCompletedTypeIds(self: *const ProgramView) ?CompletedTypeIdVerifyError {
         if (!self.types.frozen) return .type_store_not_frozen;
 
         for (self.specs) |spec| {
@@ -2201,7 +2220,7 @@ pub const ProgramView = struct {
         return null;
     }
 
-    pub fn verifyCallTargets(self: ProgramView) ?CallTargetVerifyError {
+    pub fn verifyCallTargets(self: *const ProgramView) ?CallTargetVerifyError {
         for (self.defs) |def| {
             if (def.fn_id.get()) |fn_id| {
                 if (self.verifyFnDefinition(fn_id, def.args)) |err| return err;
@@ -2232,11 +2251,11 @@ pub const ProgramView = struct {
         return null;
     }
 
-    fn typeRefInBounds(self: ProgramView, ty: Type.TypeId) bool {
+    fn typeRefInBounds(self: *const ProgramView, ty: Type.TypeId) bool {
         return @backingInt(ty) < self.types.types.len;
     }
 
-    fn verifyFnDefinition(self: ProgramView, fn_id: FnId, args: Span(TypedLocal)) ?CallTargetVerifyError {
+    fn verifyFnDefinition(self: *const ProgramView, fn_id: FnId, args: Span(TypedLocal)) ?CallTargetVerifyError {
         const raw_fn = @backingInt(fn_id);
         if (raw_fn >= self.fns.len) return .local_fn_out_of_bounds;
         const raw_ty = @backingInt(self.fns[raw_fn].source.mono_fn_ty);
@@ -2286,7 +2305,7 @@ pub const ProgramBuilder = struct {
     string_literals: ProgramList(StringLiteral, "string_literals"),
     /// Backing pool for `FnBody.hosted` spans.
     signature_var_steps: ProgramList(SignatureVarStep, "signature_var_steps") = .empty,
-    const_blob_backings: std.AutoHashMapUnmanaged(ConstBlobKey, *SharedLiteralBacking) = .empty,
+    image_strings: std.AutoHashMapUnmanaged(ImageStringKey, *SharedLiteralBacking) = .empty,
     file_backings: std.AutoHashMapUnmanaged([32]u8, *SharedLiteralBacking) = .empty,
     proc_debug_names: ProcDebugNameMap,
     roots: ProgramList(Root, "roots"),
@@ -2454,9 +2473,9 @@ pub const ProgramBuilder = struct {
         self.literal_root_by_identity.deinit(self.allocator);
         self.proc_debug_names.deinit();
         for (self.string_literals.unsafeRawItemsForView()) |literal| literal.deinit(self.allocator);
-        var backings = self.const_blob_backings.valueIterator();
+        var backings = self.image_strings.valueIterator();
         while (backings.next()) |owner| owner.*.release();
-        self.const_blob_backings.deinit(self.allocator);
+        self.image_strings.deinit(self.allocator);
         var files = self.file_backings.valueIterator();
         while (files.next()) |owner| owner.*.release();
         self.file_backings.deinit(self.allocator);
@@ -2783,14 +2802,13 @@ pub const ProgramBuilder = struct {
         return self.addSharedStringView(owner, 0, @intCast(bytes.len), 0, @intCast(bytes.len));
     }
 
-    /// Restore a checked blob as a literal, copying each owner-relative
-    /// checked blob at most once.
-    pub fn addConstBlobView(self: *ProgramBuilder, module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId, bytes: []const u8) std.mem.Allocator.Error!StringLiteralId {
+    /// Restore a string literal from a checked image, copying its bytes once.
+    pub fn addImageString(self: *ProgramBuilder, module_bytes: [32]u8, image: check.ConstStore.ConstImageId, bytes: []const u8) std.mem.Allocator.Error!StringLiteralId {
         const len = std.math.cast(u32, bytes.len) orelse return error.OutOfMemory;
-        const key = ConstBlobKey{ .module_bytes = module_bytes, .data = data };
-        const owner = self.const_blob_backings.get(key) orelse blk: {
+        const key = ImageStringKey{ .module_bytes = module_bytes, .image = image };
+        const owner = self.image_strings.get(key) orelse blk: {
             const created = try SharedLiteralBacking.init(self.allocator, bytes);
-            self.const_blob_backings.put(self.allocator, key, created) catch |err| {
+            self.image_strings.put(self.allocator, key, created) catch |err| {
                 created.release();
                 return err;
             };
@@ -3129,17 +3147,15 @@ test "whole-file imports share their owner across modules" {
     try std.testing.expectEqualStrings(a, program.stringLiteral(second).text());
 }
 
-test "restored constant blob views share storage across IR ownership transfers" {
+test "restored image strings share storage across IR ownership transfers" {
     const gpa = std.testing.allocator;
-    var const_store = check.ConstStore.ConstStore.init(gpa);
-    defer const_store.deinit();
-    const data = try const_store.addBlobData("abcdefgh");
+    const image: check.ConstStore.ConstImageId = @fromBackingInt(0);
 
     var program = ProgramBuilder.init(gpa);
     var program_alive = true;
     defer if (program_alive) program.deinit();
-    const a = try program.addConstBlobView(@splat(0), data, "abcdefgh");
-    const b = try program.addConstBlobView(@splat(0), data, "abcdefgh");
+    const a = try program.addImageString(@splat(0), image, "abcdefgh");
+    const b = try program.addImageString(@splat(0), image, "abcdefgh");
     const first = program.string_literals.get(@backingInt(a));
     const second = program.string_literals.get(@backingInt(b));
     try std.testing.expectEqual(first.backing.ptr, second.backing.ptr);

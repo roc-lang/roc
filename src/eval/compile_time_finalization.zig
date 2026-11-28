@@ -56,11 +56,12 @@ pub const DebugObserver = struct {
     observe: *const fn (*anyopaque, []const u8) Allocator.Error!void,
 };
 
-/// Reads each `.boxy` compile-time program once it is lowered, before it
-/// runs: instrumentation that measures the programs compile-time evaluation
+/// Reads each compile-time program once it is lowered, before it runs: each
+/// `.boxy` program and each stage of a Solved program's evaluation.
+/// Instrumentation that measures the programs compile-time evaluation
 /// builds. A program can be lowered on any thread of the post-check
 /// executor, so `observe` synchronizes whatever it shares.
-pub const BoxyProgramObserver = struct {
+pub const CompileTimeProgramObserver = struct {
     context: *anyopaque,
     observe: *const fn (*anyopaque, *const lir.Program.Result) Allocator.Error!void,
 };
@@ -92,7 +93,7 @@ pub const Options = struct {
     stderr: ?StderrWriter = null,
     event_callback: ?EventCallback = null,
     debug_observer: ?DebugObserver = null,
-    boxy_program_observer: ?BoxyProgramObserver = null,
+    compile_time_program_observer: ?CompileTimeProgramObserver = null,
     debug_events: ?*DebugEvents = null,
     /// Artifact copies store results independently; shared slots publish once.
     publish_shared_slots: bool = true,
@@ -111,13 +112,12 @@ pub const Options = struct {
     timing: ?*Timing = null,
     /// Retain each stage's native excerpts for in-memory consumers.
     keep_artifacts: bool = false,
-    /// The strategy whose evaluator completes the roots holding function
-    /// values and the roots reading them: `.lss` specializes those into a
+    /// The evaluator for pending compile-time values: `.lss` specializes a
     /// Solved program and evaluates it in dependency-ordered stages; `.boxy`
-    /// lowers them as Boxy programs, as either strategy lowers every other
-    /// root (design.md "Compile-Time Evaluation Strategy"). Every producer of
-    /// checked modules names it: the strategy of the runtime program that
-    /// consumes the modules, or `.boxy` when nothing lowers them for runtime.
+    /// lowers Boxy programs (design.md "Compile-Time Evaluation Strategy").
+    /// Every producer names its strategy, including commands without a
+    /// runtime consumer. Value-form roots need no evaluator; literal argument
+    /// and interpolation conversion roots retain their Boxy validation path.
     strategy: base.SpecializationStrategy,
     /// Produce both strategies' representations, including literal argument
     /// roots under `.lss` (design.md "Literal Arguments").
@@ -1060,17 +1060,9 @@ pub fn finalizeProgram(
     const owned_runtime_roots = try cloneRootRequests(allocator, runtime_roots);
     errdefer deinitRootRequests(allocator, owned_runtime_roots);
 
-    // Every root whose evaluation reads no function value is the `.boxy`
-    // evaluator's, and completes first in one program, so the specialization
-    // restores every value it reads, as a compilation of cached modules
-    // does; the literal argument roots that read a value the Solved program
-    // computes complete once that program's roots have (design.md
-    // "Compile-Time Evaluation Under `.lss`"). The plan reads which roots
-    // remain pending after it.
-    var function_types: checked_root_graph.FunctionTypeMemo = .{};
-    defer function_types.deinit(allocator);
+    // Values requiring execution all use the selected strategy. Literal
+    // argument validation follows once the Solved program's values exist.
     try completeValueFormRoots(allocator, modules, lowering_modules, null, options);
-    try evaluateBoxyRoots(allocator, modules, lowering_modules, options, &debug_events, &function_types, .before_solved);
     var plan = try planRoots(allocator, modules, lowering_modules, program_roots, options.discovery_roots, lss_runtime, options.timing);
     defer plan.deinit(allocator);
     var evaluated_literals: LiteralRootIdentities = .empty;
@@ -1078,7 +1070,7 @@ pub fn finalizeProgram(
     const verify_literals = builtin.mode == .debug and lss_runtime and !plan.continued;
     var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, &plan, runtime_target, options, &debug_events, demand_driven, if (verify_literals) .{ .record = &evaluated_literals } else .none);
     errdefer specialized.deinit();
-    try evaluateBoxyRoots(allocator, modules, lowering_modules, options, &debug_events, &function_types, .after_solved);
+    try evaluateBoxyValidationRoots(allocator, modules, lowering_modules, options, &debug_events);
     var runtime_stages: ProgramSession.RuntimeStages = .evaluation;
     errdefer switch (runtime_stages) {
         .evaluation => {},
@@ -1161,36 +1153,15 @@ pub fn finalizeProgram(
     };
 }
 
-/// Which pending roots of a Solved compilation `evaluateBoxyRoots`
-/// evaluates.
-const BoxyPhase = enum {
-    /// Before the Solved program is specialized: every pending root that
-    /// neither holds a function value nor reads, directly or through other
-    /// roots, a value of a root that does. A literal argument root holding a
-    /// function value counts as holding none: the `.boxy` evaluator
-    /// evaluates it for its outcome and discards the value.
-    before_solved,
-    /// After the Solved program's roots completed: every literal argument
-    /// root still pending, with every pending root whose value one reads (a
-    /// root the Solved program did not demand).
-    after_solved,
-};
-
-/// Evaluate pending roots of a Solved compilation's modules with the `.boxy`
-/// evaluator, and store their values in their modules (design.md
-/// "Compile-Time Evaluation Under `.lss`"). A root holding a function value
-/// is the Solved program's, since a `.boxy` function value means nothing to
-/// Monotype ("Stored Function Values"), and so is every root that reads one;
-/// a literal argument root is the `.boxy` evaluator's whatever it reads
-/// ("Literal Arguments").
-fn evaluateBoxyRoots(
+/// Complete Boxy-only literal argument and interpolation validation after
+/// the Solved program, including any pending dependencies it did not demand
+/// (design.md "Literal Arguments").
+fn evaluateBoxyValidationRoots(
     allocator: Allocator,
     modules: []const ProgramModule,
     lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
     options: Options,
     debug_events: *DebugEvents,
-    function_types: *checked_root_graph.FunctionTypeMemo,
-    phase: BoxyPhase,
 ) FinalizeError!void {
     // The pending roots of the first artifact of each checked identity;
     // another artifact of the same identity repeats its results.
@@ -1210,60 +1181,33 @@ fn evaluateBoxyRoots(
             try pending.append(allocator, .{ .module = @intCast(index), .root = root_id, .request = request });
         }
     }
-    if (pending.items.len == 0) return;
-    if (phase == .after_solved and !any_literal) return;
+    if (!any_literal) return;
 
     const artifacts = try allocator.alloc(*checked.CheckedModuleArtifact, modules.len);
     defer allocator.free(artifacts);
     for (modules, artifacts) |entry, *artifact| artifact.* = entry.module;
-    var graph = if (phase == .before_solved)
-        try checked_root_graph.buildForBoxySelection(allocator, artifacts, lowering_modules, pending.items)
-    else
-        try checked_root_graph.build(allocator, artifacts, pending.items);
+    var graph = try checked_root_graph.build(allocator, artifacts, pending.items);
     defer graph.deinit(allocator);
     const chosen = try allocator.alloc(bool, pending.items.len);
     defer allocator.free(chosen);
-    switch (phase) {
-        // A root waits for the Solved program when it holds a function
-        // value or its evaluation reads a value of one that does, directly
-        // or through other roots.
-        .before_solved => {
-            for (pending.items, chosen, graph.unavailable_boxy_reads) |root, *flag, unavailable| {
-                flag.* = !unavailable and (artifacts[root.module].compile_time_roots.root(root.root).isBoxyEvaluated() or
-                    !try checked_root_graph.rootHoldsFunction(allocator, function_types, artifacts, lowering_modules, root));
-            }
-            var changed = true;
-            while (changed) {
-                changed = false;
-                for (graph.deps, chosen) |deps, *flag| {
-                    if (!flag.*) continue;
-                    for (deps) |dep| if (!chosen[dep]) {
-                        flag.* = false;
-                        changed = true;
-                        break;
-                    };
-                }
-            }
-        },
-        .after_solved => {
-            var work = std.ArrayList(u32).empty;
-            defer work.deinit(allocator);
-            for (pending.items, chosen, 0..) |root, *flag, ordinal| {
-                flag.* = artifacts[root.module].compile_time_roots.root(root.root).isBoxyEvaluated();
-                if (flag.*) try work.append(allocator, @intCast(ordinal));
-            }
-            while (work.pop()) |ordinal| for (graph.deps[ordinal]) |dep| {
-                if (chosen[dep]) continue;
-                chosen[dep] = true;
-                try work.append(allocator, dep);
-            };
-        },
+    var work = std.ArrayList(u32).empty;
+    defer work.deinit(allocator);
+    for (pending.items, chosen, 0..) |root, *flag, ordinal| {
+        flag.* = artifacts[root.module].compile_time_roots.root(root.root).isBoxyEvaluated();
+        if (flag.*) try work.append(allocator, @intCast(ordinal));
     }
+    while (work.pop()) |ordinal| for (graph.deps[ordinal]) |dep| {
+        if (chosen[dep]) continue;
+        chosen[dep] = true;
+        try work.append(allocator, dep);
+    };
     var selected = std.ArrayList(checked_root_graph.Root).empty;
     defer selected.deinit(allocator);
     for (pending.items, chosen) |root, flag| if (flag) try selected.append(allocator, root);
     if (selected.items.len == 0) return;
-    try evaluateRootsBoxy(allocator, modules, lowering_modules, selected.items, options, debug_events, function_types);
+    var function_types: checked_root_graph.FunctionTypeMemo = .{};
+    defer function_types.deinit(allocator);
+    try evaluateRootsBoxy(allocator, modules, lowering_modules, selected.items, options, debug_events, &function_types);
     for (modules) |entry| {
         if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
     }
@@ -1740,6 +1684,17 @@ const BoxyLinkedImages = struct {
     providers: std.StringHashMapUnmanaged(usize) = .empty,
     function_metadata: std.AutoHashMapUnmanaged([32]u8, []const u8) = .empty,
     function_addresses: std.AutoHashMapUnmanaged(usize, FunctionOrigin) = .empty,
+    /// The constant stores of the modules whose objects are registered, by
+    /// image digest, and the stored images the loaded images' pool imports
+    /// name, placed once each (design.md "Constant Pool").
+    pool_index: ?check.ConstStore.ImageIndex = null,
+    pool: switch (boxy_object_code) {
+        .image => ?ImageLoader.Pool,
+        .pieces => void,
+    } = switch (boxy_object_code) {
+        .image => null,
+        .pieces => {},
+    },
 
     const FunctionOrigin = struct { owner: [32]u8, identity: lir.LIR.ProcIdentity };
 
@@ -1785,6 +1740,11 @@ const BoxyLinkedImages = struct {
             .image => image.unload(),
             .pieces => image.deinit(),
         };
+        switch (boxy_object_code) {
+            .image => if (self.pool) |*pool| pool.deinit(),
+            .pieces => {},
+        }
+        if (self.pool_index) |*index| index.deinit();
         self.images.deinit(self.allocator);
         self.code.deinit(self.allocator);
         switch (boxy_object_code) {
@@ -1808,6 +1768,26 @@ const BoxyLinkedImages = struct {
         while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
     }
 
+    /// Register the constant stores of `views`, the modules whose objects a
+    /// program links against, where the loaded images' pool imports are
+    /// found.
+    fn addStores(self: *BoxyLinkedImages, views: []const checked.ImportedModuleView) FinalizeError!void {
+        if (comptime boxy_object_code == .pieces) return;
+        self.lock();
+        defer self.mutex.unlock();
+        if (self.pool_index == null) self.pool_index = .init(self.allocator);
+        for (views) |view| try self.pool_index.?.addStore(view.const_store);
+    }
+
+    /// The stored image whose digest is `digest`, under the lock a load
+    /// holds.
+    fn findPoolImage(context: *anyopaque, digest: [32]u8) error{OutOfMemory}!?backend.dev.UnitImage.PoolImage {
+        const self: *BoxyLinkedImages = @ptrCast(@alignCast(context));
+        const index = if (self.pool_index) |*registered| registered else return null;
+        const image = try index.find(digest) orelse return null;
+        return .{ .bytes = image.bytes, .pointers = image.pointers, .alignment = image.alignment };
+    }
+
     /// Register imports-first producer records without mapping executable
     /// memory. Provider choice is independent of which worker requests it.
     fn prepare(self: *BoxyLinkedImages, objects: []const BoxyObject, timing: ?*Timing) FinalizeError!void {
@@ -1826,6 +1806,8 @@ const BoxyLinkedImages = struct {
             var dependencies = std.AutoArrayHashMapUnmanaged(usize, void).empty;
             defer dependencies.deinit(self.allocator);
             for (view.imports()) |import| {
+                // A stored image is the constant pool's, not an object's.
+                if (import.flags & backend.dev.UnitImage.import_pool != 0) continue;
                 const name = view.name(import.name);
                 if (backend.dev.HostSplice.hostFunction(name) != null) continue;
                 if (self.providers.get(name)) |provider| {
@@ -1933,7 +1915,8 @@ const BoxyLinkedImages = struct {
         const view = candidate.view;
         var diagnostic: ImageLoader.Diagnostic = .{};
         var binding_context = ImportContext{ .images = self, .provider = provider };
-        var image = ImageLoader.load(self.allocator, view, .{ .context = &binding_context, .resolve = resolveImport }, &diagnostic) catch |err| switch (err) {
+        if (self.pool == null) self.pool = .{ .gpa = self.allocator, .source = .{ .context = self, .find = findPoolImage } };
+        var image = ImageLoader.load(self.allocator, view, .{ .context = &binding_context, .resolve = resolveImport, .pool = &self.pool.? }, &diagnostic) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.FlushInstructionCacheFailed => return error.FlushInstructionCacheFailed,
             error.UndefinedImport => finalizationInvariantFmt("a cached Boxy module's image imports {s}, which nothing loaded defines", .{diagnostic.name}),
@@ -2205,10 +2188,8 @@ fn finalizeProgramBoxy(
 /// for it. The roots of a module it reads complete before it: the module's
 /// own, because the writer completes the roots that read other constants
 /// after the rest, each after the ones it reads, and an imported module's,
-/// because the writer completes a module after its imports. The pending
-/// roots are those the strategy's `.boxy` evaluation takes: every root still
-/// needing evaluation under `.boxy`, and under `.lss`, where that evaluation
-/// runs before the Solved program is specialized, every root still pending.
+/// because the writer completes a module after its imports.
+/// It completes pending value-form roots before either evaluator runs.
 /// Every artifact of one checked identity owns its own store, so each
 /// completes its own roots.
 fn completeValueFormRoots(
@@ -2334,8 +2315,8 @@ const ValueFormModuleWriting = struct {
         const root_schema_started = Timing.startStep(options.timing);
         const root_schema = try schema.root(module.key.digest(), request);
         Timing.finishStep(options.timing, root_schema_started, .value_form_root_schemas);
-        const payload: checked.CompileTimeRootPayload = .{ .const_node = try writer.storeCheckedRoot(root_schema.plan, root_schema.ret_layout, root.rootExpr(), root.reads_constants) };
         const root_type = try writer.storeType(root_schema.ret_type);
+        const payload: checked.CompileTimeRootPayload = .{ .const_node = try writer.storeCheckedRoot(root_schema.plan, root_schema.ret_layout, root_type, root.rootExpr(), root.reads_constants) };
         module.compile_time_roots.fillPayload(root_id, payload);
         finishConstRoot(module, root, payload, root_type);
         self.writing.completed += 1;
@@ -2366,7 +2347,7 @@ fn valueFormReaderOrder(allocator: Allocator, module: *const checked.CheckedModu
     for (readers, runs) |request, *run| {
         const root = module.compile_time_roots.root(compileTimeRootForRequest(module, request));
         lookups.clearRetainingCapacity();
-        try checked.appendValueFormConstReads(allocator, bodies, root.rootExpr(), &stack, &lookups);
+        try checked.appendValueFormConstReads(allocator, &bodies, root.rootExpr(), &stack, &lookups);
         run.* = .{ .start = @intCast(reads.items.len), .len = 0 };
         for (lookups.items) |lookup| {
             const const_ref = bodies.constLookupRef(lookup) orelse finalizationInvariant("a value-form root reads a lookup that names no constant");
@@ -2485,7 +2466,7 @@ fn evaluateRootsBoxy(
     const classification_step_started = Timing.startStep(options.timing);
     const classification_started = if (base.dev_diagnostics.isSet(.trace_boxy_work)) (if (options.timing) |timing| nowNs(timing.std_io) else 0) else 0;
     for (roots, specialized) |root, *flag| {
-        flag.* = !artifacts[root.module].compile_time_roots.root(root.root).isBoxyEvaluated() and
+        flag.* = functionClassified(artifacts[root.module].compile_time_roots.root(root.root)) and
             try checked_root_graph.rootHoldsFunction(allocator, function_types, artifacts, lowering_modules, root);
     }
     Timing.finishStep(options.timing, classification_step_started, .root_classification);
@@ -2714,7 +2695,7 @@ pub const EarlyEvaluation = struct {
         errdefer allocator.free(specialized);
         const classification_started = Timing.startStep(options.timing);
         for (roots.items, specialized) |root, *flag| {
-            flag.* = !artifacts[root.module].compile_time_roots.root(root.root).isBoxyEvaluated() and
+            flag.* = functionClassified(artifacts[root.module].compile_time_roots.root(root.root)) and
                 try checked_root_graph.rootHoldsFunction(allocator, &self.function_types, artifacts, lowering, root);
         }
         Timing.finishStep(options.timing, classification_started, .root_classification);
@@ -3137,7 +3118,7 @@ const ModuleEvaluation = struct {
                 // A literal argument root and an interpolation conversion root
                 // are the `.boxy` evaluator's whatever reads them (design.md
                 // "Literal Arguments").
-                if (chosen[dep] or shared.modules[roots[dep].module].module.compile_time_roots.root(roots[dep].root).isBoxyEvaluated()) continue;
+                if (chosen[dep] or !functionClassified(shared.modules[roots[dep].module].module.compile_time_roots.root(roots[dep].root))) continue;
                 chosen[dep] = true;
                 try work.append(allocator, dep);
             }
@@ -3172,6 +3153,7 @@ const ModuleEvaluation = struct {
             const source = shared.options.boxy_objects.?;
             if (try source.objects(source.context, module)) |set| {
                 const registration_started = Timing.startStep(shared.options.timing);
+                try shared.images.addStores(set.views);
                 try shared.images.prepare(set.objects, shared.options.timing);
                 Timing.finishStep(shared.options.timing, registration_started, .image_registration);
                 run_options.boxy_linked_images = shared.images;
@@ -3216,6 +3198,7 @@ const ModuleEvaluation = struct {
             if (self.links(shared)) {
                 const source = shared.options.boxy_objects.?;
                 if (try source.functions(source.context, self.artifact(shared))) |objects| {
+                    try shared.function_images.addStores(objects.views);
                     options.boxy_function_objects = objects;
                     options.boxy_linked_images = shared.function_images;
                     modules = .{ .root = checked.loweringViewWithRelations(self.artifact(shared), &.{}), .imports = objects.views };
@@ -3509,7 +3492,7 @@ const ProgramBuild = struct {
         Timing.finishStep(self.build_options.timing, lowering_started, .program_lowering);
         const lowered = &self.lowered.?;
         if (lowered.lir_result.const_roots.items.len != pending.len) finalizationInvariant("the Boxy evaluator's lowering published a different count of compile-time roots than it was asked for");
-        if (self.build_options.boxy_program_observer) |observer| try observer.observe(observer.context, &lowered.lir_result);
+        if (self.build_options.compile_time_program_observer) |observer| try observer.observe(observer.context, &lowered.lir_result);
         self.owners = try ModuleOwners.init(allocator, lowered.lir_result.lowering_modules.items, self.modules);
         self.owners.?.unfinalized = self.build_options.unfinalized_reports;
         self.program = try initEvaluationProgram(ProgramPtr, allocator, self.lowering_modules, lowered, self.build_options);
@@ -4038,6 +4021,7 @@ fn evaluateStaged(
         }, stage_producers.items, producers, lifted.loweringModules());
         if (stage.lir_result.root_procs.items.len != stage_roots.items.len)
             finalizationInvariant("compile-time stage lowering changed its requested root count");
+        if (options.compile_time_program_observer) |observer| try observer.observe(observer.context, &stage.lir_result);
         var program_storage = try initEvaluationProgram(ProgramPtr, allocator, lowering_modules, stage, options);
         defer program_storage.deinit();
         const program = program_storage.ptr();
@@ -5012,7 +4996,7 @@ fn finalize(
     const requests = module.root_requests.compile_time_requests.items();
     const total_started_ns = if (requests.len != 0) if (options.timing) |timing| timing.start() else 0 else 0;
     if (requests.len != 0) {
-        const lowering_imports = try finalizationImports(allocator, checked.importedView(module), imports, available_modules);
+        const lowering_imports = try finalizationImports(allocator, &checked.importedView(module), imports, available_modules);
         defer allocator.free(lowering_imports);
 
         if (options.strategy == .boxy) {
@@ -5043,10 +5027,8 @@ fn finalize(
 }
 
 /// Complete one module's roots under `.lss` as a program of that module
-/// alone: the `.boxy` evaluator completes every root that neither holds a
-/// function value nor reads one, and the Solved program the rest (design.md
-/// "Compile-Time Evaluation Under `.lss`"). The module's imports are already
-/// complete.
+/// alone (design.md "Compile-Time Evaluation Under `.lss`").
+/// The module's imports are already complete.
 fn finalizeSolvedModule(
     allocator: Allocator,
     module: *checked.CheckedModuleArtifact,
@@ -7684,6 +7666,7 @@ fn reportDevHostEvents(
     events: []const CompileTimeHost.HostEvent,
 ) FinalizeError!bool {
     var had_problem = false;
+    if (!reportsObservations(root)) return false;
     const root_region = rootBodySourceRegion(module, root);
     for (events) |event| {
         switch (event) {
@@ -7718,7 +7701,17 @@ fn reportInterpreterDebugMessages(
     root: checked.CompileTimeRoot,
     messages: []const []const u8,
 ) Allocator.Error!void {
+    if (!reportsObservations(root)) return;
     for (messages) |msg| try reportDebugMessage(allocator, options, module, root, msg);
+}
+
+/// Whether a root's evaluation reports its `dbg` output and `expect`
+/// failures: every root's but a polymorphic constant's instance other than
+/// its canonical one, which alone reports what the constant's body observes
+/// (design.md "Polymorphic Constants").
+fn reportsObservations(root: checked.CompileTimeRoot) bool {
+    const argument = root.literal_argument orelse return true;
+    return argument.site.kind != .constant_instance or argument.canonical;
 }
 
 fn reportDebugMessage(allocator: Allocator, options: Options, module: checked.ModuleId, root: checked.CompileTimeRoot, message: []const u8) Allocator.Error!void {
@@ -7852,6 +7845,7 @@ fn reportCompileTimeExpectFailures(
     failures: []const ExpectFailure,
 ) FinalizeError!bool {
     if (failures.len == 0) return false;
+    if (!reportsObservations(root)) return false;
     const problem_store = maybe_problem_store orelse return false;
     const root_region = rootBodySourceRegion(module, root);
     for (failures) |failure| {
@@ -8149,7 +8143,7 @@ const RootFailure = enum {
         return switch (payload) {
             .const_node => |node| switch (module.const_store.get(node)) {
                 .checked_error => .checked_error,
-                .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .nominal, .fn_value, .boxy_fn => .crash,
+                .image, .pending, .list, .box, .tuple, .record, .crash, .tag, .nominal, .fn_value, .boxy_fn => .crash,
             },
             .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => .crash,
         };
@@ -8210,7 +8204,7 @@ const ComptimeFailureSite = struct {
 /// files as its link names them (`ModuleNames`), a whole program by content.
 fn fileIsModule(file: base.SourceFileEntry, module: *const checked.CheckedModuleArtifact) bool {
     if (base.byte_encoding.digestsEql(&file.module_identity, &module.module_identity.stable_hash)) return true;
-    return base.byte_encoding.digestsEql(&file.module_identity, &ModuleNames.stableName(checked.importedView(module)));
+    return base.byte_encoding.digestsEql(&file.module_identity, &ModuleNames.stableName(&checked.importedView(module)));
 }
 
 fn comptimeFailureSiteFrom(
@@ -8271,17 +8265,17 @@ fn comptimeFailureOrigin(
 
 fn finalizationImports(
     allocator: Allocator,
-    root: checked.ImportedModuleView,
+    root: *const checked.ImportedModuleView,
     imports: []const checked.PublishImportArtifact,
     available_modules: []const checked.ImportedModuleView,
 ) Allocator.Error![]checked.ImportedModuleView {
     var out = std.ArrayList(checked.ImportedModuleView).empty;
     errdefer out.deinit(allocator);
 
-    for (imports) |import| {
-        try appendUniqueImport(allocator, root, &out, import.view);
+    for (imports) |*import| {
+        try appendUniqueImport(allocator, root, &out, &import.view);
     }
-    for (available_modules) |module| {
+    for (available_modules) |*module| {
         try appendUniqueImport(allocator, root, &out, module);
     }
 
@@ -8290,18 +8284,18 @@ fn finalizationImports(
 
 fn appendUniqueImport(
     allocator: Allocator,
-    root: checked.ImportedModuleView,
+    root: *const checked.ImportedModuleView,
     out: *std.ArrayList(checked.ImportedModuleView),
-    module: checked.ImportedModuleView,
+    module: *const checked.ImportedModuleView,
 ) Allocator.Error!void {
     if (sameModuleIdentity(root, module)) return;
-    for (out.items) |existing| {
+    for (out.items) |*existing| {
         if (sameModuleIdentity(existing, module)) return;
     }
-    try out.append(allocator, module);
+    try out.append(allocator, module.*);
 }
 
-fn sameModuleIdentity(a: checked.ImportedModuleView, b: checked.ImportedModuleView) bool {
+fn sameModuleIdentity(a: *const checked.ImportedModuleView, b: *const checked.ImportedModuleView) bool {
     return std.meta.eql(a.module_identity.stable_hash, b.module_identity.stable_hash);
 }
 
@@ -8338,6 +8332,16 @@ fn compileTimeRootForRequest(
     }
 
     return root_id;
+}
+
+/// Whether a root may hold a function value, so that it runs in a program
+/// that stores function values: every root but a literal argument root that
+/// is no polymorphic constant's instance and an interpolation conversion
+/// root, which hold none (design.md "Literal Arguments"). A polymorphic
+/// constant's instance is stored whatever it holds (design.md "Polymorphic
+/// Constants").
+fn functionClassified(root: checked.CompileTimeRoot) bool {
+    return !root.isBoxyEvaluated();
 }
 
 /// Store an evaluated root's value; a hoisted validation keeps no value,
@@ -8389,9 +8393,9 @@ fn completeRoot(
     module.compile_time_roots.roots.items()[@backingInt(root_id)].lss_value_has_functions = function_strategy == .lss and switch (payload) {
         .fn_value => true,
         .const_node => |node| switch (module.const_store.get(node)) {
-            .crash, .checked_error => false,
+            .image, .crash, .checked_error => false,
             .pending => unreachable, // A completed root's stored node is fully published.
-            .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value, .boxy_fn => true,
+            .list, .box, .tuple, .record, .tag, .nominal, .fn_value, .boxy_fn => true,
         },
         .pending, .unevaluated, .discarded, .expect, .runtime => false,
     };

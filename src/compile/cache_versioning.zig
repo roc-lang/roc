@@ -88,8 +88,33 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// types that carry no iterator representation fields.
 /// Version 57 stores absent optional ids and indices as zero. Version 58
 /// gives the remaining absences explicit representations.
+/// Version 59 stores sealed type stores whose dead descriptors, pool rows and
+/// merged-away variables sealing removed, renumbering the variables checking
+/// made with every variable checking recorded outside the store. Version 60
+/// stores each checked type's identity-variable fact.
+/// Version 61 combines version 60 with these: a compile-time root whose value
+/// is data alone is stored as an image with the type it was stored at, and
+/// each strategy's entry is filed under its own key; each closed instance of a
+/// polymorphic constant is stored as a `constant_instance` root of its own,
+/// with the canonical instantiation's roots; for each use of a name a
+/// destructuring scheme alias binds, the variables of the name's scheme are
+/// recorded, with a constant's instances at the substitutions checking
+/// recorded for those uses and for dispatches to methods bound to polymorphic
+/// callable bindings; for each `to_inspect` override whose inspection instance
+/// is closed, that use's edge and the constant instances it names are
+/// recorded; and value-form bytes literals and files imported as `Str` are
+/// stored as images.
+/// Version 66 combines version 61 with these: each part holding no function
+/// of a stored value holding one is stored as an image of its own, no stored
+/// list is stored as packed bytes, and the `zst`, `scalar` and `str`
+/// constant store node forms, which no producer writes, are gone.
+/// Version 67 combines version 66 with these: a polymorphic constant's
+/// instance roots are evaluated by the compilation's own strategy, so a
+/// literal argument root records no function-holding flag, and a Solved
+/// program's data root is stored as an image at its declared rows' layout.
 /// Platform-pairing entries share it.
-const checked_envelope_version: u32 = 58;
+/// Version 68 records unchanged imported-file ranges in stored images.
+const checked_envelope_version: u32 = 68;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order and alignment. Version 5 rejects builtin-conflicting import
@@ -191,8 +216,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x63, 0xE6, 0x8A, 0x8D, 0xCE, 0xBE, 0x7B, 0x5C, 0x82, 0x33, 0x0A, 0xB6, 0x24, 0xC5, 0x85, 0xFC,
-        0x84, 0xE5, 0x65, 0x06, 0x37, 0xD7, 0x2F, 0x2E, 0x4B, 0x94, 0xB4, 0xB7, 0x62, 0x6C, 0x8C, 0xC5,
+        0x7D, 0x74, 0x88, 0x0E, 0xEA, 0x5F, 0x31, 0x45, 0xEB, 0x13, 0x28, 0xAF, 0x84, 0xC9, 0x05, 0x69,
+        0x3A, 0x93, 0x1C, 0x46, 0xAD, 0xE5, 0x90, 0x2E, 0x9F, 0xB2, 0xC4, 0xA2, 0xE1, 0x19, 0x59, 0x90,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

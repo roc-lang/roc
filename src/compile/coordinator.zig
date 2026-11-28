@@ -2375,9 +2375,9 @@ pub const Coordinator = struct {
     /// evaluation of this compilation completes.
     early_reports: EarlyReportDestinations = .{},
     debug_observer: ?eval.CompileTimeFinalization.DebugObserver = null,
-    /// Instrumentation only: reads each `.boxy` compile-time program the
+    /// Instrumentation only: reads each compile-time program the
     /// compilation lowers.
-    boxy_program_observer: ?eval.CompileTimeFinalization.BoxyProgramObserver = null,
+    compile_time_program_observer: ?eval.CompileTimeFinalization.CompileTimeProgramObserver = null,
     /// Keep compile-time evaluation artifacts so tests can compare them
     /// with the code emitted by a build.
     keep_compile_time_artifacts: bool = false,
@@ -4134,7 +4134,7 @@ pub const Coordinator = struct {
         options.discovery_roots = .{ .requests = discovery_requests.items, .source_modules = discovery_sources.items };
         options.defer_debug_replay = !replay_cached_debug;
         options.debug_observer = self.debug_observer;
-        options.boxy_program_observer = self.boxy_program_observer;
+        options.compile_time_program_observer = self.compile_time_program_observer;
         var runtime_target: ?lir.CheckedPipeline.TargetConfig = if (self.runtime_lowering) |config| config.target else null;
         // An explicitly empty test execution subset has no runtime consumer.
         // Checking still finalizes every pending compile-time obligation.
@@ -4392,7 +4392,7 @@ pub const Coordinator = struct {
         options.cancel_request = self.cancel_request;
         options.value_form_roots = self.value_form_roots;
         options.debug_observer = self.debug_observer;
-        options.boxy_program_observer = self.boxy_program_observer;
+        options.compile_time_program_observer = self.compile_time_program_observer;
         options.unfinalized_reports = .{ .context = &self.early_reports, .module = EarlyReportDestinations.module };
         self.early_evaluation = try eval.CompileTimeFinalization.EarlyEvaluation.create(self.gpa, options);
         // The modules checked before every module was known.
@@ -5303,6 +5303,19 @@ pub const Coordinator = struct {
     }
 
     /// The digests of every checked module of this compilation, its link.
+    /// Register the constant store of every checked module of this build
+    /// with `index`, the images a link's constant pool places (design.md
+    /// "Constant Pool").
+    pub fn registerConstStores(self: *Coordinator, index: *check.ConstStore.ImageIndex) Allocator.Error!void {
+        try index.addStore(&self.builtin_modules.checked_artifact.const_store);
+        var packages = self.packages.iterator();
+        while (packages.next()) |package| {
+            for (package.value_ptr.*.modules.items) |*mod| {
+                if (mod.checkedArtifact()) |artifact| try index.addStore(&artifact.const_store);
+            }
+        }
+    }
+
     pub fn boxyLinkDigests(self: *Coordinator) Allocator.Error!boxy_interface.Digests {
         var artifacts = std.ArrayList(*const CheckedModuleArtifact).empty;
         defer artifacts.deinit(self.gpa);
@@ -6872,7 +6885,7 @@ pub const Coordinator = struct {
             errdefer scope.deinit();
             const context = try task_payload_alloc.create(checked_cache_entry.Context);
             const requirement_owner = if (platform_surface) |surface| scope.ordinal(surface.env.contentIdentityHash().?.*) else null;
-            const key: CheckedArtifact.CheckedModuleArtifactKey = .{ .bytes = CheckedArtifact.typingCacheKeyFromModuleEnv(mod.moduleEnv().?, scope.digest(), requirement_owner, explicit_roots, mod.validation, canonicalized_cache_entry.pinValidationHash(mod.has_source_version_pin, self.source_pin_version), missing_public_types) };
+            const key: CheckedArtifact.CheckedModuleArtifactKey = .{ .bytes = checkedEntryKey(CheckedArtifact.typingCacheKeyFromModuleEnv(mod.moduleEnv().?, scope.digest(), requirement_owner, explicit_roots, mod.validation, canonicalized_cache_entry.pinValidationHash(mod.has_source_version_pin, self.source_pin_version), missing_public_types), self.specialization_strategy) };
             context.* = .{ .allocator = task_payload_alloc, .key = key, .scope = scope, .owner_envs = owner_envs, .manager = manager, .entries_dir = self.cache_entry_dirs.checked orelse "" };
             typing_context = context;
             mod.typing_storage_key = key;
@@ -8521,6 +8534,7 @@ pub const Coordinator = struct {
                 checking_arena = arena;
                 checking_outcome = try check.CheckedReports.captureChecking(arena.allocator(), &typecheck_output.checker);
             }
+            try typecheck_output.checker.problems.releaseUnusedCapacity();
             const state = try result_alloc.create(messages.PendingEvaluationState);
             state.* = .{
                 .allocator = result_alloc,
@@ -9130,9 +9144,7 @@ fn compileAppRootIdentityExpecting(
             if (!std.mem.eql(u8, root.canonical_names.exportNameText(entry.source_name), expected.name)) continue;
             const state = root.const_templates.get(entry.value.const_ref).state;
             try std.testing.expect(state == .stored_const);
-            var value = root.const_store.get(state.stored_const.node);
-            while (value == .nominal) value = root.const_store.get(value.nominal.backing);
-            std.testing.expectEqual(expected.value, value.scalar.i64) catch return error.TestUnexpectedResult;
+            std.testing.expectEqual(expected.value, testStoredI64(root, state.stored_const.node)) catch return error.TestUnexpectedResult;
             found = true;
         }
         try std.testing.expect(found);
@@ -9151,7 +9163,7 @@ fn compileAppRootIdentityExpecting(
     }
     var direct_required_call_count: usize = 0;
     for (root.resolved_value_refs.call_direct_targets.items()) |call| {
-        if (root.resolved_value_refs.records.items()[@backingInt(call.target)].ref == .platform_required_proc) {
+        if (root.resolved_value_refs.ref(call.target) == .platform_required_proc) {
             direct_required_call_count += 1;
         }
     }
@@ -9670,6 +9682,18 @@ fn compileForReuse(allocator: Allocator, cache_dir: []const u8, app_path: []cons
     return compileForReuseWithStrategy(allocator, cache_dir, app_path, null, .lss);
 }
 
+/// The key a checked module's cache entry is filed under: its typing
+/// inputs and the strategy whose compile-time evaluators stored its values.
+/// A stored image is at the layouts of the strategy that wrote it, so each
+/// strategy files its own entry (design.md "Stored Images").
+fn checkedEntryKey(typing_key: [32]u8, strategy: base.SpecializationStrategy) [32]u8 {
+    var hasher = base.Sha256.init(.{});
+    hasher.update("roc.checked-entry.v1");
+    hasher.update(&typing_key);
+    hasher.update(@tagName(strategy));
+    return hasher.finalResult();
+}
+
 fn compileForReuseWithStrategy(allocator: Allocator, cache_dir: []const u8, app_path: []const u8, runtime: ?lir.CheckedPipeline.TargetConfig, strategy: base.SpecializationStrategy) CheckedModuleCacheRunError!ReuseRun {
     var stderr_capture: StderrCapture = .{ .allocator = allocator };
     defer stderr_capture.bytes.deinit(allocator);
@@ -9724,15 +9748,10 @@ fn compileForReuseWithStrategy(allocator: Allocator, cache_dir: []const u8, app_
             .def => |def| def,
             .hoisted, .expr, .statement, .required_binding, .literal, .literal_argument => continue,
         };
-        const pattern = env.store.getPattern(env.store.getDef(def).pattern);
-        if (pattern != .assign) continue;
-        try names.append(allocator, try allocator.dupe(u8, env.getIdent(pattern.assign.ident)));
+        const pattern = env.store.patternAs(env.store.getDef(def).pattern, .assign) orelse continue;
+        try names.append(allocator, try allocator.dupe(u8, env.getIdent(pattern.ident)));
         var stored: ?i64 = null;
-        if (root.payload == .const_node) {
-            var node = app.const_store.get(root.payload.const_node);
-            while (node == .nominal) node = app.const_store.get(node.nominal.backing);
-            if (node == .scalar and node.scalar == .i64) stored = node.scalar.i64;
-        }
+        if (root.payload == .const_node) stored = testStoredI64(app, root.payload.const_node);
         try values.append(allocator, stored);
     }
     const stderr = try stderr_capture.bytes.toOwnedSlice(allocator);
@@ -9747,7 +9766,7 @@ fn compileForReuseWithStrategy(allocator: Allocator, cache_dir: []const u8, app_
     };
 }
 
-test "a warm build that demands another strategy's roots reopens the loaded artifact in place" {
+test "each strategy files its own checked entry, so a build under the other strategy checks cold" {
     if (is_freestanding) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -9771,23 +9790,27 @@ test "a warm build that demands another strategy's roots reopens the loaded arti
     try std.testing.expectEqual(@as(?i64, 42), lss.value("answer"));
     try std.testing.expect(!lss.app_reopened);
 
-    // The Boxy build loads the entry the LSS build stored, which lacks the
-    // Boxy form of `add_one`, so it reopens the artifact: the root column is
-    // written where it was loaded, and the result matches a cold build.
-    var reopened = try compileForReuseWithStrategy(allocator, cache, app, null, .boxy);
-    defer reopened.deinit(allocator);
-    try std.testing.expect(reopened.app_reopened);
-    try std.testing.expect(reopened.app_roots_borrowed);
+    // A stored image is at the layouts of the strategy that wrote it, so
+    // the Boxy build finds no entry of its own in the cache the LSS build
+    // filled: it checks the module cold, reopening nothing, and matches a
+    // build with an empty cache.
+    var boxy = try compileForReuseWithStrategy(allocator, cache, app, null, .boxy);
+    defer boxy.deinit(allocator);
+    try std.testing.expect(!boxy.app_reopened);
     var cold = try compileForReuseWithStrategy(allocator, cold_cache, app, null, .boxy);
     defer cold.deinit(allocator);
-    try std.testing.expectEqual(cold.value("answer"), reopened.value("answer"));
-    try std.testing.expectEqualStrings(cold.stderr, reopened.stderr);
+    try std.testing.expectEqual(cold.value("answer"), boxy.value("answer"));
+    try std.testing.expectEqualStrings(cold.stderr, boxy.stderr);
 
-    // The entry the reopened build stored again holds both forms.
-    var warm = try compileForReuseWithStrategy(allocator, cache, app, null, .boxy);
-    defer warm.deinit(allocator);
-    try std.testing.expect(!warm.app_reopened);
-    try std.testing.expectEqual(cold.value("answer"), warm.value("answer"));
+    // Each strategy's warm build reads its own entry.
+    var warm_boxy = try compileForReuseWithStrategy(allocator, cache, app, null, .boxy);
+    defer warm_boxy.deinit(allocator);
+    try std.testing.expect(!warm_boxy.app_reopened);
+    try std.testing.expectEqual(cold.value("answer"), warm_boxy.value("answer"));
+    var warm_lss = try compileForReuseWithStrategy(allocator, cache, app, null, .lss);
+    defer warm_lss.deinit(allocator);
+    try std.testing.expect(!warm_lss.app_reopened);
+    try std.testing.expectEqual(lss.value("answer"), warm_lss.value("answer"));
 }
 
 const reuse_platform =
@@ -10225,8 +10248,8 @@ test "app artifact records platform requirement solutions from checking" {
     try std.testing.expectEqualStrings("prog", app_artifact.canonical_names.exportNameText(top_level.source_name));
 
     // The solved requirement type is the record the app provided.
-    const solved_payload = app_artifact.checked_types.payload(solution.solved_root);
-    try std.testing.expect(solved_payload == .record);
+    const solved_payload_kind = app_artifact.checked_types.payloadTag(solution.solved_root);
+    try std.testing.expect(solved_payload_kind == .record);
 
     // Exactly one identity variable (the for-clause `model`), solved to the
     // app's `Model` alias.
@@ -10539,8 +10562,8 @@ test "platform requirement relation specializes identity reached through app ali
     try std.testing.expectEqual(@as(usize, 1), relations.len);
 
     const relation = relations[0];
-    const payload = platform_artifact.checked_types.payload(relation.requested_source_ty_payload);
-    try std.testing.expect(payload != .pending);
+    const payload_kind = platform_artifact.checked_types.payloadTag(relation.requested_source_ty_payload);
+    try std.testing.expect(payload_kind != .pending);
 }
 
 test "diagnostic-only mode publishes the platform root during checking" {
@@ -14028,20 +14051,23 @@ test "shared CTFE and runtime requests specialize once per evaluation across wor
             try coord.finishCheckedProgram(.none);
             try std.testing.expect(!coord.hasUserErrors());
             const session = &coord.program_session.?;
-            // The `.boxy` evaluator completed `answer` before the Solved
-            // program was specialized, so that program restores the stored
-            // value and is specialized once, and the runtime consumer
-            // continues it: it registers no literal root.
-            try std.testing.expect(session.runtime_stages == .evaluation);
+            // The Solved program evaluates the pending `answer`, so the
+            // runtime consumer continues a program specialized once more from
+            // the stored value, which registers no literal root: one
+            // specialization for the evaluation and one for the runtime
+            // program, whatever the workers and target width.
+            try std.testing.expect(session.runtime_stages == .respecialized);
+            try std.testing.expect(session.runtime_stages.respecialized == null);
             const stage_count: u32 = if (session.completed) |*completed| @intCast(completed.programs().len) else 0;
+            try std.testing.expect(stage_count != 0);
             try std.testing.expect(session.runtime_prepared != null);
-            try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
-            try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
+            try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
+            try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
             try std.testing.expectEqual(stage_count, metrics.lir_continuations);
             var runtime = try session.takeRuntime(allocator, requests, target);
             defer runtime.deinit();
-            try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
-            try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
+            try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
+            try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
             try std.testing.expectEqual(stage_count + 1, metrics.lir_continuations);
             try std.testing.expectEqual(@as(usize, 1), runtime.lir_result.root_procs.items.len);
             // The runtime consumer lowers its own continuation, where the
@@ -14679,8 +14705,8 @@ test "Boxy checked constants share across checkouts and survive unrelated applic
             const root_id = root: for (artifact.compile_time_roots.roots.items()) |root| {
                 if (root.source != .def) continue;
                 const env = artifact.moduleEnvConst();
-                const pattern = env.store.getPattern(env.store.getDef(root.source.def).pattern);
-                if (pattern == .assign and std.mem.eql(u8, env.getIdent(pattern.assign.ident), "count")) break :root root.id;
+                const pattern = env.store.patternAs(env.store.getDef(root.source.def).pattern, .assign);
+                if (pattern != null and std.mem.eql(u8, env.getIdent(pattern.?.ident), "count")) break :root root.id;
             } else return error.TestUnexpectedResult;
             const cached = artifact.module_env == .cached_entry;
             const stored = artifact.compile_time_roots.root(root_id).payload == .const_node;
@@ -14688,9 +14714,8 @@ test "Boxy checked constants share across checkouts and survive unrelated applic
             try std.testing.expect(!coord.hasUserErrors());
             const root = artifact.compile_time_roots.root(root_id);
             try std.testing.expect(root.payload == .const_node);
-            const node = artifact.const_store.get(root.payload.const_node);
-            try std.testing.expect(node == .scalar and node.scalar == .i64);
-            return .{ .key = artifact.key.bytes, .cached = cached, .stored_before_evaluation = stored, .value = node.scalar.i64 };
+            const value = testStoredI64(artifact, root.payload.const_node) orelse return error.TestUnexpectedResult;
+            return .{ .key = artifact.key.bytes, .cached = cached, .stored_before_evaluation = stored, .value = value };
         }
     };
     const first_path = try tmp.dir.realPathFileAlloc(std.testing.io, "checkout-a/app.roc", gpa);
@@ -14847,10 +14872,20 @@ fn runCheckOnly(
     const app = try Named.artifact(&coord, "app");
     for (app.compile_time_roots.roots.items()) |root| {
         if (root.payload != .const_node) continue;
-        const node = app.const_store.get(root.payload.const_node);
-        if (node == .scalar and node.scalar == .i64) result.answer = node.scalar.i64;
+        if (testStoredI64(app, root.payload.const_node)) |answer| result.answer = answer;
     }
     return result;
+}
+
+/// The `I64` a test's stored constant `node` of `artifact` holds, or null
+/// when it holds another value.
+fn testStoredI64(artifact: *const CheckedModuleArtifact, node: CheckedArtifact.ConstNodeId) ?i64 {
+    const image = artifact.const_store.imageOf(node) orelse return null;
+    const literal = artifact.const_store.imageLiteral(image) orelse return null;
+    return switch (literal) {
+        .scalar => |scalar| if (scalar == .i64) scalar.i64 else null,
+        .tag, .str => null,
+    };
 }
 
 /// The cache files under `parent`'s `cache`, by file name, with their bytes.
@@ -15060,8 +15095,7 @@ fn runEditLoop(allocator: Allocator, path: []const u8, cache: []const u8) CheckO
     const app = try Named.artifact(&coord, "app");
     for (app.compile_time_roots.roots.items()) |root| {
         if (root.payload != .const_node) continue;
-        const node = app.const_store.get(root.payload.const_node);
-        if (node == .scalar and node.scalar == .i64) result.answer = node.scalar.i64;
+        if (testStoredI64(app, root.payload.const_node)) |answer| result.answer = answer;
     }
     return result;
 }

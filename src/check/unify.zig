@@ -41,6 +41,7 @@
 //! subsequent unification runs.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
@@ -164,7 +165,7 @@ pub const Result = union(enum) {
     /// A mismatch recorded as a diagnostic.
     problem: Problem.Idx,
     /// A mismatch detected under `write_no_report`, or under
-    /// `repeated_label_rows = .return_row` when a row's repeated label stopped
+    /// `RepeatedLabelRows.return_row` when a row's repeated label stopped
     /// the relation (`Scratch.repeatedLabelRow`): nothing recorded and the
     /// top-level operands are not poisoned. Successful child unifications that
     /// completed before the mismatch remain committed.
@@ -322,6 +323,8 @@ pub const MismatchBehavior = enum {
 /// Per-call options. All axes default to the common case.
 pub const Options = struct {
     context: Context = .none,
+    /// Fresh, unnamed tail introduced by a member demand, not a rest binder.
+    member_tail: ?Var = null,
     on_mismatch: MismatchBehavior = .poison_to_err,
     root_relation: RootRelation = .ordinary,
     row_width_relation: RowWidthRelation = .construction,
@@ -333,9 +336,6 @@ pub const Options = struct {
     /// type, so a mismatch is reported as that type needing two different
     /// methods of one name.
     method_requirements: ?MethodRequirements = null,
-    /// What a relation does when a row repeats a label whose occurrences do
-    /// not relate.
-    repeated_label_rows: RepeatedLabelRows = .mismatch,
     /// The region of the actual operand, which a reported mismatch records,
     /// when the caller has it at hand. A caller that leaves it unset gives
     /// the mismatch its region once one is reported.
@@ -365,7 +365,10 @@ pub const MethodRequirements = struct {
 /// * Resolves type variables & compresses paths
 /// * Compares variable contents for equality
 /// * Merges unified variables so 1 is "root" and the other is "redirect"
-pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.Error!Result {
+///
+/// `opts` is read in place, so a caller relating the same operands again
+/// passes the same options without copying them.
+pub fn unify(env: *const Env, a: Var, b: Var, opts: *const Options, repeated_label_rows: RepeatedLabelRows) std.mem.Allocator.Error!Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -393,6 +396,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         opts.field_presence_relation,
         opts.nominal_record_mismatch_role,
     );
+    unifier.member_tail = opts.member_tail;
     unifier.deferred_callables = env.deferred_callables;
     const root_mismatch: MismatchHandling = if (opts.method_requirements) |requirements| .{ .record_method_conflict = .{
         .method_name = requirements.method_name,
@@ -411,7 +415,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
             error.TypeMismatch => {},
         }
 
-        if (opts.repeated_label_rows == .return_row and env.unify_scratch.repeatedLabelRow() != null) {
+        if (repeated_label_rows == .return_row and env.unify_scratch.repeatedLabelRow() != null) {
             return Result.mismatch;
         }
 
@@ -618,6 +622,7 @@ const Unifier = struct {
     row_width_relation: RowWidthRelation,
     field_presence_relation: FieldPresenceRelation,
     nominal_record_mismatch_role: NominalRecordMismatchRole,
+    member_tail: ?Var = null,
     /// The unresolved "actual" var before resolution, used for deferred constraint origin tracking.
     /// This allows error messages to point to the original expression rather than the resolved type.
     unresolved_a: ?Var,
@@ -893,10 +898,10 @@ const Unifier = struct {
 
     fn scheduleGuardedPair(self: *Self, a_var: Var, b_var: Var, on_mismatch: MismatchHandling) std.mem.Allocator.Error!void {
         try self.pushMismatchHandler(on_mismatch);
-        try self.pushWorkFrame(.{ .guarded_pair = .{
+        try self.pushWorkFrame(.guarded_pair, .{
             .a = a_var,
             .b = b_var,
-        } });
+        });
     }
 
     fn scheduleRootPair(
@@ -907,11 +912,11 @@ const Unifier = struct {
         on_mismatch: MismatchHandling,
     ) std.mem.Allocator.Error!void {
         try self.pushMismatchHandler(on_mismatch);
-        try self.pushWorkFrame(.{ .root_pair = .{
+        try self.pushWorkFrame(.root_pair, .{
             .a = a_var,
             .b = b_var,
             .relation = relation,
-        } });
+        });
     }
 
     /// Push the handler for a mismatch raised by the frames pushed after it.
@@ -920,14 +925,14 @@ const Unifier = struct {
     /// without it.
     fn pushMismatchHandler(self: *Self, on_mismatch: MismatchHandling) std.mem.Allocator.Error!void {
         if (on_mismatch == .propagate) return;
-        try self.pushWorkFrame(.{ .mismatch_handler = on_mismatch });
+        try self.pushWorkFrame(.mismatch_handler, on_mismatch);
     }
 
     fn scheduleMerge(self: *Self, vars: ResolvedVarDescs, content: Content) std.mem.Allocator.Error!void {
-        try self.pushWorkFrame(.{ .merge = .{
+        try self.pushWorkFrame(.merge, .{
             .vars = vars,
             .content = content,
-        } });
+        });
     }
 
     /// Schedule the merge of `vars` into the content `kept`'s class stores,
@@ -940,7 +945,7 @@ const Unifier = struct {
             .a => vars.a,
             .b => vars.b,
         };
-        try self.pushWorkFrame(.{ .merge_stored = self.storedMerge(vars, kept_resolved) });
+        try self.pushWorkFrame(.merge_stored, self.storedMerge(vars, kept_resolved));
     }
 
     /// The merge of `vars` into the content `kept`, one of the two, holds.
@@ -961,56 +966,65 @@ const Unifier = struct {
         return flag_idx;
     }
 
-    /// Push a frame, writing only its active variant: the union is as
-    /// large as its largest variant, and most frames are small.
-    fn pushWorkFrame(self: *Self, frame: WorkFrame) std.mem.Allocator.Error!void {
+    /// Push a `tag` frame carrying `payload`, built in its slot: only that
+    /// variant is written, and the union is as large as its largest
+    /// variant while most frames are small.
+    fn pushWorkFrame(self: *Self, comptime tag: WorkFrame.FrameTag, payload: WorkFrame.Payload(tag)) std.mem.Allocator.Error!void {
         const slot = try self.scratch.unify_work_stack.addOne(self.scratch.gpa);
-        writeActiveVariant(WorkFrame, slot, frame);
+        slot.* = @unionInit(WorkFrame, @tagName(tag), payload);
     }
 
-    /// Pop the top frame into `out`, reading only its active variant.
-    fn popWorkFrame(self: *Self, out: *WorkFrame) bool {
-        const stack = &self.scratch.unify_work_stack;
-        const items = stack.items();
-        if (items.len == 0) return false;
-        writeActiveVariant(WorkFrame, out, items[items.len - 1]);
-        stack.shrinkRetainingCapacity(items.len - 1);
-        return true;
-    }
-
+    /// Pop and run frames until the stack is empty. Each frame's payload is
+    /// read out of its slot, and only its active variant, before the slot is
+    /// released: the frames it pushes reuse the slot.
     fn runWorkLoop(self: *Self) Error!void {
-        var frame: WorkFrame = undefined;
-        while (self.popWorkFrame(&frame)) {
-            self.scratch.frame_refused_tag_tails = .{};
-            self.processFrame(frame) catch |err| switch (err) {
-                error.ErroneousType => return error.ErroneousType,
-                error.TypeMismatch => {
-                    // The first failed pair is the leaf: a child mismatch a
-                    // handler flags is raised again by its parent's frame,
-                    // which relates no pair of its own.
-                    const leaf_was_set = self.scratch.mismatch_evidence.leaf != null;
-                    if (!leaf_was_set) {
-                        self.scratch.mismatch_evidence.leaf = framePair(frame);
-                        self.scratch.mismatch_evidence.refused_tag_tails = self.scratch.frame_refused_tag_tails;
-                    }
-                    if (try self.handleTypeMismatch() == .ignored and !leaf_was_set) {
-                        self.scratch.mismatch_evidence.leaf = null;
-                        self.scratch.mismatch_evidence.refused_tag_tails = .{};
-                    }
+        const stack = &self.scratch.unify_work_stack;
+        while (stack.items().len != 0) {
+            const top = stack.items().len - 1;
+            switch (std.meta.activeTag(stack.items()[top])) {
+                inline .mismatch_handler,
+                .root_pair,
+                .guarded_pair,
+                .guard_handler,
+                .restore_enclosing_records,
+                .unify_vars,
+                .merge,
+                .merge_stored,
+                .same_alias_after_args,
+                .shared_fields_after_children,
+                .shared_tags_after_children,
+                => |tag| {
+                    const payload = @field(stack.items()[top], @tagName(tag));
+                    stack.shrinkRetainingCapacity(top);
+                    self.scratch.frame_refused_tag_tails = .{};
+                    self.processFrame(tag, payload) catch |err| switch (err) {
+                        error.ErroneousType => return error.ErroneousType,
+                        error.TypeMismatch => {
+                            // The first failed pair is the leaf: a child mismatch a
+                            // handler flags is raised again by its parent's frame,
+                            // which relates no pair of its own.
+                            const leaf_was_set = self.scratch.mismatch_evidence.leaf != null;
+                            if (!leaf_was_set) {
+                                self.scratch.mismatch_evidence.leaf = framePair(tag, payload);
+                                self.scratch.mismatch_evidence.refused_tag_tails = self.scratch.frame_refused_tag_tails;
+                            }
+                            if (try self.handleTypeMismatch() == .ignored and !leaf_was_set) {
+                                self.scratch.mismatch_evidence.leaf = null;
+                                self.scratch.mismatch_evidence.refused_tag_tails = .{};
+                            }
+                        },
+                        error.OutOfMemory => return error.OutOfMemory,
+                    };
                 },
-                error.OutOfMemory => return error.OutOfMemory,
-            };
+            }
         }
     }
 
-    /// The pair of variables a frame relates, if it relates one.
-    fn framePair(frame: WorkFrame) ?RawTypePair {
-        return switch (frame) {
-            .root_pair => |pair| .{ .expected = pair.a, .actual = pair.b },
-            .guarded_pair => |pair| .{ .expected = pair.a, .actual = pair.b },
-            .unify_vars => |pair| .{ .expected = pair.a, .actual = pair.b },
-            .merge => |merge_frame| .{ .expected = merge_frame.vars.a.var_, .actual = merge_frame.vars.b.var_ },
-            .merge_stored => |merge_frame| .{ .expected = merge_frame.a, .actual = merge_frame.b },
+    /// The pair of variables a `tag` frame relates, if it relates one.
+    fn framePair(comptime tag: WorkFrame.FrameTag, payload: WorkFrame.Payload(tag)) ?RawTypePair {
+        return switch (tag) {
+            .root_pair, .guarded_pair, .unify_vars, .merge_stored => .{ .expected = payload.a, .actual = payload.b },
+            .merge => .{ .expected = payload.vars.a.var_, .actual = payload.vars.b.var_ },
             .mismatch_handler,
             .guard_handler,
             .restore_enclosing_records,
@@ -1021,26 +1035,26 @@ const Unifier = struct {
         };
     }
 
-    fn processFrame(self: *Self, frame: WorkFrame) Error!void {
-        switch (frame) {
+    fn processFrame(self: *Self, comptime tag: WorkFrame.FrameTag, payload: WorkFrame.Payload(tag)) Error!void {
+        switch (tag) {
             .mismatch_handler => {},
-            .root_pair => |pair| try self.processRootPair(pair.a, pair.b, pair.relation),
-            .guarded_pair => |pair| try self.processGuardedPair(pair.a, pair.b),
-            .guard_handler => |handler| {
-                self.truncateVisited(handler.visited_vars_len);
-                self.unresolved_a = handler.saved_unresolved_a;
-                self.unresolved_b = handler.saved_unresolved_b;
+            .root_pair => try self.processRootPair(payload.a, payload.b, payload.relation),
+            .guarded_pair => try self.processGuardedPair(payload.a, payload.b),
+            .guard_handler => {
+                self.truncateVisited(payload.visited_vars_len);
+                self.unresolved_a = payload.saved_unresolved_a;
+                self.unresolved_b = payload.saved_unresolved_b;
             },
-            .restore_enclosing_records => |saved| self.enclosing_records = saved,
-            .unify_vars => |pair| try self.unifyVars(&.{
-                .a = self.types_store.resolvedAtRoot(pair.a, pair.a_desc),
-                .b = self.types_store.resolvedAtRoot(pair.b, pair.b_desc),
+            .restore_enclosing_records => self.enclosing_records = payload,
+            .unify_vars => try self.unifyVars(&.{
+                .a = self.types_store.resolvedAtRoot(payload.a, payload.a_desc),
+                .b = self.types_store.resolvedAtRoot(payload.b, payload.b_desc),
             }),
-            .merge => |merge_frame| try self.merge(&merge_frame.vars, merge_frame.content),
-            .merge_stored => |merge_frame| try self.types_store.unifierUnionStoringContent(merge_frame.a, merge_frame.b, merge_frame.content, merge_frame.rank),
-            .same_alias_after_args => |post| try self.processSameAliasAfterArgs(post),
-            .shared_fields_after_children => |post| try self.processSharedFieldsAfterChildren(post),
-            .shared_tags_after_children => |post| try self.processSharedTagsAfterChildren(post),
+            .merge => try self.merge(&payload.vars, payload.content),
+            .merge_stored => try self.types_store.unifierUnionStoringContent(payload.a, payload.b, payload.content, payload.rank),
+            .same_alias_after_args => try self.processSameAliasAfterArgs(payload),
+            .shared_fields_after_children => try self.processSharedFieldsAfterChildren(payload),
+            .shared_tags_after_children => try self.processSharedTagsAfterChildren(payload),
         }
     }
 
@@ -1116,12 +1130,12 @@ const Unifier = struct {
             }
 
             try self.enterGuardedPair(a_var, b_var);
-            try self.pushWorkFrame(.{ .unify_vars = .{
+            try self.pushWorkFrame(.unify_vars, .{
                 .a = a.var_,
                 .a_desc = a.desc_idx,
                 .b = b.var_,
                 .b_desc = b.desc_idx,
-            } });
+            });
             return;
         }
     }
@@ -1140,11 +1154,11 @@ const Unifier = struct {
         self.unresolved_a = a_var;
         self.unresolved_b = b_var;
 
-        try self.pushWorkFrame(.{ .guard_handler = .{
+        try self.pushWorkFrame(.guard_handler, .{
             .visited_vars_len = visited_vars_len,
             .saved_unresolved_a = saved_unresolved_a,
             .saved_unresolved_b = saved_unresolved_b,
-        } });
+        });
     }
 
     /// What relating a pair comes to when an alias is all that stands
@@ -1217,7 +1231,7 @@ const Unifier = struct {
             return .related;
         }
         try self.enterGuardedPair(a_var, b_var);
-        try self.pushWorkFrame(.{ .merge_stored = merge_after });
+        try self.pushWorkFrame(.merge_stored, merge_after);
         try self.pushMismatchHandler(.ignore);
         return .{ .relate = .{ .a = a_backing_var, .b = b_backing_var } };
     }
@@ -1248,12 +1262,12 @@ const Unifier = struct {
             return true;
         }
         try self.enterGuardedPair(a_var, b_var);
-        try self.pushWorkFrame(.{ .merge_stored = .{
+        try self.pushWorkFrame(.merge_stored, .{
             .a = a.var_,
             .b = b.var_,
             .rank = rank,
             .content = store.rowAt(b.desc_idx),
-        } });
+        });
         try self.scheduleNominalArgs(a_type, b_type, decl_idx);
         return true;
     }
@@ -1377,12 +1391,12 @@ const Unifier = struct {
         const did_arg_error_flag = try self.newMismatchFlag();
         // Rust compiler comment:
         // Don't report real_var mismatches, because they must always be surfaced higher, from the argument types.
-        try self.pushWorkFrame(.{ .same_alias_after_args = .{
+        try self.pushWorkFrame(.same_alias_after_args, .{
             .merge = merge_after,
             .a_backing_var = a_backing_var,
             .b_backing_var = b_backing_var,
             .did_arg_error_flag = did_arg_error_flag,
-        } });
+        });
 
         var i: u32 = a_args_range.len();
         while (i > 0) {
@@ -1481,19 +1495,39 @@ const Unifier = struct {
     const AbsorbedMismatch = enum { ignored, flagged };
 
     fn handleTypeMismatch(self: *Self) Error!AbsorbedMismatch {
-        var frame: WorkFrame = undefined;
-        while (self.popWorkFrame(&frame)) {
-            const frame_tag = std.meta.activeTag(frame);
-            if (frame_tag == .guard_handler) {
-                const handler = frame.guard_handler;
-                self.truncateVisited(handler.visited_vars_len);
-                self.unresolved_a = handler.saved_unresolved_a;
-                self.unresolved_b = handler.saved_unresolved_b;
-            } else if (frame_tag == .restore_enclosing_records) {
-                self.enclosing_records = frame.restore_enclosing_records;
-            } else if (frame_tag == .mismatch_handler) {
-                const handler = frame.mismatch_handler;
-                if (handler != .propagate) return try self.applyMismatchHandling(handler);
+        const stack = &self.scratch.unify_work_stack;
+        while (stack.items().len != 0) {
+            const top = stack.items().len - 1;
+            const frame = &stack.items()[top];
+            switch (std.meta.activeTag(frame.*)) {
+                .guard_handler => {
+                    const handler = frame.guard_handler;
+                    stack.shrinkRetainingCapacity(top);
+                    self.truncateVisited(handler.visited_vars_len);
+                    self.unresolved_a = handler.saved_unresolved_a;
+                    self.unresolved_b = handler.saved_unresolved_b;
+                },
+                .restore_enclosing_records => {
+                    const saved = frame.restore_enclosing_records;
+                    stack.shrinkRetainingCapacity(top);
+                    self.enclosing_records = saved;
+                },
+                .mismatch_handler => {
+                    // Read before the slot is released: applying the handler
+                    // may push frames into it.
+                    const handler = frame.mismatch_handler;
+                    stack.shrinkRetainingCapacity(top);
+                    if (handler != .propagate) return try self.applyMismatchHandling(handler);
+                },
+                .root_pair,
+                .guarded_pair,
+                .unify_vars,
+                .merge,
+                .merge_stored,
+                .same_alias_after_args,
+                .shared_fields_after_children,
+                .shared_tags_after_children,
+                => stack.shrinkRetainingCapacity(top),
             }
         }
 
@@ -2451,7 +2485,7 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        try self.pushWorkFrame(.{ .merge_stored = post.merge });
+        try self.pushWorkFrame(.merge_stored, post.merge);
         try self.scheduleGuardedPair(post.a_backing_var, post.b_backing_var, .ignore);
     }
 
@@ -2571,26 +2605,27 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        const range_start: u32 = @intCast(self.types_store.record_fields.len());
-
+        const merged = &self.scratch.merged_fields;
+        merged.clearRetainingCapacity();
         for (self.scratch.in_both_fields.sliceRange(post.shared_fields_range)) |shared| {
             const next_presence = shared.next_presence orelse
                 base.invariant("type unifier invariant violated: shared record field had no merged presence", .{});
 
-            _ = try self.types_store.appendRecordFields(&[_]RecordField{.{
+            _ = try merged.append(self.scratch.gpa, .{
                 .name = shared.b.name,
                 .presence = next_presence,
-            }});
+            });
         }
 
-        try self.mergeRowAppendedFrom(.record, post.pair, range_start, post.mb_a_extended_fields, post.mb_b_extended_fields, post.ext);
+        try self.mergeRow(.record, post.pair, post.mb_a_extended_fields, post.mb_b_extended_fields, post.ext);
     }
 
-    /// Append the merged row's tags in name order: the shared tags, and when
+    /// Gather the merged row's tags in name order: the shared tags, and when
     /// both sides extend, each side's own tags merged among them. The
     /// partition left each of the three groups in name order.
     fn processSharedTagsAfterChildren(self: *Self, post: SharedTagsAfterChildren) Error!void {
-        const range_start: u32 = @intCast(self.types_store.tags.len());
+        const merged = &self.scratch.merged_tags;
+        merged.clearRetainingCapacity();
         const shared = self.scratch.in_both_tags.sliceRange(post.shared_tags_range);
 
         if (post.both_extended) |extended| {
@@ -2617,24 +2652,24 @@ const Unifier = struct {
                 }
                 switch (group orelse break) {
                     .in_both => {
-                        try self.appendSharedTag(shared[shared_i]);
+                        _ = try merged.append(self.scratch.gpa, sharedTag(shared[shared_i]));
                         shared_i += 1;
                     },
                     .only_in_a => {
-                        _ = try self.types_store.appendTags(only_in_a[a_i..][0..1]);
+                        _ = try merged.append(self.scratch.gpa, only_in_a[a_i]);
                         a_i += 1;
                     },
                     .only_in_b => {
-                        _ = try self.types_store.appendTags(only_in_b[b_i..][0..1]);
+                        _ = try merged.append(self.scratch.gpa, only_in_b[b_i]);
                         b_i += 1;
                     },
                 }
             }
         } else {
-            for (shared) |tags| try self.appendSharedTag(tags);
+            for (shared) |tags| _ = try merged.append(self.scratch.gpa, sharedTag(tags));
         }
 
-        try self.mergeRowAppendedFrom(.tag_union, post.pair, range_start, null, null, post.ext);
+        try self.mergeRow(.tag_union, post.pair, null, null, post.ext);
 
         // The merged row now holds its own entry for each of these tags, and
         // the part that held it before keeps its own.
@@ -2645,16 +2680,16 @@ const Unifier = struct {
         }
     }
 
-    /// Append the merged tag for a tag both rows hold.
-    fn appendSharedTag(self: *Self, tags: TwoTags) std.mem.Allocator.Error!void {
+    /// The merged tag for a tag both rows hold.
+    fn sharedTag(tags: TwoTags) Tag {
         // A tag both rows hold is pattern-only exactly when both rows hold it
         // only because match patterns asked for it (design.md "Pattern-Only
         // Tags").
-        _ = try self.types_store.appendTags(&[_]Tag{.{
+        return .{
             .name = tags.b.name,
             .args = tags.b.args,
             .pattern_only = tags.a.pattern_only and tags.b.pattern_only,
-        }});
+        };
     }
 
     /// Note every pattern-only tag among `tags`, which `part` holds, as one
@@ -2666,29 +2701,65 @@ const Unifier = struct {
         }
     }
 
-    /// Append each side's unshared entries after the shared entries already
-    /// appended from `range_start`, then merge the row built from all of them.
-    fn mergeRowAppendedFrom(
+    /// Add each side's unshared entries after the merged entries gathered in
+    /// the kind's `merged_` scratch list, then merge the pair into the row of
+    /// all of them over `ext`.
+    fn mergeRow(
         self: *Self,
         comptime kind: RowKind,
         pair: MergePair,
-        range_start: u32,
         mb_a_extended: ?kind.Entry().SafeList.Range,
         mb_b_extended: ?kind.Entry().SafeList.Range,
         ext: Var,
     ) std.mem.Allocator.Error!void {
+        const merged = self.scratch.rowList(kind, "merged_");
         if (mb_a_extended) |extended| {
-            _ = try kind.appendToStore(self.types_store, self.scratch.rowList(kind, "only_in_a_").sliceRange(extended));
+            _ = try merged.appendSlice(self.scratch.gpa, self.scratch.rowList(kind, "only_in_a_").sliceRange(extended));
         }
         if (mb_b_extended) |extended| {
-            _ = try kind.appendToStore(self.types_store, self.scratch.rowList(kind, "only_in_b_").sliceRange(extended));
+            _ = try merged.appendSlice(self.scratch.gpa, self.scratch.rowList(kind, "only_in_b_").sliceRange(extended));
         }
 
-        const appended = kind.row(kind.storeEntries(self.types_store).rangeToEnd(range_start), ext);
+        const row_ = kind.row(try self.storedRowEntries(kind, pair, merged.items()), ext);
         try self.types_store.unifierUnion(pair.a, pair.b, .{
-            .content = kind.content(try self.rowForMerge(kind, pair, appended)),
+            .content = kind.content(try self.rowForMerge(kind, pair, row_)),
             .rank = pair.rank,
         });
+    }
+
+    /// A range of the store's entries holding exactly `entries`, in order.
+    /// When the own row of either side of `pair` holds them already, that is
+    /// its range: the store never rewrites an entry it holds, so a range is
+    /// interchangeable with any other holding the same entries, and the
+    /// side's row stays readable through the merged class as well. Otherwise
+    /// `entries` are appended.
+    fn storedRowEntries(
+        self: *Self,
+        comptime kind: RowKind,
+        pair: MergePair,
+        entries: []const kind.Entry(),
+    ) std.mem.Allocator.Error!kind.Entry().SafeMultiList.Range {
+        for ([_]Var{ pair.b, pair.a }) |side| {
+            const own = switch (self.types_store.resolveVar(side).desc.content) {
+                .structure => |flat_type| kind.rowOf(flat_type) orelse continue,
+                .flex, .rigid, .alias, .field_presence, .err => continue,
+            };
+            const own_entries = kind.entriesOf(own);
+            if (self.storeEntriesEql(kind, own_entries, entries)) return own_entries;
+        }
+        return try kind.appendToStore(self.types_store, entries);
+    }
+
+    /// Whether the store's entries in `range` are `entries`, in order.
+    fn storeEntriesEql(self: *Self, comptime kind: RowKind, range: kind.Entry().SafeMultiList.Range, entries: []const kind.Entry()) bool {
+        if (range.len() != entries.len) return false;
+        if (entries.len == 0) return true;
+        const stored = kind.storeEntries(self.types_store);
+        for (entries, 0..) |entry, offset| {
+            const stored_entry = stored.get(@fromBackingInt(@backingInt(range.start) + @as(u32, @intCast(offset))));
+            if (!std.meta.eql(stored_entry, entry)) return false;
+        }
+        return true;
     }
 
     /// A fresh row holding `entries` over `ext`.
@@ -2950,9 +3021,7 @@ const Unifier = struct {
             .expected => .{ .expected = opened_backing, .actual = anonymous_var },
             .actual => .{ .expected = anonymous_var, .actual = opened_backing },
         };
-        try self.pushWorkFrame(
-            .{ .mismatch_handler = .{ .record_then_propagate = evidence } },
-        );
+        try self.pushWorkFrame(.mismatch_handler, .{ .record_then_propagate = evidence });
     }
 
     /// unify func
@@ -3560,9 +3629,7 @@ const Unifier = struct {
     fn enterRecordRelation(self: *Self, vars: *const ResolvedVarDescs) std.mem.Allocator.Error!void {
         // Pushed before any child work so it pops once that work has drained;
         // a plain `defer` would restore while the children are still queued.
-        try self.pushWorkFrame(
-            .{ .restore_enclosing_records = self.enclosing_records },
-        );
+        try self.pushWorkFrame(.restore_enclosing_records, self.enclosing_records);
         self.enclosing_records = .{ vars.a.var_, vars.b.var_ };
     }
 
@@ -3655,6 +3722,13 @@ const Unifier = struct {
         defer trace.end();
 
         try self.enterRecordRelation(vars);
+
+        if (self.member_tail != null) {
+            const a: types_mod.Record = .{ .fields = a_fields, .ext = a_ext };
+            const b: types_mod.Record = .{ .fields = b_fields, .ext = b_ext };
+            if (try self.relateMember(.record, vars, a, b)) return;
+            if (try self.growMemberRow(.record, vars, a, b)) return;
+        }
 
         // Every relation drains its chain duplicates before returning, so the
         // ones gathered here split exactly into `a`'s and then `b`'s.
@@ -3775,8 +3849,238 @@ const Unifier = struct {
 
     const RowExtension = enum { exactly_the_same, a_extends_b, b_extends_a, both_extend };
 
+    /// A member demand's tail is existential. When the member already exists
+    /// in a single row part, relate its payload and keep the receiver's row;
+    /// no use names the remainder of that row.
+    fn relateMember(self: *Self, comptime kind: RowKind, vars: *const ResolvedVarDescs, a: kind.Row(), b: kind.Row()) Error!bool {
+        const private = self.member_tail orelse return false;
+        const demand_a = a.ext == private;
+        if (!demand_a and b.ext != private) return false;
+        const demand = if (demand_a) a else b;
+        const receiver = if (demand_a) b else a;
+        if (receiver.ext == private or kind.entriesOf(demand).count != 1) return false;
+        const store = self.types_store;
+        if (store.resolveVarWord(private).word.kind != .flex) return false;
+        // Chained parts need duplicate normalization. A nominal opening is
+        // not the receiver itself and requires the ordinary nominal merge.
+        const tail = store.resolveVarWord(receiver.ext).word.kind;
+        if (tail != .flex and tail != .rigid and !(if (kind == .record) tail == .empty_record else tail == .empty_tag_union)) return false;
+        const receiver_var = if (demand_a) vars.b else vars.a;
+        if (receiver_var.desc.content != .structure or kind.rowOf(receiver_var.desc.content.structure) == null) return false;
+        // Moving a younger row under an older parent must lower the other
+        // entries too (`freshParent`); that relation is not just a lookup.
+        if (Rank.min(vars.a.desc.rank, vars.b.desc.rank) != receiver_var.desc.rank) return false;
+
+        const entries = kind.storeEntries(store);
+        const wanted = entries.sliceRange(kind.entriesOf(demand)).get(0);
+        const range = kind.entriesOf(receiver);
+        // Equal singleton rows also relate their tails to one another.
+        if (range.count <= 1) return false;
+        const run = entries.sliceRange(range);
+        const index = if (kind == .tag_union)
+            Tag.findName(self.ident_store, run.items(.name), wanted.name)
+        else
+            try self.scratch.recordMemberIndex(store, range, wanted.name);
+        if (!try self.bindMember(kind, vars, demand_a, wanted, run.get(index orelse return false))) return false;
+        if (kind == .tag_union) try store.unifierRequireTagRow(receiver.ext);
+        return true;
+    }
+
+    /// Relate a demanded member to the receiver's entry of the same name and
+    /// keep the receiver's row, when relating them only binds the payload.
+    fn bindMember(self: *Self, comptime kind: RowKind, vars: *const ResolvedVarDescs, demand_a: bool, wanted: kind.Entry(), found: kind.Entry()) Error!bool {
+        const store = self.types_store;
+        if (kind == .record) {
+            if (wanted.presence.decode() != .required or found.presence.decode() != .required) return false;
+            if (!self.memberBinding(wanted.presence.typeVar(), found.presence.typeVar())) return false;
+        } else {
+            if (!wanted.pattern_only and found.pattern_only) return false;
+            if (wanted.args.count != found.args.count) return false;
+            for (store.sliceVars(wanted.args), store.sliceVars(found.args)) |binder, payload| {
+                if (!self.memberBinding(binder, payload)) return false;
+            }
+        }
+        self.member_tail = null;
+        try self.scheduleStoredMerge(vars, if (demand_a) .b else .a);
+        if (kind == .record) {
+            const av = if (demand_a) wanted.presence.typeVar() else found.presence.typeVar();
+            const bv = if (demand_a) found.presence.typeVar() else wanted.presence.typeVar();
+            try self.scheduleGuardedPair(av, bv, .propagate);
+        } else {
+            const ax = if (demand_a) wanted.args else found.args;
+            const bx = if (demand_a) found.args else wanted.args;
+            var i = ax.count;
+            while (i != 0) {
+                i -= 1;
+                try self.scheduleGuardedPair(store.getVarAt(ax, i), store.getVarAt(bx, i), .propagate);
+            }
+        }
+        return true;
+    }
+
+    // Only skip the residual when the payload relation keeps one shared
+    // class. Two aliases, for example, can relate through their backings
+    // without themselves merging. Keep the ordinary mismatch evidence and
+    // operand selection for such relations.
+    fn memberBinding(self: *Self, binder: Var, payload: Var) bool {
+        const a = self.types_store.resolveVarWord(binder);
+        const b = self.types_store.resolveVarWord(payload);
+        return a.desc_idx == b.desc_idx or (self.isPlainFlex(a) and !a.word.requiresTagRow() and
+            !a.word.flags().frozen and !b.word.flags().frozen and self.storedContentMerge(a, b) != null);
+    }
+
     fn GatheredRow(comptime kind: RowKind) type {
         return struct { ext: Var, range: kind.Entry().SafeList.Range };
+    }
+
+    /// Relate a member demand to an inferred row that grows by one member
+    /// per demand. A member the row lacks is added at every older reference
+    /// to its open tail; coalescing equal-sized disjoint runs gives
+    /// logarithmic chain depth without copying the whole row on each
+    /// demand. A member one of the runs holds binds to that entry.
+    fn growMemberRow(self: *Self, comptime kind: RowKind, vars: *const ResolvedVarDescs, a: kind.Row(), b: kind.Row()) Error!bool {
+        const private = self.member_tail orelse return false;
+        const demand_a = a.ext == private;
+        if (!demand_a and b.ext != private) return false;
+        const demand = if (demand_a) a else b;
+        const owner = if (demand_a) vars.b else vars.a;
+        const rank = owner.desc.rank;
+        const store = self.types_store;
+        if (store.probeOpen() or kind.entriesOf(demand).count != 1 or vars.a.desc.rank != vars.b.desc.rank or
+            rowOfContent(kind, owner.desc.content) == null or vars.a.desc.flags.frozen or vars.b.desc.flags.frozen) return false;
+        const wanted = kind.storeEntries(store).sliceRange(kind.entriesOf(demand)).get(0);
+        const tail_word = store.resolveVarWord(private);
+        if (!self.isPlainFlex(tail_word) or tail_word.word.rank != rank or tail_word.word.flags().frozen) return false;
+
+        // Only the ranges, not roots or descriptors, certify disjointness.
+        // Ranges are immutable. A changed chain needs general normalization.
+        var part = owner;
+        var row = if (demand_a) b else a;
+        const first = kind.entriesOf(row);
+        const starting = store.resolveVarWord(row.ext).word.kind == .flex;
+        const growing = self.scratch.rowList(kind, "growing_");
+        const only_first = [1]kind.Entry().SafeMultiList.Range{first};
+        const runs: []const kind.Entry().SafeMultiList.Range = if (starting) &only_first else if (growing.getPtr(first)) |known| known.items else return false;
+        const path = self.scratch.rowList(kind, "growth_path_");
+        path.clearRetainingCapacity();
+        var found: ?kind.Entry() = null;
+        while (true) {
+            const depth = path.items.len;
+            const range = kind.entriesOf(row);
+            if (depth >= runs.len or !std.meta.eql(range, runs[depth])) return false;
+            if (part.desc.rank != rank or part.desc.flags.frozen or part.desc.flags.bounded_row_ext or part.desc.flags.nominal_backing_structure) return false;
+            if (found == null) {
+                const run = kind.storeEntries(store).sliceRange(range);
+                const index = if (kind == .tag_union)
+                    Tag.findName(self.ident_store, run.items(.name), wanted.name)
+                else
+                    try self.scratch.recordMemberIndex(store, range, wanted.name);
+                if (index) |at| found = run.get(at);
+            }
+            try path.append(self.scratch.gpa, .{ .part = part.var_, .entries = range });
+            part = store.resolveVar(row.ext);
+            row = rowOfContent(kind, part.desc.content) orelse break;
+        }
+        if (path.items.len != runs.len) return false;
+        const end = store.resolveVarWord(part.var_);
+        if (!self.isPlainFlex(end) or end.word.rank != rank or end.word.flags().frozen or end.desc_idx == tail_word.desc_idx) return false;
+        if (end.word.flags().deferred_callable or tail_word.word.flags().deferred_callable) return false;
+
+        // A single run is `relateMember`'s to bind.
+        if (found) |entry| return !starting and try self.bindMember(kind, vars, demand_a, wanted, entry);
+
+        if (kind == .tag_union) {
+            if (!wanted.pattern_only) return false;
+            for (store.sliceVars(wanted.args)) |arg| if (!self.isFreshPayload(arg)) return false;
+        } else {
+            if (wanted.presence.decode() != .required or !self.isFreshPayload(wanted.presence.typeVar())) return false;
+        }
+
+        // The old tail really gains the member, even when another value
+        // names that tail. The demand's private tail becomes its new open end.
+        if (kind == .tag_union) try store.unifierRequireTagRow(private);
+        if (starting) {
+            var i: u32 = 0;
+            while (i < first.count) : (i += 1) {
+                const entry = kind.storeEntries(store).sliceRange(first).get(i);
+                if (kind == .tag_union) {
+                    for (store.sliceVars(entry.args)) |arg| try self.lowerRankTo(arg, rank);
+                } else {
+                    try self.lowerRankTo(entry.presence.typeVar(), rank);
+                    if (entry.presence.presenceVar()) |presence_var| try self.lowerRankTo(presence_var, rank);
+                }
+            }
+        }
+        const singleton = try self.freshParent(vars, kind.content(demand));
+        try store.unifierUnionKeepingContent(part.var_, singleton, .b, rank);
+        var combined = kind.entriesOf(demand);
+        var fuse_from = path.items.len;
+        while (fuse_from != 0) {
+            const prev = path.items[fuse_from - 1];
+            if (prev.entries.count != combined.count) break;
+            fuse_from -= 1;
+            combined = try self.mergeDisjointRuns(kind, prev.entries, combined);
+        }
+        if (fuse_from != path.items.len) {
+            const fuse_at = path.items[fuse_from].part;
+            if (kind == .tag_union) {
+                // A mark in a suffix and its copy in the fused part remain one
+                // diagnostic fact if a producer later meets just one of them.
+                try store.pattern_only_tag_copies.append(store.gpa, .{ .part = part.var_, .root = fuse_at, .name = wanted.name });
+                for (path.items[fuse_from + 1 ..]) |absorbed| {
+                    const tags = store.getTagsSlice(absorbed.entries);
+                    for (tags.items(.name), tags.items(.pattern_only)) |name, marked| {
+                        if (marked) try store.pattern_only_tag_copies.append(store.gpa, .{ .part = absorbed.part, .root = fuse_at, .name = name });
+                    }
+                }
+            }
+            try store.unifierSetVarContent(fuse_at, kind.content(kind.row(combined, private)));
+        }
+        // The row is remembered by its first run.
+        {
+            var remembered: std.ArrayList(kind.Entry().SafeMultiList.Range) = if (growing.fetchRemove(first)) |known| known.value else .empty;
+            errdefer remembered.deinit(self.scratch.gpa);
+            remembered.clearRetainingCapacity();
+            try remembered.ensureTotalCapacity(self.scratch.gpa, fuse_from + 1);
+            for (path.items[0..fuse_from]) |keep| remembered.appendAssumeCapacity(keep.entries);
+            remembered.appendAssumeCapacity(combined);
+            try growing.put(self.scratch.gpa, remembered.items[0], remembered);
+        }
+        self.member_tail = null;
+        try store.unifierUnionKeepingContent(vars.a.var_, vars.b.var_, if (demand_a) .b else .a, rank);
+        return true;
+    }
+
+    fn rowOfContent(comptime kind: RowKind, content: Content) ?kind.Row() {
+        return switch (content) {
+            .structure => |flat_type| kind.rowOf(flat_type),
+            .flex, .rigid, .alias, .field_presence, .err => null,
+        };
+    }
+
+    /// Whether a demanded member's payload variable states nothing yet, so
+    /// adding the member to a row relates the variable to nothing.
+    fn isFreshPayload(self: *const Self, payload: Var) bool {
+        const word = self.types_store.resolveVarWord(payload);
+        return self.isPlainFlex(word) and !word.word.flags().frozen and !word.word.requiresTagRow();
+    }
+
+    /// One stored run holding the members of two runs that share no name. Tag
+    /// runs stay in name order.
+    fn mergeDisjointRuns(self: *Self, comptime kind: RowKind, left: kind.Entry().SafeMultiList.Range, right: kind.Entry().SafeMultiList.Range) Error!kind.Entry().SafeMultiList.Range {
+        const store = self.types_store;
+        const entries = kind.storeEntries(store);
+        const start: u32 = @intCast(entries.len());
+        var i: u32 = 0;
+        var j: u32 = 0;
+        while (i < left.count or j < right.count) {
+            const take_left = j == right.count or (i < left.count and
+                (kind == .record or Tag.orderByName(self.ident_store, store.getTagAt(left, i), store.getTagAt(right, j)) == .lt));
+            const entry = if (take_left) entries.sliceRange(left).get(i) else entries.sliceRange(right).get(j);
+            _ = try kind.appendToStore(store, &.{entry});
+            if (take_left) i += 1 else j += 1;
+        }
+        return entries.rangeToEnd(start);
     }
     /// A field repeated along one row's extension chain is the same field:
     /// its value types and kinds are equal exactly (design.md "Row Union
@@ -4146,14 +4450,14 @@ const Unifier = struct {
         defer trace.end();
 
         const did_field_error_flag = try self.newMismatchFlag();
-        try self.pushWorkFrame(.{ .shared_fields_after_children = .{
+        try self.pushWorkFrame(.shared_fields_after_children, .{
             .pair = .of(vars),
             .shared_fields_range = shared_fields_range,
             .mb_a_extended_fields = mb_a_extended_fields,
             .mb_b_extended_fields = mb_b_extended_fields,
             .ext = ext,
             .did_field_error_flag = did_field_error_flag,
-        } });
+        });
 
         var i: u32 = shared_fields_range.len();
         while (i > 0) {
@@ -4311,6 +4615,11 @@ const Unifier = struct {
     ) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
+
+        if (self.member_tail != null) {
+            if (try self.relateMember(.tag_union, vars, a_tag_union, b_tag_union)) return;
+            if (try self.growMemberRow(.tag_union, vars, a_tag_union, b_tag_union)) return;
+        }
 
         // Every relation drains its chain duplicates before returning, so the
         // ones gathered here split exactly into `a`'s and then `b`'s.
@@ -4494,14 +4803,14 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        try self.pushWorkFrame(.{ .shared_tags_after_children = .{
+        try self.pushWorkFrame(.shared_tags_after_children, .{
             .pair = pair,
             .shared_tags_range = shared_tags_range,
             .both_extended = both_extended,
             .ext = ext,
             .marked_copies_start = marked_copies_start,
             .marked_copies_end = @intCast(self.scratch.marked_tag_copies.items.len),
-        } });
+        });
 
         var shared_idx: u32 = shared_tags_range.len();
         while (shared_idx > 0) {
@@ -4540,6 +4849,13 @@ const Unifier = struct {
             return b_constraints;
         } else if (a_len > 0 and b_len == 0) {
             return a_constraints;
+        }
+
+        {
+            const a_longer = a_len >= b_len;
+            const longer = if (a_longer) a_constraints else b_constraints;
+            const shorter = if (a_longer) b_constraints else a_constraints;
+            if (try self.appendConstraintsInOrder(longer, shorter)) |joined| return joined;
         }
 
         // Partition constraints
@@ -4592,6 +4908,97 @@ const Unifier = struct {
         }
 
         return self.types_store.static_dispatch_constraints.rangeToEnd(top);
+    }
+
+    /// Join `shorter`'s requirements to the end of `longer`, a long list in
+    /// evidence order, when every one of them belongs there: none is a
+    /// literal's conversion, each is named like the requirement before it or
+    /// later than it, and none joins a group holding a literal's conversion.
+    /// The partition would keep both lists whole and append one to the
+    /// other; this reads `shorter` and what is remembered of `longer`
+    /// (`ConstraintListSummary`) and never the rest of `longer`. Null leaves
+    /// the relation to the partition.
+    fn appendConstraintsInOrder(
+        self: *Self,
+        longer: StaticDispatchConstraint.SafeList.Range,
+        shorter: StaticDispatchConstraint.SafeList.Range,
+    ) Error!?StaticDispatchConstraint.SafeList.Range {
+        const store = self.types_store;
+        if (longer.len() < min_summarized_constraints or store.probeOpen()) return null;
+        {
+            const list = store.static_dispatch_constraints.sliceRange(longer);
+            var last_name = list[list.len - 1].fn_name;
+            for (store.static_dispatch_constraints.sliceRange(shorter)) |joining| {
+                if (isFixedLiteralOrigin(joining.origin)) return null;
+                if (joining.fn_name.eql(last_name)) continue;
+                if (!Ident.textLessThan(self.getTypeIdentText(last_name), self.getTypeIdentText(joining.fn_name))) return null;
+                last_name = joining.fn_name;
+            }
+        }
+        if (builtin.is_test) self.scratch.test_constraint_reads += shorter.len();
+        const summary = try self.constraintListSummary(longer) orelse return null;
+
+        // The partition holds a group both lists share to one arity and one
+        // known effect mode. A group only one list holds is not compared
+        // until the other gains a requirement of its name.
+        var group = summary.last_group;
+        var shared = true;
+        const top: usize = @intCast(self.scratch.only_in_b_static_dispatch_constraints.len());
+        defer self.scratch.only_in_b_static_dispatch_constraints.shrinkRetainingCapacity(top);
+        for (0..shorter.len()) |index| {
+            const joining = store.static_dispatch_constraints.sliceRange(shorter)[index];
+            if (!joining.fn_name.eql(group.name)) {
+                group = .{ .name = joining.fn_name };
+                shared = false;
+            } else if (group.has_literal) return null;
+            const agrees = group.note(self.staticDispatchCallableHead(joining));
+            if (shared) {
+                if (!agrees) return error.TypeMismatch;
+            } else if (!agrees) {
+                group.conflict = true;
+            }
+            _ = try self.scratch.only_in_b_static_dispatch_constraints.append(self.scratch.gpa, joining);
+        }
+
+        const joined = try store.unifierAppendStaticDispatchConstraintsAfter(
+            longer,
+            self.scratch.only_in_b_static_dispatch_constraints.items()[top..],
+        );
+        _ = self.scratch.constraint_list_summaries.remove(@backingInt(longer.start));
+        try self.scratch.constraint_list_summaries.put(self.scratch.gpa, @backingInt(joined.start), .{
+            .count = joined.len(),
+            .last_group = group,
+        });
+        return joined;
+    }
+
+    /// What is remembered of `range`, a requirement list in evidence order,
+    /// reading the list only when nothing is. Null when the list is not in
+    /// evidence order.
+    fn constraintListSummary(
+        self: *Self,
+        range: StaticDispatchConstraint.SafeList.Range,
+    ) std.mem.Allocator.Error!?ConstraintListSummary {
+        if (self.scratch.constraint_list_summaries.get(@backingInt(range.start))) |known| {
+            if (known.count == range.len()) return known;
+        }
+        const list = self.types_store.static_dispatch_constraints.sliceRange(range);
+        if (builtin.is_test) self.scratch.test_constraint_reads += list.len;
+        for (list[0 .. list.len - 1], list[1..]) |before, after| {
+            if (before.fn_name.eql(after.fn_name)) {
+                if (isFixedLiteralOrigin(after.origin) and !isFixedLiteralOrigin(before.origin)) return null;
+            } else if (!Ident.textLessThan(self.getTypeIdentText(before.fn_name), self.getTypeIdentText(after.fn_name))) return null;
+        }
+        var group: ConstraintGroupSummary = .{ .name = list[list.len - 1].fn_name };
+        var index = list.len;
+        while (index > 0 and list[index - 1].fn_name.eql(group.name)) {
+            index -= 1;
+            if (isFixedLiteralOrigin(list[index].origin)) group.has_literal = true;
+            if (!group.note(self.staticDispatchCallableHead(list[index]))) group.conflict = true;
+        }
+        const summary: ConstraintListSummary = .{ .count = range.len(), .last_group = group };
+        try self.scratch.constraint_list_summaries.put(self.scratch.gpa, @backingInt(range.start), summary);
+        return summary;
     }
 
     /// Whether a partition kept every constraint of `range`, unchanged and in
@@ -4712,6 +5119,7 @@ const Unifier = struct {
 
         const a_constraints = self.types_store.static_dispatch_constraints.sliceRange(a_constraints_range);
         const b_constraints = self.types_store.static_dispatch_constraints.sliceRange(b_constraints_range);
+        if (builtin.is_test) scratch.test_constraint_reads += a_constraints.len + b_constraints.len;
 
         // Get the start of index of the new range
         const a_constraints_start: u32 = @intCast(scratch.only_in_a_static_dispatch_constraints.len());
@@ -5229,6 +5637,12 @@ const WorkFrame = union(enum) {
     shared_tags_after_children: SharedTagsAfterChildren,
 
     pub const SafeList = MkSafeList(@This());
+
+    const FrameTag = std.meta.Tag(WorkFrame);
+
+    fn Payload(comptime tag: FrameTag) type {
+        return @FieldType(WorkFrame, @tagName(tag));
+    }
 };
 
 /// Public helper function for tests
@@ -5361,6 +5775,57 @@ const RowKind = enum {
     }
 };
 
+/// The disjoint runs of each row `growMemberRow` is growing, in chain order
+/// and keyed by the first.
+fn GrowingRows(comptime kind: RowKind) type {
+    const Range = kind.Entry().SafeMultiList.Range;
+    return std.AutoHashMapUnmanaged(Range, std.ArrayList(Range));
+}
+
+/// The parts of one row's extension chain and the entries each holds.
+fn GrowthPath(comptime kind: RowKind) type {
+    return std.ArrayList(struct { part: Var, entries: kind.Entry().SafeMultiList.Range });
+}
+
+/// The shortest requirement list `appendConstraintsInOrder` remembers.
+const min_summarized_constraints = 16;
+
+/// What the unifier remembers of a requirement list in evidence order, by
+/// the list's start in the store: how many requirements it summarized, and
+/// the last same-name group, the only one a requirement can join at the end.
+const ConstraintListSummary = struct {
+    count: u32,
+    last_group: ConstraintGroupSummary,
+};
+
+/// One same-name group of a requirement list.
+const ConstraintGroupSummary = struct {
+    name: Ident.Idx,
+    /// Whether the group holds a literal's conversion.
+    has_literal: bool = false,
+    /// The arity and effect mode of the group's callables whose heads were
+    /// known when they were noted.
+    arity: ?u32 = null,
+    effectful: ?bool = null,
+    /// Whether two of those heads disagreed.
+    conflict: bool = false,
+
+    /// Note a member's callable head. False when it disagrees with the heads
+    /// already noted, or two of those disagreed.
+    fn note(self: *ConstraintGroupSummary, mb_head: ?Unifier.StaticDispatchCallableHead) bool {
+        if (self.conflict) return false;
+        const head = mb_head orelse return true;
+        if (self.arity) |arity| {
+            if (arity != head.arity) return false;
+        } else self.arity = head.arity;
+        const effectful = head.effectful orelse return true;
+        if (self.effectful) |known| {
+            if (known != effectful) return false;
+        } else self.effectful = effectful;
+        return true;
+    }
+};
+
 /// An entry that reappears further along its row's extension chain.
 fn ChainDuplicate(comptime kind: RowKind) type {
     return struct {
@@ -5450,10 +5915,17 @@ pub const Scratch = struct {
     frame_refused_tag_tails: RefusedTagTails,
 
     // records - used internal by unification
+    member_indices: std.AutoHashMapUnmanaged(RecordField.SafeMultiList.Range, collections.DenseMapUnmanaged(u29, u32)) = .empty,
+    growing_fields: GrowingRows(.record) = .empty,
+    growing_tags: GrowingRows(.tag_union) = .empty,
+    growth_path_fields: GrowthPath(.record) = .empty,
+    growth_path_tags: GrowthPath(.tag_union) = .empty,
     gathered_fields: RecordFieldSafeList,
     only_in_a_fields: RecordFieldSafeList,
     only_in_b_fields: RecordFieldSafeList,
     in_both_fields: TwoRecordFieldsSafeList,
+    /// The merged row a record relation builds before storing it.
+    merged_fields: RecordFieldSafeList,
     /// Successful width-absorption facts consumed by the checker before the
     /// next unification call resets this scratch store.
     absorbed_record_defaults: AbsorbedRecordDefault.SafeList,
@@ -5482,6 +5954,8 @@ pub const Scratch = struct {
     only_in_a_tags: TagSafeList,
     only_in_b_tags: TagSafeList,
     in_both_tags: TwoTagsSafeList,
+    /// The merged row a tag-union relation builds before storing it.
+    merged_tags: TagSafeList,
 
     // constraints
     deferred_constraints: DeferredConstraintCheck.SafeList,
@@ -5490,6 +5964,9 @@ pub const Scratch = struct {
     /// the literal would have been deferred on. The literal can now be
     /// decided.
     determined_literals: VarSafeList,
+    constraint_list_summaries: std.AutoHashMapUnmanaged(u32, ConstraintListSummary) = .empty,
+    /// How many requirements relating two requirement lists read.
+    test_constraint_reads: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
     only_in_a_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
     only_in_b_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
     in_both_static_dispatch_constraints: TwoStaticDispatchConstraints.SafeList,
@@ -5510,7 +5987,7 @@ pub const Scratch = struct {
 
     // Reusable formal->actual substitution map for the nominal-vs-structural
     // lift's declaration-backed opening operation.
-    open_var_map: collections.DenseMap(types_mod.Var, types_mod.Var),
+    open_var_map: collections.EpochMap(types_mod.Var, types_mod.Var),
 
     // Memo of declaration openings performed during the CURRENT unify call:
     // one instantiated backing per (declaration, resolved arg roots). Without
@@ -5658,6 +6135,7 @@ pub const Scratch = struct {
             .only_in_a_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
             .only_in_b_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
             .in_both_fields = try TwoRecordFieldsSafeList.initCapacity(gpa, 32),
+            .merged_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
             .absorbed_record_defaults = try AbsorbedRecordDefault.SafeList.initCapacity(gpa, 4),
             .gathered_tags = try TagSafeList.initCapacity(gpa, 32),
             .bounded_row_violation = null,
@@ -5666,6 +6144,7 @@ pub const Scratch = struct {
             .only_in_a_tags = try TagSafeList.initCapacity(gpa, 32),
             .only_in_b_tags = try TagSafeList.initCapacity(gpa, 32),
             .in_both_tags = try TwoTagsSafeList.initCapacity(gpa, 32),
+            .merged_tags = try TagSafeList.initCapacity(gpa, 32),
             .deferred_constraints = try DeferredConstraintCheck.SafeList.initCapacity(gpa, 32),
             .only_in_a_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
             .only_in_b_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
@@ -5674,7 +6153,7 @@ pub const Scratch = struct {
             .b_static_dispatch_constraint_indices = try MkSafeList(u32).initCapacity(gpa, 32),
             .occurs_scratch = try occurs.Scratch.init(gpa),
             .visited_vars = try VarSafeList.initCapacity(gpa, 16),
-            .open_var_map = collections.DenseMap(types_mod.Var, types_mod.Var).init(gpa),
+            .open_var_map = collections.EpochMap(types_mod.Var, types_mod.Var).init(gpa),
             .opened_nominals = .empty,
             .opened_nominal_persistable = .empty,
             .chain_duplicate_fields = .empty,
@@ -5690,6 +6169,16 @@ pub const Scratch = struct {
 
     /// Deinit scratch
     pub fn deinit(self: *Self) void {
+        var indices = self.member_indices.valueIterator();
+        while (indices.next()) |index| index.deinit(self.gpa);
+        self.member_indices.deinit(self.gpa);
+        inline for (.{ &self.growing_fields, &self.growing_tags }) |growing| {
+            var runs = growing.valueIterator();
+            while (runs.next()) |list| list.deinit(self.gpa);
+            growing.deinit(self.gpa);
+        }
+        self.growth_path_fields.deinit(self.gpa);
+        self.growth_path_tags.deinit(self.gpa);
         self.fresh_vars.deinit(self.gpa);
         self.determined_literals.deinit(self.gpa);
         self.effect_dependency_seen.deinit();
@@ -5697,15 +6186,18 @@ pub const Scratch = struct {
         self.pure_demands.deinit(self.gpa);
         self.unify_work_stack.deinit(self.gpa);
         self.mismatch_flags.deinit(self.gpa);
+        self.constraint_list_summaries.deinit(self.gpa);
         self.gathered_fields.deinit(self.gpa);
         self.only_in_a_fields.deinit(self.gpa);
         self.only_in_b_fields.deinit(self.gpa);
         self.in_both_fields.deinit(self.gpa);
+        self.merged_fields.deinit(self.gpa);
         self.absorbed_record_defaults.deinit(self.gpa);
         self.gathered_tags.deinit(self.gpa);
         self.only_in_a_tags.deinit(self.gpa);
         self.only_in_b_tags.deinit(self.gpa);
         self.in_both_tags.deinit(self.gpa);
+        self.merged_tags.deinit(self.gpa);
         self.deferred_constraints.deinit(self.gpa);
         self.only_in_a_static_dispatch_constraints.deinit(self.gpa);
         self.only_in_b_static_dispatch_constraints.deinit(self.gpa);
@@ -5744,6 +6236,7 @@ pub const Scratch = struct {
         self.only_in_a_fields.clearRetainingCapacity();
         self.only_in_b_fields.clearRetainingCapacity();
         self.in_both_fields.clearRetainingCapacity();
+        self.merged_fields.clearRetainingCapacity();
         self.absorbed_record_defaults.clearRetainingCapacity();
         self.gathered_tags.clearRetainingCapacity();
         self.bounded_row_violation = null;
@@ -5752,6 +6245,7 @@ pub const Scratch = struct {
         self.only_in_a_tags.clearRetainingCapacity();
         self.only_in_b_tags.clearRetainingCapacity();
         self.in_both_tags.clearRetainingCapacity();
+        self.merged_tags.clearRetainingCapacity();
         self.deferred_constraints.clearRetainingCapacity();
         self.determined_literals.clearRetainingCapacity();
         self.only_in_a_static_dispatch_constraints.clearRetainingCapacity();
@@ -5776,6 +6270,25 @@ pub const Scratch = struct {
     }
 
     // helpers //
+
+    /// Names and offsets in a stored range never change while checking. Do
+    /// not remember ranges appended in probes, whose offsets can be reused.
+    fn recordMemberIndex(self: *Self, store: *types_mod.Store, range: RecordField.SafeMultiList.Range, name: Ident.Idx) std.mem.Allocator.Error!?usize {
+        const names = store.getRecordFieldsSlice(range).items(.name);
+        if (names.len <= 8 or store.probeOpen()) {
+            for (names, 0..) |n, i| if (n.eql(name)) return i;
+            return null;
+        }
+        const slot = try self.member_indices.getOrPut(self.gpa, range);
+        if (!slot.found_existing) {
+            slot.value_ptr.* = .empty;
+            for (names, 0..) |n, i| {
+                const place = try slot.value_ptr.getOrPut(self.gpa, n.idx);
+                if (!place.found_existing) place.value_ptr.* = @intCast(i);
+            }
+        }
+        return @as(usize, slot.value_ptr.get(name.idx) orelse return null);
+    }
 
     /// One of the kind's scratch lists, named by prefix: `gathered_`,
     /// `only_in_a_`, `only_in_b_`, `in_both_`, or `chain_duplicate_`.
@@ -5933,16 +6446,4 @@ fn inPlaceMergeRow(comptime Entry: type, items: []Entry, left_len: usize, ident_
         }
         items[j] = key;
     }
-}
-
-/// Write `src` into `dest`, copying only the active variant's payload.
-fn writeActiveVariant(comptime U: type, dest: *U, src: U) void {
-    const tag = std.meta.activeTag(src);
-    inline for (@typeInfo(U).@"union".field_names) |field_name| {
-        if (tag == @field(std.meta.Tag(U), field_name)) {
-            dest.* = @unionInit(U, field_name, @field(src, field_name));
-            return;
-        }
-    }
-    unreachable; // the loop covers every field of U, one of which is active
 }

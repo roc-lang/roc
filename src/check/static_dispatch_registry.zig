@@ -347,8 +347,8 @@ pub const CheckedMethodLookup = union(enum) {
     /// accepted at that use. A lookup that can land on a rejected declaration
     /// (a compiler-generated edge) matches on `rejected` instead, so a rejected
     /// declaration reaching this is a compiler bug, not a shape to route around.
-    pub fn requireTarget(self: CheckedMethodLookup, comptime context: []const u8) MethodTarget {
-        return switch (self) {
+    pub fn requireTarget(self: *const CheckedMethodLookup, comptime context: []const u8) MethodTarget {
+        return switch (self.*) {
             .target => |target| target,
             .rejected => base.invariant(
                 "checked method lookup invariant violated: rejected declaration reached " ++ context,
@@ -1215,6 +1215,24 @@ pub const EvidenceNode = struct {
     subst: artifact_serialize.Span = .{},
 };
 
+/// A use of a name a destructuring scheme alias binds (`(twice, _) =
+/// doubling`): the quantified variables of the name's scheme, in the order
+/// the use's site substitution (`SiteEvidenceEntry.subst_start`) gives
+/// their types, so the declaration's lookup can be instantiated at the use
+/// (design.md "Polymorphic Constants").
+pub const DestructuredUse = extern struct {
+    /// The CIR node of the use.
+    key: u32,
+    /// Range into `StaticDispatchPlanTable.site_substitutions`.
+    formals_start: u32,
+    formals_len: u32,
+    /// Range into `StaticDispatchPlanTable.site_substitutions`: the
+    /// declaration's lookup's substitution with the name's variables at the
+    /// use's types, which the use's edge instantiates the lookup's scheme at.
+    subst_start: u32 = 0,
+    subst_len: u32 = 0,
+};
+
 /// Public `SiteEvidenceEntry` declaration.
 ///
 /// Evidence for one instantiation site (keyed by the checked expression of the
@@ -1451,7 +1469,7 @@ pub const StaticDispatchCallPlan = struct {
     resolution: CheckedCallResolution = .checked_error,
 
     /// The plan's operands within its table's pool.
-    pub fn argsSlice(self: StaticDispatchCallPlan, table: *const StaticDispatchPlanTable) []const StaticDispatchOperand {
+    pub fn argsSlice(self: *const StaticDispatchCallPlan, table: *const StaticDispatchPlanTable) []const StaticDispatchOperand {
         return table.operand_pool.items()[self.args.start .. self.args.start + self.args.len];
     }
 };
@@ -1548,7 +1566,7 @@ pub const GeneratedCodecDerivation = struct {
     error_ty: CheckedTypeId,
     calls: artifact_serialize.Span = .{},
 
-    pub fn callsSlice(self: GeneratedCodecDerivation, table: *const StaticDispatchPlanTable) []const GeneratedCodecCall {
+    pub fn callsSlice(self: *const GeneratedCodecDerivation, table: *const StaticDispatchPlanTable) []const GeneratedCodecCall {
         return table.generated_codec_calls.items()[self.calls.start .. self.calls.start + self.calls.len];
     }
 };
@@ -1649,13 +1667,13 @@ pub const IteratorForPlan = struct {
     };
 
     /// The plan's `for` loop site; the plan is a loop's.
-    pub fn forLoopSite(self: IteratorForPlan) ForLoop {
+    pub fn forLoopSite(self: *const IteratorForPlan) ForLoop {
         std.debug.assert(self.site == .for_loop);
         return self.site.for_loop;
     }
 
     /// The plan's interpolation site; the plan is an interpolation's.
-    pub fn interpolationSite(self: IteratorForPlan) Interpolation {
+    pub fn interpolationSite(self: *const IteratorForPlan) Interpolation {
         std.debug.assert(self.site == .interpolation);
         return self.site.interpolation;
     }
@@ -1749,6 +1767,8 @@ pub const StaticDispatchPlanTable = struct {
     site_evidence: collections.SafeList(SiteEvidenceEntry) = .{},
     /// Flat pool backing `SiteEvidenceEntry` substitution ranges.
     site_substitutions: collections.SafeList(CheckedTypeId) = .{},
+    /// Each use of a name a destructuring scheme alias binds, sorted by key.
+    destructured_uses: collections.SafeList(DestructuredUse) = .{},
     /// Per procedure template (indexed like the template table), the
     /// chain-free evidence of the template's root edge: how each of its own
     /// obligations resolves when nothing instantiates it (a compile-time
@@ -1778,14 +1798,15 @@ pub const StaticDispatchPlanTable = struct {
         evidence_refs: SerializedSlice(CheckedEvidence) = .{},
         site_evidence: SerializedSlice(SiteEvidenceEntry) = .{},
         site_substitutions: SerializedSlice(CheckedTypeId) = .{},
+        destructured_uses: SerializedSlice(DestructuredUse) = .{},
         template_root_evidence: SerializedSlice(?artifact_serialize.Span) = .{},
         generated_codec_derivations: SerializedSlice(GeneratedCodecDerivation) = .{},
         generated_codec_calls: SerializedSlice(GeneratedCodecCall) = .{},
 
         comptime {
-            // 19 side lists → 19 base-pointer fixups on deserialize, never a
+            // 20 side lists → 20 base-pointer fixups on deserialize, never a
             // function of how many plans/operands the table holds.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 19);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 20);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(StaticDispatchPlanTable, @This());
@@ -1849,22 +1870,13 @@ pub const StaticDispatchPlanTable = struct {
         var constraint_index = try StaticDispatchConstraintIndex.fromModule(allocator, module, bodies);
         defer constraint_index.deinit(allocator);
 
-        var node_idx: u32 = CIR.Node.first_idx;
-        while (node_idx < module.nodeCount()) : (node_idx += 1) {
-            const tag = module.nodeTag(@fromBackingInt(@intCast(node_idx)));
-            if (tag != .expr_dispatch_call and
-                tag != .expr_interpolation and
-                tag != .expr_type_dispatch_call and
-                tag != .expr_type_dispatch_call_dispatcher and
-                tag != .expr_method_eq) continue;
-
-            const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-            if (!bodies.index().reachesExpr(expr_idx)) continue;
+        for (bodies.index().dispatchExprs()) |node_idx| {
+            const expr_idx: CIR.Expr.Idx = @fromBackingInt(node_idx);
             const expr = module.expr(expr_idx);
             const checked_expr_data = bodies.exprData(expr_idx);
             const idents = module.identStoreConst();
             const plan_id: StaticDispatchPlanId = @fromBackingInt(@intCast(@as(u32, @intCast(plans.items.len))));
-            const dispatch_expr_tag = std.meta.stringToEnum(DispatchExprTag, @tagName(std.meta.activeTag(expr.data))) orelse unreachable; // the node-tag filter above admits only nodes that decode to these expression tags
+            const dispatch_expr_tag = std.meta.stringToEnum(DispatchExprTag, @tagName(std.meta.activeTag(expr.data))) orelse unreachable; // the module index lists only expressions that decode to these tags
             switch (dispatch_expr_tag) {
                 .e_dispatch_call => {
                     const dispatch_call = expr.data.e_dispatch_call;
@@ -2446,6 +2458,23 @@ pub const StaticDispatchPlanTable = struct {
         return self.site_substitutions.items()[found.subst_start .. found.subst_start + found.subst_len];
     }
 
+    /// The substitution a use `expr` of a destructured name instantiates
+    /// its declaration's lookup's scheme at; null for any other expression.
+    pub fn destructuredUseSubstitution(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?[]const CheckedTypeId {
+        const found = artifact_serialize.binarySearchByKey(DestructuredUse, u32, self.destructured_uses.items(), @backingInt(expr), destructuredUseOrder) orelse return null;
+        // A lookup whose scheme has no variable is instantiated as it is.
+        if (found.subst_len == 0) return null;
+        return self.site_substitutions.items()[found.subst_start .. found.subst_start + found.subst_len];
+    }
+
+    /// The quantified variables of the scheme of the destructured name a
+    /// use `expr` reads, which its site substitution is over; null for any
+    /// other expression.
+    pub fn destructuredUseFormals(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?[]const CheckedTypeId {
+        const found = artifact_serialize.binarySearchByKey(DestructuredUse, u32, self.destructured_uses.items(), @backingInt(expr), destructuredUseOrder) orelse return null;
+        return self.site_substitutions.items()[found.formals_start .. found.formals_start + found.formals_len];
+    }
+
     /// Build-time-only teardown: frees the heap-owned slices. A frozen
     /// (deserialized) table's slices alias the artifact's single backing buffer and are
     /// NEVER freed here—the artifact's `deinitInternal` frees the buffer wholesale and
@@ -2469,6 +2498,7 @@ pub const StaticDispatchPlanTable = struct {
         self.evidence_refs.deinit(allocator);
         self.site_evidence.deinit(allocator);
         self.site_substitutions.deinit(allocator);
+        self.destructured_uses.deinit(allocator);
         self.template_root_evidence.deinit(allocator);
         self.generated_codec_derivations.deinit(allocator);
         self.generated_codec_calls.deinit(allocator);
@@ -2477,6 +2507,10 @@ pub const StaticDispatchPlanTable = struct {
 };
 
 fn siteEvidenceOrder(e: SiteEvidenceEntry, key: u32) std.math.Order {
+    return std.math.order(e.key, key);
+}
+
+fn destructuredUseOrder(e: DestructuredUse, key: u32) std.math.Order {
     return std.math.order(e.key, key);
 }
 
@@ -2526,24 +2560,21 @@ const StaticDispatchConstraintIndex = struct {
         var live_fn_vars: collections.DenseMapUnmanaged(Var, void) = .empty;
         defer live_fn_vars.deinit(allocator);
 
-        var node_idx: u32 = CIR.Node.first_idx;
-        while (node_idx < module.nodeCount()) : (node_idx += 1) {
-            const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-            const node_tag = module.nodeTag(@fromBackingInt(@intCast(node_idx)));
-            const constraint_fn_var: ?Var = if (node_tag == .expr_dispatch_call)
-                module.expr(expr_idx).data.e_dispatch_call.constraint_fn_var
-            else if (node_tag == .expr_interpolation)
-                module.expr(expr_idx).data.e_interpolation.constraint_fn_var
-            else if (node_tag == .expr_type_dispatch_call or node_tag == .expr_type_dispatch_call_dispatcher)
-                module.expr(expr_idx).data.e_type_dispatch_call.constraint_fn_var
-            else if (node_tag == .expr_method_eq)
-                module.expr(expr_idx).data.e_method_eq.constraint_fn_var
+        for (bodies.index().dispatchExprs()) |node_idx| {
+            const expr_idx: CIR.Expr.Idx = @fromBackingInt(node_idx);
+            const data = module.expr(expr_idx).data;
+            const constraint_fn_var: ?Var = if (data == .e_dispatch_call)
+                data.e_dispatch_call.constraint_fn_var
+            else if (data == .e_interpolation)
+                data.e_interpolation.constraint_fn_var
+            else if (data == .e_type_dispatch_call)
+                data.e_type_dispatch_call.constraint_fn_var
+            else if (data == .e_method_eq)
+                data.e_method_eq.constraint_fn_var
             else
-                null;
+                unreachable; // the module index lists only expressions that decode to these tags
             if (constraint_fn_var) |fn_var| {
-                if (!bodies.index().reachesExpr(expr_idx)) continue;
-                if (module.nodeTag(@fromBackingInt(@intCast(node_idx))) == .expr_interpolation and
-                    std.meta.activeTag(bodies.exprData(expr_idx)) != .interpolation) continue;
+                if (data == .e_interpolation and bodies.exprDataKind(expr_idx) != .interpolation) continue;
                 try live_fn_vars.put(allocator, fn_var, {});
             }
         }
@@ -2928,10 +2959,10 @@ const LiteralConversionKind = enum { numeral, quote };
 fn literalNodeConverts(bodies: anytype, node: u32, kind: LiteralConversionKind) bool {
     switch (bodies.index().nodeKind(node)) {
         .expr => {
-            const data = bodies.exprData(@fromBackingInt(@intCast(node)));
+            const data_kind = bodies.exprDataKind(@fromBackingInt(@intCast(node)));
             return switch (kind) {
-                .numeral => data == .numeral,
-                .quote => data == .str and bodies.quoteIsCustom(node),
+                .numeral => data_kind == .numeral,
+                .quote => data_kind == .str and bodies.quoteIsCustom(node),
             };
         },
         .pattern => return bodies.literalPatternGuard(@fromBackingInt(@intCast(node))) != null,
@@ -3026,7 +3057,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
     // The fixup count is fixed by the number of serialized base pointers, never
     // by how much data each pool holds. The two tables below differ in operand
     // count by three orders of magnitude yet relocate identically.
-    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".field_names.len == 19);
+    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".field_names.len == 20);
 
     inline for (.{ @as(u32, 4), @as(u32, 4000) }) |operand_count| {
         const operands = try gpa.alloc(StaticDispatchOperand, operand_count);

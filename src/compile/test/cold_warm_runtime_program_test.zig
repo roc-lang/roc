@@ -247,14 +247,12 @@ const ExpectError = BuildError ||
 /// Which program a cold build's runtime consumer continues (design.md
 /// "Compile-Time Evaluation Under `.lss`").
 const ColdProgram = enum {
-    /// Every compile-time root reads no function value, so the `.boxy`
-    /// evaluator completes them all before the Solved program is
-    /// specialized, and that program restores their stored values exactly
-    /// as a warm build's does: it is specialized once.
+    /// Every compile-time root completes in value form, with no program,
+    /// so the Solved program restores their stored values exactly as a
+    /// warm build's does: it is specialized once.
     specialized_once,
-    /// The Solved program evaluates a root holding a function value, so
-    /// the runtime consumer continues a program specialized again from the
-    /// stored values.
+    /// The Solved program evaluates a pending root, so the runtime consumer
+    /// continues a program specialized again from the stored values.
     respecialized,
 };
 
@@ -372,7 +370,7 @@ test "issue 12930: a program's expects stay out of its runtime program whether e
 }
 
 test "a hoisted string a body computes lowers the same whether evaluated or read from the cache" {
-    try expectColdEqualsWarm(.specialized_once,
+    try expectColdEqualsWarm(.respecialized,
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
         \\main! = |_args| {
@@ -385,7 +383,7 @@ test "a hoisted string a body computes lowers the same whether evaluated or read
 }
 
 test "top-level constants of every shape lower the same whether evaluated or read from the cache" {
-    try expectColdEqualsWarm(.specialized_once,
+    try expectColdEqualsWarm(.respecialized,
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
         \\small = "ab".concat("c")
@@ -421,7 +419,7 @@ test "a function value a constant holds lowers the same whether evaluated or rea
     );
 }
 
-test "strategy root readiness preserves nested callable representations across a shared cache" {
+test "each strategy keeps nested callable representations in its own cache entry" {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
@@ -467,16 +465,17 @@ test "strategy root readiness preserves nested callable representations across a
     try std.testing.expect(same_lss.cache_hits > 0);
     try std.testing.expectEqualDeep(first.first_lss_function, same_lss.first_lss_function);
 
+    // Each strategy files its own checked entry (a stored image is at its
+    // writer's layouts), so the Boxy build checks cold beside the LSS
+    // entry, stores Boxy function values and no LSS ones, and its warm
+    // build reads them back.
     var boxy_target = dev_target;
     boxy_target.specialization_strategy = .boxy;
     const boxy = try buildWithCacheAtTarget(gpa, cache, app, boxy_target);
     defer gpa.free(boxy.program);
-    try std.testing.expect(boxy.cache_hits > 0);
     try std.testing.expect(boxy.boxy_functions > 0);
     try std.testing.expect(boxy.first_boxy_function != null);
     try std.testing.expectEqual(@as(usize, 0), boxy.pending_boxy_functions);
-    try std.testing.expectEqualDeep(first.first_lss_function, boxy.first_lss_function);
-    try std.testing.expectEqual(first.lss_functions, boxy.lss_functions);
     try std.testing.expectEqual(first.debug_observations, boxy.debug_observations);
     // These are always-active RF assertions over the emitted immutable graph,
     // not an expectation that a debug invariant happens to catch the bug.
@@ -487,14 +486,13 @@ test "strategy root readiness preserves nested callable representations across a
     defer gpa.free(same_boxy.program);
     try std.testing.expect(same_boxy.cache_hits > 0);
     try std.testing.expectEqualDeep(boxy.first_boxy_function, same_boxy.first_boxy_function);
-    try std.testing.expectEqualDeep(first.first_lss_function, same_boxy.first_lss_function);
     try std.testing.expectEqual(@as(usize, 0), same_boxy.invalid_static_parts);
 
+    // The LSS entry is untouched by the Boxy builds.
     const last = try buildWithCacheAtTarget(gpa, cache, app, dev_target);
     defer gpa.free(last.program);
     try std.testing.expect(last.cache_hits > 0);
     try std.testing.expectEqualDeep(first.first_lss_function, last.first_lss_function);
-    try std.testing.expectEqualDeep(boxy.first_boxy_function, last.first_boxy_function);
     try std.testing.expectEqual(first.debug_observations, last.debug_observations);
 }
 
@@ -603,7 +601,7 @@ test "a mutable variable assigned inside an operand lowers the same whether eval
     // operand's consumer, where the later read of the variable is in its
     // scope, and an operand ahead of it is named at its own position first;
     // debug builds verify the sequenced form of every lifted body.
-    try expectColdEqualsWarm(.specialized_once,
+    try expectColdEqualsWarm(.respecialized,
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
         \\identity : U64 -> U64

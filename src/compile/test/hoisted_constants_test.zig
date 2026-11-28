@@ -533,14 +533,11 @@ test "hoisted list constants lower to internal static data in request order" {
     defer lowered.deinit();
 
     if (lowered.lir_result.static_data_values.items.len != 2) return error.StaticDataInitializerCountMismatch;
-    try expectStaticInitializersMaterializationOnly(&lowered.lir_result);
-    const first_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[0].initializer.get().?);
-    const second_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[1].initializer.get().?);
-    const first_body = first_initializer.body.get() orelse return error.StaticDataLiteralNotFound;
-    const second_body = second_initializer.body.get() orelse return error.StaticDataLiteralNotFound;
-    // Queued initializers lower in request order. ARC leaves initializers as
-    // lowered, so their bodies' statement ids still show that order.
-    if (@backingInt(first_body) >= @backingInt(second_body)) return error.StaticDataInitializerRequestOrderMismatch;
+    // Each list is a stored image, which static data freezes straight from
+    // the store: no initializer builds it.
+    for (lowered.lir_result.static_data_values.items) |value| {
+        try std.testing.expect(value.initializer.get() == null and value.stored != null);
+    }
     try expectStaticDataLiteralPresent(&lowered.lir_result);
 
     const exports = try static_data_exports.buildStaticData(
@@ -1359,12 +1356,24 @@ test "callable binding with alias annotation is const-evaluated" {
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
+    // `validate`'s result row is implicitly open, so the binding is a
+    // polymorphic constant (design.md "Polymorphic Constants"): each of its
+    // instances, the canonical one and `main!`'s, is evaluated and stored.
     const app_artifact = coord.appRootCheckedArtifact();
     var saw_callable_binding = false;
     for (app_artifact.compile_time_roots.roots.items()) |root| {
         if (root.kind != .callable_binding) continue;
         saw_callable_binding = true;
-        if (root.payload != .fn_value) return error.CallableBindingConstFnNotStored;
+        var instances: usize = 0;
+        for (app_artifact.compile_time_roots.roots.items()) |instance| {
+            const argument = instance.literal_argument orelse continue;
+            if (argument.site.kind != .constant_instance or argument.site.node != @backingInt(root.id)) continue;
+            instances += 1;
+            // An instance root stores its function value as a node of the
+            // constant store.
+            if (instance.payload != .const_node) return error.CallableBindingConstFnNotStored;
+        }
+        if (instances == 0) return error.CallableBindingConstFnNotStored;
     }
     try std.testing.expect(saw_callable_binding);
 }
@@ -3081,40 +3090,13 @@ fn scalarConstNodeI64(
     artifact: check.CheckedArtifact.ImportedModuleView,
     node: check.CheckedArtifact.ConstNodeId,
 ) HoistedConstantsTestError!i64 {
-    const value = artifact.const_store.get(node);
-    const actual = switch (value) {
-        .scalar => |scalar| switch (scalar) {
-            .i64 => |i| i,
-            .i8,
-            .i16,
-            .i32,
-            .i128,
-            .u8,
-            .u16,
-            .u32,
-            .u64,
-            .u128,
-            .f32_bits,
-            .f64_bits,
-            .dec_bits,
-            => return error.HoistedConstWasNotI64,
-        },
-        .pending,
-        .zst,
-        .str,
-        .list,
-        .box,
-        .tuple,
-        .record,
-        .crash,
-        .checked_error,
-        .tag,
-        .nominal,
-        .fn_value,
-        .boxy_fn,
-        => return error.HoistedConstWasNotScalar,
+    // A number is data alone, stored as its image.
+    const image = artifact.const_store.imageOf(node) orelse return error.HoistedConstWasNotScalar;
+    const literal = artifact.const_store.imageLiteral(image) orelse return error.HoistedConstWasNotI64;
+    return switch (literal) {
+        .scalar => |scalar| if (scalar == .i64) scalar.i64 else error.HoistedConstWasNotI64,
+        .tag, .str => error.HoistedConstWasNotI64,
     };
-    return actual;
 }
 
 test "issue 9733: nested expect statements remain inline" {

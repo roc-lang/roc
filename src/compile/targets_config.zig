@@ -1057,10 +1057,22 @@ fn topLevelConstNode(
         const template = checked_module.const_templates.get(const_ref);
         return switch (template.state) {
             .stored_const => |stored| stored.node,
-            .reserved, .eval_template => blk: {
-                reason.* = .unevaluated_constant;
-                break :blk null;
+            // A polymorphic constant is read as its canonical instance,
+            // which every compilation evaluates (design.md "Polymorphic
+            // Constants").
+            .eval_template => blk: {
+                const pattern = switch (const_ref.owner) {
+                    .top_level_binding => |binding| binding.pattern,
+                    .hoisted_root => break :blk unevaluated(reason),
+                };
+                const constant = checked_module.compile_time_roots.lookupIdByPattern(pattern) orelse break :blk unevaluated(reason);
+                const canonical = checked_module.compile_time_roots.canonicalInstance(constant) orelse break :blk unevaluated(reason);
+                break :blk switch (checked_module.compile_time_roots.root(canonical).payload) {
+                    .const_node => |node| node,
+                    .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => unevaluated(reason),
+                };
             },
+            .reserved => unevaluated(reason),
             .unimplemented => blk: {
                 reason.* = .unimplemented_declaration;
                 break :blk null;
@@ -1072,7 +1084,19 @@ fn topLevelConstNode(
     return null;
 }
 
+fn unevaluated(reason: *TargetConfigResolveReason) ?checked.ConstNodeId {
+    reason.* = .unevaluated_constant;
+    return null;
+}
+
 fn constWasmImportMemory(checked_module: *const checked.CheckedModuleArtifact, node: checked.ConstNodeId) ?WasmImportMemory {
+    if (checked_module.const_store.imageOf(node)) |image| {
+        const literal = checked_module.const_store.imageLiteral(image) orelse return null;
+        return switch (literal) {
+            .tag => |name| WasmImportMemory.fromTagName(checked_module.canonical_names.tagLabelText(name)),
+            .scalar, .str => null,
+        };
+    }
     const value = checked_module.const_store.get(node);
     if (value == .nominal) return constWasmImportMemory(checked_module, value.nominal.backing);
     if (value != .tag or value.tag.payloads.len != 0) return null;
@@ -1084,9 +1108,16 @@ fn constUnsigned(
     node: checked.ConstNodeId,
     reason: *TargetConfigResolveReason,
 ) ?u64 {
+    if (checked_module.const_store.imageOf(node)) |image| {
+        if (checked_module.const_store.imageLiteral(image)) |literal| switch (literal) {
+            .scalar => |scalar| return scalarUnsigned(scalar, reason),
+            .tag, .str => {},
+        };
+        reason.* = .expected_unsigned_integer;
+        return null;
+    }
     const value = checked_module.const_store.get(node);
     if (value == .nominal) return constUnsigned(checked_module, value.nominal.backing, reason);
-    if (value == .scalar) return scalarUnsigned(value.scalar, reason);
     reason.* = .expected_unsigned_integer;
     return null;
 }

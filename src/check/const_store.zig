@@ -5,6 +5,7 @@ const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
 const collections = @import("collections");
+const layout_shape = @import("layout_shape");
 
 const checked_ids = @import("checked_ids.zig");
 const names = @import("canonical_names.zig");
@@ -42,8 +43,8 @@ pub const ConstScalar = union(enum) {
     dec_bits: i128,
 };
 
-/// Target-independent scalar encoding used by a packed constant list.
-/// Multi-byte values use canonical little-endian bytes in `ConstStore`.
+/// Target-independent scalar encoding of a packed list literal's items
+/// (`Monotype.Ast` bytes literals), little-endian.
 pub const ConstPackedScalar = enum(u8) {
     i8,
     i16,
@@ -606,50 +607,16 @@ pub const FnDef = union(enum) {
 /// so equal strings share it and no string is a view into a longer one.
 pub const ConstStr = ConstBlobDataId;
 
-/// A string: its bytes and the capacity it was evaluated with.
-pub const ConstString = struct {
-    bytes: ConstStr,
-    /// How many bytes the string had room for when its evaluation finished,
-    /// never fewer than it holds. A string held inline in its descriptor, or
-    /// viewing another string's bytes, has none beyond its length. Capacity
-    /// is part of the value, as a list's is (`ConstList.capacity`).
-    capacity: u64,
-};
-
-/// Packed list with little-endian scalar leaves in semantic field order.
-/// Product bytes omit padding. A discriminant-only tag union, one whose
-/// every payload is zero-sized, is a leaf as wide as its discriminant,
-/// holding the index of the item's tag among the union's tags in byte-wise
-/// name order, the order that assigns discriminants; its payloads have no
-/// bytes, and a union of one tag has no leaf.
-/// `blobData(bytes).len == len * byteWidth()`.
-pub const ConstPackedList = struct {
-    bytes: ConstBlobDataId,
-    len: u32,
-    /// Null for products and discriminant-only tag unions; the stored checked
-    /// type supplies their field structure, tags and zero-sized payloads.
-    element: ?ConstPackedScalar,
-    /// Sum of leaf widths in checked field order, excluding all padding.
-    product_width: u32 = 0,
-
-    /// Canonical byte width of one item, excluding product padding.
-    pub fn byteWidth(self: ConstPackedList) u32 {
-        return if (self.element) |scalar| scalar.byteWidth() else self.product_width;
-    }
-};
-
-/// A list's items, stored either as child nodes or packed fixed-product
-/// bytes, discriminant-only tag unions among a product's leaves.
+/// A list's items: its child nodes, or none. A list holding no function is
+/// part of an image, so a list stored as nodes holds a function.
 pub const ConstListItems = union(enum) {
     nodes: []const ConstNodeId,
-    packed_bytes: ConstPackedList,
     empty,
 
     /// The number of items.
     pub fn len(self: ConstListItems) u64 {
         return switch (self) {
             .nodes => |items| items.len,
-            .packed_bytes => |packed_list| packed_list.len,
             .empty => 0,
         };
     }
@@ -671,12 +638,114 @@ pub const ConstList = struct {
     }
 };
 
+/// Identifier for a stored image (`ConstStore.image`).
+pub const ConstImageId = enum(u32) { _ };
+
+/// Width of every pointer word in a stored image: images are at the 64-bit
+/// little-endian layout.
+pub const image_word_size = 8;
+
+/// A value that is data alone, stored as the memory it occupies: one block
+/// holding the value at offset 0 and then every allocation it reaches, at
+/// the 64-bit little-endian layout of the value's stored type. A word that
+/// points at an allocation holds the block offset of the address it points
+/// at, and `pointers` lists every such word. Allocations carry static
+/// refcount headers, lists and strings keep their capacity, NaNs are Roc's
+/// one NaN, and nothing is a seamless slice, so a reader copies the block
+/// and relocates each listed word by the block's address, and does no work
+/// per value.
+pub const ConstImage = struct {
+    /// The block, in `ConstStore.image_bytes`.
+    bytes: ConstRange,
+    /// Block offsets of the pointer words, ascending, in
+    /// `ConstStore.image_pointers`.
+    pointers: ConstRange,
+    files: ConstRange,
+    /// The block's alignment: the largest alignment of anything in it.
+    alignment: u32,
+    /// The size of the value at offset 0; the rest of the block is its
+    /// allocations.
+    root_size: u32,
+    /// The type the value was stored at, in `ConstStore.type_store`: the
+    /// type its bytes are read through.
+    root_type: ConstTypeId,
+    /// The content digest (`layout.digest`) of the value's layout, which is
+    /// a function of its structure alone, the same in every program.
+    layout_digest: [32]u8,
+    /// The digest of the value: of `layout_digest`, the bytes, and the
+    /// pointer offsets, computed once as the image is written. Everything
+    /// that names the value by content reads it from here.
+    digest: [32]u8,
+};
+
+/// A stored image with its pools resolved (`ConstStore.image`).
+pub const ConstImageView = struct {
+    bytes: []const u8,
+    pointers: []const u32,
+    files: []const base.SourceDigest.Range = &.{},
+    alignment: u32,
+    root_size: u32,
+    root_type: ConstTypeId,
+    layout_digest: [32]u8,
+    digest: [32]u8,
+
+    /// The bytes of the value at offset 0.
+    pub fn rootBytes(self: ConstImageView) []const u8 {
+        return self.bytes[0..self.root_size];
+    }
+
+    /// Identity only for the exact bytes the reader supplied, never a slice.
+    pub fn fileAt(self: ConstImageView, offset: u32, len: usize) ?base.SourceDigest {
+        const i = std.sort.lowerBound(base.SourceDigest.Range, self.files, offset, base.SourceDigest.Range.orderOffset);
+        if (i == self.files.len or self.files[i].offset != offset or self.files[i].len != len) return null;
+        return .{ .bytes = self.files[i].digest };
+    }
+
+    /// The bytes of the `Str` whose 64-bit descriptor (bytes pointer,
+    /// capacity shifted left by one, length) is at block offset `offset`:
+    /// inline in a small string's descriptor, otherwise at the block offset
+    /// its pointer word holds.
+    pub fn strAt(self: ConstImageView, offset: u32) []const u8 {
+        const descriptor = self.bytes[offset..][0 .. 3 * image_word_size];
+        const last = descriptor[descriptor.len - 1];
+        if (last & 0x80 != 0) return descriptor[0..(last & 0x7f)];
+        const len = std.mem.readInt(u64, descriptor[2 * image_word_size ..][0..image_word_size], .little);
+        if (len == 0) return &.{};
+        const start = std.mem.readInt(u64, descriptor[0..image_word_size], .little);
+        return self.bytes[@intCast(start)..][0..@intCast(len)];
+    }
+
+    /// The capacity of the `Str` whose 64-bit descriptor is at block offset
+    /// `offset`: its length when it is held in its descriptor, otherwise
+    /// its capacity word decoded (no image string is a seamless slice).
+    pub fn strCapacityAt(self: ConstImageView, offset: u32) u64 {
+        const descriptor = self.bytes[offset..][0 .. 3 * image_word_size];
+        const last = descriptor[descriptor.len - 1];
+        if (last & 0x80 != 0) return last & 0x7f;
+        return std.mem.readInt(u64, descriptor[image_word_size..][0..image_word_size], .little) >> 1;
+    }
+};
+
+/// A stored value that every reader keeps as a literal in LIR rather than as
+/// static data, read from its image through the image's root type
+/// (design.md "Stored Images"): a number (a vector's scalar is its 128
+/// bits), a payload-free tag of a union
+/// whose every payload is zero-sized, or a string. A reader decides from
+/// its own layout whether a tag or string stays a literal.
+pub const ImageLiteral = union(enum) {
+    scalar: ConstScalar,
+    /// The tag, as the root type's tag union names it.
+    tag: names.TagNameId,
+    str: struct { bytes: []const u8, capacity: u64, image: ConstImageId, file: ?base.SourceDigest },
+};
+
 /// Compile-time constant stored in checked module data.
 pub const ConstValue = union(enum) {
     pending,
-    zst,
-    scalar: ConstScalar,
-    str: ConstString,
+    /// A value that is data alone, as its image. Only a compile-time root's
+    /// own node is one: a value holding a function or a failure is the only
+    /// value stored as other nodes.
+    image: ConstImageId,
     list: ConstList,
     box: ConstNodeId,
     tuple: []const ConstNodeId,
@@ -709,13 +778,10 @@ pub const ConstValue = union(enum) {
 /// (with slices) is reconstructed on demand by `get`.
 const StoredValue = union(enum) {
     pending,
-    zst,
-    scalar: ConstScalar,
-    str: ConstString,
+    image: ConstImageId,
     list: struct {
         items: union(enum) {
             nodes: ConstRange,
-            packed_bytes: ConstPackedList,
             empty,
         },
         capacity: u64,
@@ -858,6 +924,70 @@ pub const ConstTypeStore = struct {
             .erased => |index| .{ .erased = self.erased_pool.items()[index] },
             inline .primitive, .record, .tuple, .tag_union, .list, .box, .func, .zst => |payload, tag| @unionInit(ConstType, @tagName(tag), payload),
         };
+    }
+
+    /// The identity of stored type `root` as the type of a value: its
+    /// structure, with record field and tag names by their text and each
+    /// named type by its declaring module, its name, its declaring
+    /// statement and its arguments, in `names`. A named type's backing is
+    /// its declaration's, which its declaring module's identity covers.
+    pub fn identityDigest(self: *const ConstTypeStore, allocator: Allocator, type_names: *const names.CanonicalNameStore, root: ConstTypeId) Allocator.Error![32]u8 {
+        var hasher = base.Sha256.init(.{});
+        hasher.update("roc.const.type.v1");
+        var pending: std.ArrayList(ConstTypeId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |id| {
+            const ty = self.get(id);
+            hasher.update(@tagName(std.meta.activeTag(ty)));
+            hasher.update(&[_]u8{0});
+            // Children are pushed in reverse, so they are hashed in order.
+            const start = pending.items.len;
+            switch (ty) {
+                .zst => {},
+                .primitive => |primitive| hasher.update(@tagName(primitive)),
+                .erased => |digest| hasher.update(std.mem.asBytes(&digest)),
+                .list, .box => |item| try pending.append(allocator, item),
+                .tuple => |items| try pending.appendSlice(allocator, self.typeSpan(items)),
+                .func => |func| {
+                    try pending.appendSlice(allocator, self.typeSpan(func.args));
+                    try pending.append(allocator, func.ret);
+                    hasher.update(std.mem.asBytes(&func.args.len));
+                },
+                .record => |fields| {
+                    hasher.update(std.mem.asBytes(&fields.len));
+                    for (self.fieldSpan(fields)) |field| {
+                        hashIdentityText(&hasher, type_names.recordFieldLabelText(field.name));
+                        try pending.append(allocator, field.ty);
+                    }
+                },
+                .tag_union => |tags| {
+                    hasher.update(std.mem.asBytes(&tags.len));
+                    for (self.tagSpan(tags)) |tag| {
+                        hashIdentityText(&hasher, type_names.tagLabelText(tag.name));
+                        const payloads = self.typeSpan(tag.payloads);
+                        hasher.update(std.mem.asBytes(&payloads.len));
+                        try pending.appendSlice(allocator, payloads);
+                    }
+                },
+                .named => |named| {
+                    hasher.update(&named.named_type.module.bytes);
+                    hashIdentityText(&hasher, type_names.typeNameText(named.def.type_name));
+                    const decl: u32 = if (named.def.source_decl.get()) |decl| decl + 1 else 0;
+                    hasher.update(std.mem.asBytes(&decl));
+                    const args = self.typeSpan(named.args);
+                    hasher.update(std.mem.asBytes(&args.len));
+                    try pending.appendSlice(allocator, args);
+                },
+            }
+            std.mem.reverse(ConstTypeId, pending.items[start..]);
+        }
+        return hasher.finalResult();
+    }
+
+    fn hashIdentityText(hasher: *base.Sha256, text: []const u8) void {
+        hasher.update(std.mem.asBytes(&@as(u64, text.len)));
+        hasher.update(text);
     }
 
     pub fn typeSpan(self: *const ConstTypeStore, range: ConstRange) []const ConstTypeId {
@@ -1316,143 +1446,6 @@ pub const ConstTypeStore = struct {
     }
 };
 
-/// The bytes of a store's blobs, at the offsets its blob views name. Most
-/// are the store's own (`owned`). A blob added with `addBorrowedBlobData` is
-/// a checked literal of the store's module, borrowed from the module's
-/// string literal store, which never changes once the module is
-/// canonicalized and outlives the store, so the store keeps no copy of it.
-/// A borrowed run occupies its offsets as if its bytes were stored there:
-/// serialization writes the runs in place, so a serialized store is the same
-/// whichever of its blobs are borrowed, and a loaded store owns them all.
-pub const BlobBacking = struct {
-    /// The owned bytes in offset order, with every borrowed run left out.
-    owned: collections.SafeList(u8) = .{},
-    /// The borrowed runs, in offset order.
-    borrowed: std.ArrayList(Borrowed) = .empty,
-    /// The total length of the borrowed runs.
-    borrowed_len: u32 = 0,
-
-    pub const Borrowed = struct {
-        /// The run's offset among all the blob bytes.
-        start: u32,
-        /// The total length of the runs before this one.
-        before: u32,
-        bytes: []const u8,
-    };
-
-    /// The length of all the blob bytes, owned and borrowed.
-    fn len(self: *const BlobBacking) usize {
-        return self.owned.items().len + self.borrowed_len;
-    }
-
-    /// The bytes `range` names, which lie in one borrowed run or wholly
-    /// among the owned bytes.
-    fn slice(self: *const BlobBacking, range: ConstRange) []const u8 {
-        // An empty blob owns no backing.
-        if (range.len == 0) return &.{};
-        const runs = self.borrowed.items;
-        // The last run starting at or before the range.
-        var low: usize = 0;
-        var high: usize = runs.len;
-        while (low < high) {
-            const mid = low + (high - low) / 2;
-            if (runs[mid].start <= range.start) low = mid + 1 else high = mid;
-        }
-        if (low == 0) return self.owned.items()[range.start..][0..range.len];
-        const run = runs[low - 1];
-        if (run.start == range.start) {
-            if (builtin.mode == .debug) std.debug.assert(run.bytes.len == range.len);
-            return run.bytes;
-        }
-        const before = run.before + @as(u32, @intCast(run.bytes.len));
-        return self.owned.items()[range.start - before ..][0..range.len];
-    }
-
-    fn appendBorrowed(self: *BlobBacking, allocator: Allocator, bytes: []const u8) Allocator.Error!ConstRange {
-        std.debug.assert(bytes.len != 0);
-        const start = std.math.cast(u32, self.len()) orelse return error.OutOfMemory;
-        const length = std.math.cast(u32, bytes.len) orelse return error.OutOfMemory;
-        _ = std.math.add(u32, start, length) catch return error.OutOfMemory;
-        try self.borrowed.append(allocator, .{ .start = start, .before = self.borrowed_len, .bytes = bytes });
-        self.borrowed_len += length;
-        return .{ .start = start, .len = length };
-    }
-
-    /// Undo the last `appendBorrowed`.
-    fn popBorrowed(self: *BlobBacking) void {
-        const run = self.borrowed.pop() orelse unreachable; // follows the `appendBorrowed` it undoes
-        self.borrowed_len -= @intCast(run.bytes.len);
-    }
-
-    fn deinit(self: *BlobBacking, allocator: Allocator) void {
-        self.owned.deinit(allocator);
-        self.borrowed.deinit(allocator);
-        self.* = .{};
-    }
-
-    /// A pairing session's copy (`checked_artifact.copyPairingColumns`): its
-    /// own owned bytes, borrowing the runs this backing borrows, which
-    /// outlive the session.
-    pub fn copyForPairing(self: BlobBacking, allocator: Allocator) Allocator.Error!BlobBacking {
-        var owned = try collections.SafeList(u8).initCapacity(allocator, self.owned.items().len);
-        errdefer owned.deinit(allocator);
-        _ = try owned.appendSlice(allocator, self.owned.items());
-        var borrowed = try std.ArrayList(Borrowed).initCapacity(allocator, self.borrowed.items.len);
-        borrowed.appendSliceAssumeCapacity(self.borrowed.items);
-        return .{ .owned = owned, .borrowed = borrowed, .borrowed_len = self.borrowed_len };
-    }
-
-    /// The serialized blob bytes, laid out exactly as a `SerializedSlice(u8)`
-    /// of all of them.
-    pub const Serialized = extern struct {
-        offset: i64 = 0,
-        len: u64 = 0,
-
-        pub const SerializedElement = u8;
-        pub const serialized_relocatable_pointers: usize = 1;
-
-        /// Append every blob byte in offset order, the borrowed runs where
-        /// they lie, as one contiguous slice.
-        pub fn serialize(self: *Serialized, backing: *const BlobBacking, gpa: Allocator, writer: *collections.CompactWriter) Allocator.Error!void {
-            const total = backing.len();
-            if (total == 0) {
-                self.* = .{};
-                return;
-            }
-            var first: ?usize = null;
-            var owned_at: usize = 0;
-            const owned = backing.owned.items();
-            for (backing.borrowed.items) |run| {
-                const owned_end = run.start - run.before;
-                if (owned_end > owned_at) {
-                    const at = try writer.appendSlicePodZeroedOffset(gpa, owned[owned_at..owned_end]);
-                    if (first == null) first = at;
-                    owned_at = owned_end;
-                }
-                const at = try writer.appendSlicePodZeroedOffset(gpa, run.bytes);
-                if (first == null) first = at;
-            }
-            if (owned.len > owned_at) {
-                const at = try writer.appendSlicePodZeroedOffset(gpa, owned[owned_at..]);
-                if (first == null) first = at;
-            }
-            self.offset = @intCast(first.?);
-            self.len = total;
-        }
-
-        /// The backing over the relocated buffer at `base_addr`, owning every blob.
-        pub fn deserializeInto(self: *const Serialized, base_addr: usize) BlobBacking {
-            const bytes: []u8 = if (self.len == 0) &.{} else @as([*]u8, @ptrFromInt(base_addr +% @as(usize, @intCast(self.offset))))[0..@intCast(self.len)];
-            return .{ .owned = collections.SafeList(u8).fromBorrowedSlice(bytes) };
-        }
-
-        pub fn validateRelocations(self: *const Serialized, backing_len: u64) error{CorruptArtifact}!void {
-            if (std.math.cast(u32, self.len) == null) return error.CorruptArtifact;
-            try artifact_serialize.validateOffsetLen(1, 1, self.offset, self.len, backing_len);
-        }
-    };
-};
-
 /// Store of compile-time constants completed by checking finalization.
 pub const ConstStore = struct {
     const VisitState = enum { unseen, active, done };
@@ -1473,47 +1466,22 @@ pub const ConstStore = struct {
     evidence_target_pool: collections.SafeList(ConstFnTargetEvidence),
     evidence_structural_pool: collections.SafeList(ConstFnStructuralEvidence),
     evidence_frame_pool: collections.SafeList(ConstFnEvidenceFrame),
-    /// Flat pool of immutable backing bytes shared by strings and packed lists.
-    blob_backing: BlobBacking,
+    /// Flat pool of immutable backing bytes: strings', recipes' and failure
+    /// messages'.
+    blob_backing: collections.SafeList(u8),
     /// `ConstBlobDataId` -> range into `blob_backing`.
     blob_views: collections.SafeList(ConstRange),
+    /// `ConstImageId` -> image.
+    images: collections.SafeList(ConstImage),
+    /// Flat pool of image blocks.
+    image_bytes: collections.SafeList(u8),
+    /// Flat pool of image pointer-word offsets.
+    image_pointers: collections.SafeList(u32),
     /// Content index over the blobs, by their bytes: every blob is entered
     /// once, so equal bytes name one blob. Stored with the store, so a
     /// loaded store deduplicates new blobs against the ones it loaded.
     blob_index: collections.HashedProbeTable = .{},
-    /// Whole-file identities, ordered by blob ID. Most constants have none.
-    file_blobs: collections.SafeList(FileBlob) = .{},
-
-    const FileBlob = extern struct { blob: ConstBlobDataId, digest: [32]u8 };
-
-    fn filePosition(self: *const ConstStore, blob: ConstBlobDataId) usize {
-        const entries = self.file_blobs.items();
-        var lo: usize = 0;
-        var hi = entries.len;
-        while (lo < hi) {
-            const mid = lo + (hi - lo) / 2;
-            if (@backingInt(entries[mid].blob) < @backingInt(blob)) lo = mid + 1 else hi = mid;
-        }
-        return lo;
-    }
-
-    /// Preserve the import identity only when copying a whole, unmodified backing.
-    pub fn recordFileBlob(self: *ConstStore, blob: ConstBlobDataId, digest: base.SourceDigest) Allocator.Error!void {
-        const pos = self.filePosition(blob);
-        const entries = self.file_blobs.items();
-        if (pos < entries.len and entries[pos].blob == blob) {
-            std.debug.assert(std.meta.eql(entries[pos].digest, digest.bytes));
-            return;
-        }
-        try self.file_blobs.insert(self.allocator, pos, .{ .blob = blob, .digest = digest.bytes });
-    }
-
-    /// The content identity supplied by the reader of an imported asset.
-    pub fn fileDigest(self: *const ConstStore, blob: ConstBlobDataId) ?base.SourceDigest {
-        const pos = self.filePosition(blob);
-        const entries = self.file_blobs.items();
-        return if (pos < entries.len and entries[pos].blob == blob) .{ .bytes = entries[pos].digest } else null;
-    }
+    image_files: collections.SafeList(base.SourceDigest.Range) = .{},
 
     /// Compares a candidate's bytes with an indexed blob's.
     const BlobBytesContext = struct {
@@ -1550,6 +1518,179 @@ pub const ConstStore = struct {
             .evidence_frame_pool = .{},
             .blob_backing = .{},
             .blob_views = .{},
+            .images = .{},
+            .image_bytes = .{},
+            .image_pointers = .{},
+        };
+    }
+
+    /// What an image is made of (`appendImage`).
+    pub const ImageInput = struct {
+        bytes: []const u8,
+        pointers: []const u32,
+        files: []const base.SourceDigest.Range = &.{},
+        alignment: u32,
+        root_size: u32,
+        root_type: ConstTypeId,
+        layout_digest: [32]u8,
+        /// The identity of `root_type` (`ConstTypeStore.identityDigest`).
+        type_digest: [32]u8,
+    };
+
+    /// The digest of an image: of its type's identity, its layout digest,
+    /// block and pointer offsets. Two values with the same layout and bytes
+    /// at different types (`[A, B]` and `[C, D]`, or two nominal types with
+    /// one backing) are different values, so their digests differ.
+    pub fn imageDigest(input: ImageInput) [32]u8 {
+        var hasher = base.Sha256.init(.{});
+        hasher.update("roc.const.image.v2");
+        hasher.update(&input.type_digest);
+        hasher.update(&input.layout_digest);
+        hasher.update(std.mem.asBytes(&input.root_size));
+        hasher.update(std.mem.asBytes(&@as(u64, input.bytes.len)));
+        hasher.update(input.bytes);
+        hasher.update(std.mem.asBytes(&@as(u64, input.pointers.len)));
+        for (input.pointers) |offset| hasher.update(std.mem.asBytes(&offset));
+        return hasher.finalResult();
+    }
+
+    /// Store an image as the value of a new node, computing its digest.
+    pub fn appendImage(self: *ConstStore, input: ImageInput) Allocator.Error!ConstNodeId {
+        const image_id = try self.appendImageData(input);
+        const node = try self.reserve();
+        self.values.items()[@backingInt(node)] = .{ .image = image_id };
+        return node;
+    }
+
+    /// Store an image as the value of `node`, a node `reserve` returned: a
+    /// part holding no function of a value that holds one.
+    pub fn fillImage(self: *ConstStore, node: ConstNodeId, input: ImageInput) Allocator.Error!void {
+        const slot_index = @backingInt(node);
+        if (self.values.items()[slot_index] != .pending) constStoreInvariant("const node filled more than once");
+        const image_id = try self.appendImageData(input);
+        self.values.items()[slot_index] = .{ .image = image_id };
+    }
+
+    /// The image `node` holds, when it is a value stored as an image.
+    pub fn imageOf(self: *const ConstStore, node: ConstNodeId) ?ConstImageId {
+        return switch (self.values.items()[@backingInt(node)]) {
+            .image => |image_id| image_id,
+            .pending, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => null,
+        };
+    }
+
+    /// Store an image, computing its digest.
+    pub fn appendImageData(self: *ConstStore, input: ImageInput) Allocator.Error!ConstImageId {
+        if (builtin.mode == .debug) {
+            if (input.root_size > input.bytes.len) constStoreInvariant("an image's root is larger than its block");
+            var previous: ?u32 = null;
+            for (input.pointers) |offset| {
+                if (previous) |before| if (offset <= before) constStoreInvariant("an image's pointer words are not ascending");
+                if (@as(usize, offset) + image_word_size > input.bytes.len) constStoreInvariant("an image's pointer word is past its block");
+                if (std.mem.readInt(u64, input.bytes[offset..][0..image_word_size], .little) > input.bytes.len) constStoreInvariant("an image's pointer is past its block");
+                previous = offset;
+            }
+        }
+        const bytes = try artifact_serialize.appendSpan(ConstRange, u8, &self.image_bytes, self.allocator, input.bytes);
+        const pointers = try artifact_serialize.appendSpan(ConstRange, u32, &self.image_pointers, self.allocator, input.pointers);
+        const files = try artifact_serialize.appendSpan(ConstRange, base.SourceDigest.Range, &self.image_files, self.allocator, input.files);
+        const image_id: ConstImageId = @fromBackingInt(std.math.cast(u32, self.images.items().len) orelse return error.OutOfMemory);
+        _ = try self.images.append(self.allocator, .{
+            .bytes = bytes,
+            .pointers = pointers,
+            .files = files,
+            .alignment = input.alignment,
+            .root_size = input.root_size,
+            .root_type = input.root_type,
+            .layout_digest = input.layout_digest,
+            .digest = imageDigest(input),
+        });
+        return image_id;
+    }
+
+    /// The image `id`, its pools resolved.
+    pub fn image(self: *const ConstStore, id: ConstImageId) ConstImageView {
+        const stored = self.images.items()[@backingInt(id)];
+        return .{
+            .bytes = self.image_bytes.items()[stored.bytes.start .. stored.bytes.start + stored.bytes.len],
+            .pointers = self.image_pointers.items()[stored.pointers.start .. stored.pointers.start + stored.pointers.len],
+            .files = self.image_files.items()[stored.files.start .. stored.files.start + stored.files.len],
+            .alignment = stored.alignment,
+            .root_size = stored.root_size,
+            .root_type = stored.root_type,
+            .layout_digest = stored.layout_digest,
+            .digest = stored.digest,
+        };
+    }
+
+    /// The literal form of image `id` (`ImageLiteral`), read through its
+    /// root type, whose tag names are in its module's name store; null for a
+    /// value that has none.
+    pub fn imageLiteral(self: *const ConstStore, id: ConstImageId) ?ImageLiteral {
+        const view = self.image(id);
+        const bytes = view.rootBytes();
+        var ty = view.root_type;
+        while (true) switch (self.type_store.get(ty)) {
+            .named => |named| ty = (named.backing.get() orelse return null).ty,
+            .primitive => |primitive| return switch (primitive) {
+                .str => blk: {
+                    const text = view.strAt(0);
+                    break :blk .{ .str = .{
+                        .bytes = text,
+                        .capacity = view.strCapacityAt(0),
+                        .image = id,
+                        .file = if (text.len == 0) null else view.fileAt(@intCast(@intFromPtr(text.ptr) - @intFromPtr(view.bytes.ptr)), text.len),
+                    } };
+                },
+                .u8 => .{ .scalar = .{ .u8 = bytes[0] } },
+                .i8 => .{ .scalar = .{ .i8 = @bitCast(bytes[0]) } },
+                .u16 => .{ .scalar = .{ .u16 = std.mem.readInt(u16, bytes[0..2], .little) } },
+                .i16 => .{ .scalar = .{ .i16 = std.mem.readInt(i16, bytes[0..2], .little) } },
+                .u32 => .{ .scalar = .{ .u32 = std.mem.readInt(u32, bytes[0..4], .little) } },
+                .i32 => .{ .scalar = .{ .i32 = std.mem.readInt(i32, bytes[0..4], .little) } },
+                .u64 => .{ .scalar = .{ .u64 = std.mem.readInt(u64, bytes[0..8], .little) } },
+                .i64 => .{ .scalar = .{ .i64 = std.mem.readInt(i64, bytes[0..8], .little) } },
+                .u128 => .{ .scalar = .{ .u128 = std.mem.readInt(u128, bytes[0..16], .little) } },
+                .i128 => .{ .scalar = .{ .i128 = std.mem.readInt(i128, bytes[0..16], .little) } },
+                .f32 => .{ .scalar = .{ .f32_bits = std.mem.readInt(u32, bytes[0..4], .little) } },
+                .f64 => .{ .scalar = .{ .f64_bits = std.mem.readInt(u64, bytes[0..8], .little) } },
+                .dec => .{ .scalar = .{ .dec_bits = std.mem.readInt(i128, bytes[0..16], .little) } },
+                // Bool is a named tag union in a stored type.
+                .bool => constStoreInvariant("a stored type holds a primitive Bool"),
+                // A vector's scalar is its 128 bits.
+                .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => .{ .scalar = .{ .u128 = std.mem.readInt(u128, bytes[0..16], .little) } },
+            },
+            .tag_union => |range| {
+                const tags = self.type_store.tagSpan(range);
+                // The union's every payload is zero-sized exactly when its
+                // value is its discriminant alone.
+                if (bytes.len != layout_shape.discriminantSize(tags.len)) return null;
+                // The discriminant is the index of the tag among the union's
+                // tags in byte-wise name order, which is the order a stored
+                // tag union lists them in; a union of one tag has none.
+                const index: usize = switch (bytes.len) {
+                    0 => 0,
+                    1 => bytes[0],
+                    2 => std.mem.readInt(u16, bytes[0..2], .little),
+                    else => constStoreInvariant("a discriminant-only tag union's image is wider than its discriminant"),
+                };
+                if (index >= tags.len) constStoreInvariant("an image's discriminant names no tag of its type");
+                const tag = tags[index];
+                if (tag.payloads.len != 0) return null;
+                return .{ .tag = tag.name };
+            },
+            .record, .tuple, .list, .box, .func, .erased, .zst => return null,
+        };
+    }
+
+    /// The primitive image `id`'s root type is, through any named types, or
+    /// null when it is not one.
+    pub fn imageRootPrimitive(self: *const ConstStore, id: ConstImageId) ?Primitive {
+        var ty = self.image(id).root_type;
+        while (true) switch (self.type_store.get(ty)) {
+            .named => |named| ty = (named.backing.get() orelse return null).ty,
+            .primitive => |primitive| return primitive,
+            .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
         };
     }
 
@@ -1576,12 +1717,7 @@ pub const ConstStore = struct {
             // `reserve` writes the `.pending` placeholder directly; `fill` always supplies
             // a concrete value, so filling a node *with* `.pending` is an invariant break.
             .pending => constStoreInvariant("cannot fill a const node with a pending value"),
-            .zst => .zst,
-            .scalar => |s| .{ .scalar = s },
-            .str => |s| blk: {
-                if (s.capacity < self.blobData(s.bytes).len) constStoreInvariant("string capacity is below its length");
-                break :blk .{ .str = s };
-            },
+            .image => constStoreInvariant("an image is stored by appendImage, which computes its digest"),
             .crash => |s| .{ .crash = s },
             .checked_error => |s| .{ .checked_error = s },
             .box => |n| .{ .box = n },
@@ -1593,7 +1729,6 @@ pub const ConstStore = struct {
                 break :blk .{ .list = .{
                     .items = switch (list.items) {
                         .nodes => |items| .{ .nodes = try self.appendNodes(items) },
-                        .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
                         .empty => .empty,
                     },
                     .capacity = list.capacity,
@@ -1765,22 +1900,20 @@ pub const ConstStore = struct {
     /// as `addBlobData` interns a copy of it; nothing else may touch the blob
     /// table in between.
     pub fn reserveBlobData(self: *ConstStore, len: usize) Allocator.Error![]u8 {
-        const owned = &self.blob_backing.owned;
-        const start: usize = owned.length;
-        try owned.resize(self.allocator, start + len);
-        return owned.items()[start..];
+        const start: usize = self.blob_backing.length;
+        try self.blob_backing.resize(self.allocator, start + len);
+        return self.blob_backing.items()[start..];
     }
 
     /// Intern the `len` bytes written into the space `reserveBlobData`
     /// returned, releasing that space when equal bytes are already interned.
     pub fn commitBlobData(self: *ConstStore, len: usize) Allocator.Error!ConstBlobDataId {
-        const owned = &self.blob_backing.owned;
-        const owned_start = owned.items().len - len;
-        errdefer owned.shrinkRetainingCapacity(owned_start);
-        const bytes = owned.items()[owned_start..];
+        const start = self.blob_backing.items().len - len;
+        errdefer self.blob_backing.shrinkRetainingCapacity(start);
+        const bytes = self.blob_backing.items()[start..];
         const hash = blobHash(bytes);
         if (self.blob_index.find(hash, BlobBytesContext{ .store = self, .bytes = bytes })) |existing| {
-            owned.shrinkRetainingCapacity(owned_start);
+            self.blob_backing.shrinkRetainingCapacity(start);
             return @fromBackingInt(existing);
         }
 
@@ -1788,7 +1921,7 @@ pub const ConstStore = struct {
         // An empty blob owns no backing, as `artifact_serialize.appendSpan`
         // records it.
         const view: ConstRange = if (len == 0) .{ .start = 0, .len = 0 } else .{
-            .start = std.math.cast(u32, self.blob_backing.len() - len) orelse return error.OutOfMemory,
+            .start = std.math.cast(u32, start) orelse return error.OutOfMemory,
             .len = std.math.cast(u32, len) orelse return error.OutOfMemory,
         };
         _ = try self.blob_views.append(self.allocator, view);
@@ -1802,37 +1935,10 @@ pub const ConstStore = struct {
         if (self.blob_index.find(hash, BlobBytesContext{ .store = self, .bytes = bytes })) |existing| return @fromBackingInt(existing);
 
         const raw_id = std.math.cast(u32, self.blob_views.items().len) orelse return error.OutOfMemory;
-        const owned = &self.blob_backing.owned;
-        const owned_len = owned.items().len;
-        // An empty blob owns no backing, as `artifact_serialize.appendSpan`
-        // records it.
-        const view: ConstRange = if (bytes.len == 0) .{ .start = 0, .len = 0 } else view: {
-            const start = std.math.cast(u32, self.blob_backing.len()) orelse return error.OutOfMemory;
-            const len = std.math.cast(u32, bytes.len) orelse return error.OutOfMemory;
-            _ = std.math.add(u32, start, len) catch return error.OutOfMemory;
-            _ = try owned.appendSlice(self.allocator, bytes);
-            break :view .{ .start = start, .len = len };
-        };
-        errdefer owned.shrinkRetainingCapacity(owned_len);
+        const backing_len = self.blob_backing.items().len;
+        const view = try artifact_serialize.appendSpan(ConstRange, u8, &self.blob_backing, self.allocator, bytes);
+        errdefer self.blob_backing.shrinkRetainingCapacity(backing_len);
         _ = try self.blob_views.append(self.allocator, view);
-        errdefer _ = self.blob_views.pop();
-        try self.blob_index.insertNew(self.allocator, hash, raw_id);
-        return @fromBackingInt(raw_id);
-    }
-
-    /// `addBlobData` for bytes this store borrows rather than copies: a
-    /// checked literal of the store's own module, held by the module's
-    /// string literal store (`BlobBacking`).
-    pub fn addBorrowedBlobData(self: *ConstStore, bytes: []const u8) Allocator.Error!ConstBlobDataId {
-        if (bytes.len == 0) return self.addBlobData(bytes);
-        const hash = blobHash(bytes);
-        if (self.blob_index.find(hash, BlobBytesContext{ .store = self, .bytes = bytes })) |existing| return @fromBackingInt(existing);
-
-        const raw_id = std.math.cast(u32, self.blob_views.items().len) orelse return error.OutOfMemory;
-        try self.blob_views.ensureUnusedCapacity(self.allocator, 1);
-        const view = try self.blob_backing.appendBorrowed(self.allocator, bytes);
-        errdefer self.blob_backing.popBorrowed();
-        _ = self.blob_views.appendAssumeCapacity(view);
         errdefer _ = self.blob_views.pop();
         try self.blob_index.insertNew(self.allocator, hash, raw_id);
         return @fromBackingInt(raw_id);
@@ -1850,9 +1956,7 @@ pub const ConstStore = struct {
     pub fn get(self: *const ConstStore, id: ConstNodeId) ConstValue {
         return switch (self.values.items()[@backingInt(id)]) {
             .pending => .pending,
-            .zst => .zst,
-            .scalar => |s| .{ .scalar = s },
-            .str => |s| .{ .str = s },
+            .image => |image_id| .{ .image = image_id },
             .crash => |s| .{ .crash = s },
             .checked_error => |s| .{ .checked_error = s },
             .box => |n| .{ .box = n },
@@ -1862,7 +1966,6 @@ pub const ConstStore = struct {
             .list => |list| .{ .list = .{
                 .items = switch (list.items) {
                     .nodes => |r| .{ .nodes = self.nodeSlice(r) },
-                    .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
                     .empty => .empty,
                 },
                 .capacity = list.capacity,
@@ -1900,7 +2003,7 @@ pub const ConstStore = struct {
             constStoreInvariant("blob backing id is out of range");
         }
         const view = self.blob_views.items()[index];
-        return self.blob_backing.slice(view);
+        return self.blob_backing.items()[view.start .. view.start + view.len];
     }
 
     /// Relocatable serialized form. Every field is a `SafeList`-equivalent POD
@@ -1916,15 +2019,18 @@ pub const ConstStore = struct {
         evidence_target_pool: artifact_serialize.SerializedSlice(ConstFnTargetEvidence) = .{},
         evidence_structural_pool: artifact_serialize.SerializedSlice(ConstFnStructuralEvidence) = .{},
         evidence_frame_pool: artifact_serialize.SerializedSlice(ConstFnEvidenceFrame) = .{},
-        blob_backing: BlobBacking.Serialized = .{},
+        blob_backing: artifact_serialize.SerializedSlice(u8) = .{},
         blob_views: artifact_serialize.SerializedSlice(ConstRange) = .{},
         blob_index: collections.HashedProbeTable.Serialized = .{},
-        file_blobs: artifact_serialize.SerializedSlice(FileBlob) = .{},
+        images: artifact_serialize.SerializedSlice(ConstImage) = .{},
+        image_bytes: artifact_serialize.SerializedSlice(u8) = .{},
+        image_pointers: artifact_serialize.SerializedSlice(u32) = .{},
+        image_files: artifact_serialize.SerializedSlice(base.SourceDigest.Range) = .{},
 
         comptime {
-            // 11 value/function side lists + 7 nested type-store lists + the
-            // blob index's cells and whole-file identities.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 20);
+            // 15 value/function/image side lists + 7 nested type-store lists
+            // + the blob index's cells.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 23);
         }
 
         /// Every blob is indexed, so the index holds exactly as many entries
@@ -1964,15 +2070,13 @@ pub const ConstStore = struct {
             if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
             switch (left) {
                 .pending, .fn_value => return false,
+                .image => |id| if (!sameBytes(&self.image(id).digest, &other.image(right.image).digest)) return false,
                 .boxy_fn => |function| {
                     const right_function = right.boxy_fn;
                     if (!sameBytes(self.blobData(function.recipe), other.blobData(right_function.recipe))) return false;
                     if (function.captures.len != right_function.captures.len) return false;
                     for (function.captures, right_function.captures) |l, r| try pending.append(scratch, .{ .left = l, .right = r });
                 },
-                .zst => {},
-                .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
-                .str => |str| if (str.capacity != right.str.capacity or !sameBytes(self.blobData(str.bytes), other.blobData(right.str.bytes))) return false,
                 .crash => |str| if (!sameBytes(self.blobData(str), other.blobData(right.crash))) return false,
                 .checked_error => |str| if (!sameBytes(self.blobData(str), other.blobData(right.checked_error))) return false,
                 .box => |payload| try pending.append(scratch, .{ .left = payload, .right = right.box }),
@@ -1988,11 +2092,6 @@ pub const ConstStore = struct {
                         .nodes => |items| {
                             if (items.len != right_list.items.nodes.len) return false;
                             for (items, right_list.items.nodes) |l, r| try pending.append(scratch, .{ .left = l, .right = r });
-                        },
-                        .packed_bytes => |packed_list| {
-                            const r = right_list.items.packed_bytes;
-                            if (packed_list.len != r.len or packed_list.element != r.element or packed_list.product_width != r.product_width) return false;
-                            if (!sameBytes(self.blobData(packed_list.bytes), other.blobData(r.bytes))) return false;
                         },
                         .empty => {},
                     }
@@ -2064,13 +2163,9 @@ pub const ConstStore = struct {
             hasher.update(@tagName(std.meta.activeTag(value)));
             hasher.update(&[_]u8{0});
             switch (value) {
-                .pending, .zst => {},
+                .pending => {},
+                .image => |id| hasher.update(&self.image(id).digest),
                 .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
-                .scalar => |scalar| hashScalar(hasher, scalar),
-                .str => |str| {
-                    hasher.update(std.mem.asBytes(&str.capacity));
-                    hashBytes(hasher, self.blobData(str.bytes));
-                },
                 inline .crash, .checked_error => |str| hashBytes(hasher, self.blobData(str)),
                 .box => |payload| try pending.append(scratch, payload),
                 .nominal => |nominal| {
@@ -2082,13 +2177,6 @@ pub const ConstStore = struct {
                         hasher.update(std.mem.asBytes(&list.capacity));
                         hasher.update(std.mem.asBytes(&@as(u32, @intCast(items.len))));
                         try pending.appendSlice(scratch, items);
-                    },
-                    .packed_bytes => |packed_list| {
-                        hasher.update(std.mem.asBytes(&list.capacity));
-                        hasher.update(std.mem.asBytes(&packed_list.len));
-                        hasher.update(std.mem.asBytes(&packed_list.product_width));
-                        hasher.update(if (packed_list.element) |element| @tagName(element) else "product");
-                        hashBytes(hasher, self.blobData(packed_list.bytes));
                     },
                     .empty => hasher.update(std.mem.asBytes(&list.capacity)),
                 },
@@ -2170,7 +2258,10 @@ pub const ConstStore = struct {
         self.blob_backing.deinit(self.allocator);
         self.blob_views.deinit(self.allocator);
         self.blob_index.deinit(self.allocator);
-        self.file_blobs.deinit(self.allocator);
+        self.images.deinit(self.allocator);
+        self.image_bytes.deinit(self.allocator);
+        self.image_pointers.deinit(self.allocator);
+        self.image_files.deinit(self.allocator);
         self.* = ConstStore.init(self.allocator);
     }
 
@@ -2222,10 +2313,7 @@ pub const ConstStore = struct {
                 const mark = pending.items.len;
                 switch (self.get(node.id)) {
                     .pending => constStoreInvariant("completed store contains a pending node"),
-                    .zst, .scalar => {},
-                    .str => |str| {
-                        _ = self.strBytes(str.bytes);
-                    },
+                    .image => {},
                     .crash, .checked_error => |str| {
                         _ = self.strBytes(str);
                     },
@@ -2235,13 +2323,6 @@ pub const ConstStore = struct {
                     .list => |list| switch (list.items) {
                         .nodes => |children| for (children) |child| {
                             try pending.append(self.allocator, .{ .value = .{ .id = child, .delayed_depth = node.delayed_depth } });
-                        },
-                        .packed_bytes => |packed_list| {
-                            const bytes = self.blobData(packed_list.bytes);
-                            const expected_len = @as(u64, packed_list.len) * packed_list.byteWidth();
-                            if (bytes.len != expected_len) {
-                                constStoreInvariant("packed list byte length differs from its element encoding");
-                            }
                         },
                         .empty => {},
                     },
@@ -2292,6 +2373,56 @@ fn constStoreInvariant(comptime message: []const u8) noreturn {
     base.invariant("const store invariant violated: {s}", .{message});
 }
 
+/// The images of a compilation's constant stores by digest, for the
+/// constant pool a link or an in-process loader places them from (design.md
+/// "Constant Pool"). A store is registered once; an image it stores after
+/// registration is indexed at the first lookup that misses, so the index
+/// follows stores evaluation is still filling. Equal digests name equal
+/// images, so whichever store an image is found in, it is the same image.
+pub const ImageIndex = struct {
+    allocator: Allocator,
+    stores: std.ArrayList(*const ConstStore) = .empty,
+    /// For each registered store, how many of its images are indexed.
+    indexed: std.ArrayList(u32) = .empty,
+    by_digest: std.AutoHashMapUnmanaged([32]u8, Location) = .empty,
+
+    const Location = struct { store: u32, image: ConstImageId };
+
+    pub fn init(allocator: Allocator) ImageIndex {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *ImageIndex) void {
+        self.stores.deinit(self.allocator);
+        self.indexed.deinit(self.allocator);
+        self.by_digest.deinit(self.allocator);
+    }
+
+    /// Register `store`, once however often it is registered.
+    pub fn addStore(self: *ImageIndex, store: *const ConstStore) Allocator.Error!void {
+        for (self.stores.items) |existing| if (existing == store) return;
+        try self.stores.ensureUnusedCapacity(self.allocator, 1);
+        try self.indexed.ensureUnusedCapacity(self.allocator, 1);
+        self.stores.appendAssumeCapacity(store);
+        self.indexed.appendAssumeCapacity(0);
+    }
+
+    /// The image whose digest is `digest`, in any registered store.
+    pub fn find(self: *ImageIndex, digest: [32]u8) Allocator.Error!?ConstImageView {
+        if (self.by_digest.get(digest)) |found| return self.stores.items[found.store].image(found.image);
+        for (self.stores.items, self.indexed.items, 0..) |store, *indexed, store_index| {
+            const count: u32 = @intCast(store.images.items().len);
+            while (indexed.* < count) : (indexed.* += 1) {
+                const id: ConstImageId = @fromBackingInt(indexed.*);
+                const gop = try self.by_digest.getOrPut(self.allocator, store.image(id).digest);
+                if (!gop.found_existing) gop.value_ptr.* = .{ .store = @intCast(store_index), .image = id };
+            }
+        }
+        const found = self.by_digest.get(digest) orelse return null;
+        return self.stores.items[found.store].image(found.image);
+    }
+};
+
 test "const store declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
@@ -2303,9 +2434,9 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     var store = ConstStore.init(gpa);
     defer store.deinit();
 
-    // Scalars + a list + a tag (exercises node_pool + tag_name_pool).
-    const a = try store.append(.{ .scalar = .{ .u64 = 7 } });
-    const b = try store.append(.{ .scalar = .{ .i32 = -3 } });
+    // Leaves + a list + a tag (exercises node_pool + tag_name_pool).
+    const a = try store.append(.{ .list = .{ .items = .empty, .capacity = 7 } });
+    const b = try store.append(.{ .list = .{ .items = .empty, .capacity = 3 } });
     // The store copies inputs into its pools and never frees them, so this test
     // owns and frees the slices it hands to `append`/`appendFn`.
     const list_items = try gpa.dupe(ConstNodeId, &.{ a, b });
@@ -2316,22 +2447,11 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     const tag_name = try gpa.dupe(u8, "Ok");
     defer gpa.free(tag_name);
     const tag = try store.append(.{ .tag = .{ .tag_name = tag_name, .payloads = tag_payloads } });
-    // Strings and packed lists share one content-deduplicated blob backing.
+    // Strings share one content-deduplicated blob backing.
     const sd = try store.addBlobData("hello world");
     try std.testing.expectEqual(sd, try store.addBlobData("hello world"));
     const hello = try store.addBlobData("hello");
-    const str = try store.append(.{ .str = .{ .bytes = hello, .capacity = 40 } });
-    const packed_list = try store.append(.{ .list = .{ .items = .{ .packed_bytes = .{
-        .bytes = sd,
-        .len = 11,
-        .element = .u8,
-    } }, .capacity = 64 } });
-    const product_list = try store.append(.{ .list = .exact(.{ .packed_bytes = .{
-        .bytes = try store.addBlobData("ello world"),
-        .len = 2,
-        .element = null,
-        .product_width = 5,
-    } }) });
+    const str = try store.append(.{ .crash = hello });
     const empty_list = try store.append(.{ .list = .{ .items = .empty, .capacity = 4096 } });
     // A function value with a capture (exercises capture_pool).
     const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
@@ -2426,8 +2546,8 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     defer loaded.deinit();
 
     // Scalars
-    try std.testing.expectEqual(@as(u64, 7), loaded.get(a).scalar.u64);
-    try std.testing.expectEqual(@as(i32, -3), loaded.get(b).scalar.i32);
+    try std.testing.expectEqual(@as(u64, 7), loaded.get(a).list.capacity);
+    try std.testing.expectEqual(@as(u64, 3), loaded.get(b).list.capacity);
     // List range resolves to the same node ids
     try std.testing.expectEqualSlices(ConstNodeId, &.{ a, b }, loaded.get(list).list.items.nodes);
     try std.testing.expectEqual(@as(u64, 8), loaded.get(list).list.capacity);
@@ -2436,20 +2556,10 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expectEqualStrings("Ok", loaded_tag.tag_name);
     try std.testing.expectEqualSlices(ConstNodeId, &.{a}, loaded_tag.payloads);
     // String backing
-    try std.testing.expectEqualStrings("hello", loaded.strBytes(loaded.get(str).str.bytes));
-    try std.testing.expectEqual(@as(u64, 40), loaded.get(str).str.capacity);
-    const loaded_packed = loaded.get(packed_list).list.items.packed_bytes;
-    try std.testing.expectEqual(@as(u64, 64), loaded.get(packed_list).list.capacity);
-    try std.testing.expectEqual(sd, loaded_packed.bytes);
-    try std.testing.expectEqualStrings("hello world", loaded.blobData(loaded_packed.bytes));
-    const loaded_product = loaded.get(product_list).list.items.packed_bytes;
-    try std.testing.expectEqual(@as(u64, 2), loaded.get(product_list).list.capacity);
-    try std.testing.expectEqual(@as(?ConstPackedScalar, null), loaded_product.element);
-    try std.testing.expectEqual(@as(u32, 5), loaded_product.byteWidth());
+    try std.testing.expectEqualStrings("hello", loaded.strBytes(loaded.get(str).crash));
+    try std.testing.expectEqualStrings("hello world", loaded.blobData(sd));
     try std.testing.expect(loaded.get(empty_list).list.items == .empty);
     try std.testing.expectEqual(@as(u64, 4096), loaded.get(empty_list).list.capacity);
-    try std.testing.expectEqual(@as(u32, 2), loaded_product.len);
-    try std.testing.expectEqualStrings("ello world", loaded.blobData(loaded_product.bytes));
     // Function captures
     const loaded_fn = loaded.getFn(fn_id);
     try std.testing.expectEqual(@as(usize, 2), loaded_fn.captures.len);
@@ -2519,6 +2629,59 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     var corrupt_range = loaded_fn;
     corrupt_range.evidence_frames = &corrupt_range_frames;
     try std.testing.expect(!try ConstStore.evidenceFramesValid(std.testing.allocator, corrupt_range));
+}
+
+test "an image's digest covers its type: equal bytes at unions with other tag names, or nominal types, differ" {
+    const gpa = std.testing.allocator;
+    var type_names = names.NameStore.init(gpa);
+    defer type_names.deinit();
+    var types = ConstTypeStore.init(gpa);
+    defer types.deinit();
+    const a = try type_names.internTagLabel("A");
+    const b = try type_names.internTagLabel("B");
+    const c = try type_names.internTagLabel("C");
+    const d = try type_names.internTagLabel("D");
+    const ab = try types.append(.{ .tag_union = try types.appendTagSpan(&.{
+        .{ .name = a, .checked_name = a, .payloads = .{} },
+        .{ .name = b, .checked_name = b, .payloads = .{} },
+    }) });
+    const cd = try types.append(.{ .tag_union = try types.appendTagSpan(&.{
+        .{ .name = c, .checked_name = c, .payloads = .{} },
+        .{ .name = d, .checked_name = d, .payloads = .{} },
+    }) });
+    const ab_again = try types.append(.{ .tag_union = try types.appendTagSpan(&.{
+        .{ .name = a, .checked_name = a, .payloads = .{} },
+        .{ .name = b, .checked_name = b, .payloads = .{} },
+    }) });
+    const u8_ty = try types.append(.{ .primitive = .u8 });
+    const module: [32]u8 = @splat(0x11);
+    var nominals: [2]ConstTypeId = undefined;
+    for (&nominals, [_][]const u8{ "Celsius", "Fahrenheit" }) |*nominal, name| nominal.* = try types.append(.{ .named = .{
+        .named_type = .{ .module = .{} },
+        .def = .{ .module = try type_names.internModuleIdentity(&module), .type_name = try type_names.internTypeName(name) },
+        .kind = .nominal,
+        .args = .{},
+        .backing = .some(.{ .ty = u8_ty, .use = .inspectable }),
+    } });
+
+    const digest = struct {
+        fn of(store: *const ConstTypeStore, store_names: *const names.NameStore, ty: ConstTypeId) Allocator.Error![32]u8 {
+            const bytes = [_]u8{0};
+            return ConstStore.imageDigest(.{
+                .bytes = &bytes,
+                .pointers = &.{},
+                .alignment = 1,
+                .root_size = 1,
+                .root_type = ty,
+                .layout_digest = @splat(0x77),
+                .type_digest = try store.identityDigest(std.testing.allocator, store_names, ty),
+            });
+        }
+    }.of;
+    try std.testing.expectEqual(try digest(&types, &type_names, ab), try digest(&types, &type_names, ab_again));
+    try std.testing.expect(!std.meta.eql(try digest(&types, &type_names, ab), try digest(&types, &type_names, cd)));
+    try std.testing.expect(!std.meta.eql(try digest(&types, &type_names, nominals[0]), try digest(&types, &type_names, nominals[1])));
+    try std.testing.expect(!std.meta.eql(try digest(&types, &type_names, nominals[0]), try digest(&types, &type_names, u8_ty)));
 }
 
 test "ConstTypeStore: one translation copies each shared type once and the copies survive serialization" {
@@ -2673,8 +2836,6 @@ test "a loaded ConstStore keeps its blob ids and deduplicates new blobs against 
     defer store.deinit();
     const hello = try store.addBlobData("hello");
     const world = try store.addBlobData("world");
-    const digest = base.SourceDigest.of("hello");
-    try store.recordFileBlob(hello, digest);
     try std.testing.expectEqual(hello, try store.addBlobData("hello"));
 
     var arena = base.SingleThreadArena.init(gpa);
@@ -2692,8 +2853,6 @@ test "a loaded ConstStore keeps its blob ids and deduplicates new blobs against 
     defer loaded.deinit();
     try std.testing.expectEqual(hello, try loaded.addBlobData("hello"));
     try std.testing.expectEqual(world, try loaded.addBlobData("world"));
-    try std.testing.expectEqual(digest, loaded.fileDigest(hello).?);
-    try std.testing.expect(loaded.fileDigest(world) == null);
     const fresh = try loaded.addBlobData("fresh");
     try std.testing.expectEqual(fresh, try loaded.addBlobData("fresh"));
     const reserved = try loaded.reserveBlobData(5);
@@ -2706,60 +2865,6 @@ test "a loaded ConstStore keeps its blob ids and deduplicates new blobs against 
     try std.testing.expectError(error.CorruptArtifact, collections.validateSerializedRelocations(ConstStore.Serialized, serialized, buffer.len));
 }
 
-test "a store borrowing blobs serializes exactly as a store owning them and holds no copy" {
-    const CompactWriter = collections.CompactWriter;
-    const gpa = std.testing.allocator;
-    const literal = "a checked literal the store borrows rather than copies";
-    const literal_two = "another borrowed literal";
-
-    var borrowing = ConstStore.init(gpa);
-    defer borrowing.deinit();
-    var owning = ConstStore.init(gpa);
-    defer owning.deinit();
-    const ids = [_]ConstBlobDataId{
-        try borrowing.addBlobData("owned first"),
-        try borrowing.addBorrowedBlobData(literal),
-        try borrowing.addBlobData(""),
-        try borrowing.addBorrowedBlobData(literal_two),
-        try borrowing.addBlobData("owned last"),
-    };
-    // Equal bytes name the one blob whichever way either was added.
-    try std.testing.expectEqual(ids[1], try borrowing.addBlobData(literal));
-    try std.testing.expectEqual(ids[4], try borrowing.addBorrowedBlobData("owned last"));
-    const reserved = try borrowing.reserveBlobData(literal_two.len);
-    @memcpy(reserved, literal_two);
-    try std.testing.expectEqual(ids[3], try borrowing.commitBlobData(literal_two.len));
-    for ([_][]const u8{ "owned first", literal, "", literal_two, "owned last" }) |bytes| _ = try owning.addBlobData(bytes);
-
-    // The borrowed blobs are the literals themselves.
-    try std.testing.expectEqual(@intFromPtr(literal.ptr), @intFromPtr(borrowing.blobData(ids[1]).ptr));
-    try std.testing.expectEqual(@intFromPtr(literal_two.ptr), @intFromPtr(borrowing.blobData(ids[3]).ptr));
-    try std.testing.expectEqualStrings("owned first", borrowing.blobData(ids[0]));
-    try std.testing.expectEqualStrings("owned last", borrowing.blobData(ids[4]));
-    try std.testing.expectEqual(@as(usize, "owned first".len + "owned last".len), borrowing.blob_backing.owned.items().len);
-
-    var arena = base.SingleThreadArena.init(gpa);
-    defer arena.deinit();
-    var buffers: [2][]align(16) u8 = undefined;
-    for ([_]*const ConstStore{ &borrowing, &owning }, &buffers) |store, *buffer| {
-        var writer = CompactWriter.init();
-        const header = try writer.appendAlloc(arena.allocator(), ConstStore.Serialized);
-        try header.serialize(store, arena.allocator(), &writer);
-        buffer.* = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
-        _ = try writer.writeToBuffer(buffer.*);
-    }
-    defer for (buffers) |buffer| gpa.free(buffer);
-    try std.testing.expectEqualSlices(u8, buffers[1], buffers[0]);
-
-    const serialized: *ConstStore.Serialized = @ptrCast(@alignCast(buffers[0].ptr));
-    try collections.validateSerializedRelocations(ConstStore.Serialized, serialized, buffers[0].len);
-    var loaded = serialized.deserialize(@intFromPtr(buffers[0].ptr), gpa);
-    defer loaded.deinit();
-    for (ids, [_][]const u8{ "owned first", literal, "", literal_two, "owned last" }) |id, bytes| {
-        try std.testing.expectEqualStrings(bytes, loaded.blobData(id));
-    }
-}
-
 test "ConstStore.appendFn: no leak or double-free under allocation failure" {
     // `appendFn` copies `captures` into the pool and does not free the input; the
     // caller owns it. Drive every allocation in that path to fail in turn and assert
@@ -2769,7 +2874,7 @@ test "ConstStore.appendFn: no leak or double-free under allocation failure" {
         fn run(allocator: Allocator) Allocator.Error!void {
             var store = ConstStore.init(allocator);
             defer store.deinit();
-            const a = try store.append(.{ .scalar = .{ .u64 = 7 } });
+            const a = try store.append(.{ .list = .{ .items = .empty, .capacity = 7 } });
             const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
             const caps = try allocator.dupe(ConstCapture, &.{
                 .{ .id = CaptureId.fromBinder(@fromBackingInt(@intCast(1))), .kind = .lexical, .ty = capture_ty, .value = a },
@@ -2798,14 +2903,6 @@ fn hashBytes(hasher: *base.Sha256, bytes: []const u8) void {
     hasher.update(bytes);
 }
 
-fn hashScalar(hasher: *base.Sha256, scalar: ConstScalar) void {
-    hasher.update(@tagName(std.meta.activeTag(scalar)));
-    hasher.update(&[_]u8{0});
-    switch (scalar) {
-        inline .i8, .i16, .i32, .i64, .i128, .u8, .u16, .u32, .u64, .u128, .f32_bits, .f64_bits, .dec_bits => |value| hasher.update(std.mem.asBytes(&value)),
-    }
-}
-
 test "ConstStore.hashGraph: walks in the caller's scratch, not the store's allocator" {
     // A completed store is hashed from several threads at once while its own
     // allocator can be a single-threaded arena owned by its module. The store
@@ -2814,7 +2911,7 @@ test "ConstStore.hashGraph: walks in the caller's scratch, not the store's alloc
     const gpa = std.testing.allocator;
     var store = ConstStore.init(gpa);
     defer store.deinit();
-    const a = try store.append(.{ .scalar = .{ .u64 = 7 } });
+    const a = try store.append(.{ .list = .{ .items = .empty, .capacity = 7 } });
     const b = try store.append(.{ .box = a });
     const payloads = [_]ConstNodeId{ a, b };
     const tag = try store.append(.{ .tag = .{ .tag_name = "Pair", .payloads = &payloads } });

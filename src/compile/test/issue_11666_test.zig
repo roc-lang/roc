@@ -1,6 +1,7 @@
 //! Regression coverage for compile-time lists of custom string literals.
 
 const std = @import("std");
+const base = @import("base");
 const lir = @import("lir");
 const roc_target = @import("roc_target");
 const compile_build = @import("../compile_build.zig");
@@ -14,8 +15,9 @@ const Measurement = struct {
     releases: usize = 0,
 };
 
-/// Counts the reachable statements of each `.boxy` compile-time program as
-/// it is lowered, excluding abandoned rewrite nodes. This measures the
+/// Counts the reachable statements of each compile-time program as it is
+/// lowered, excluding abandoned rewrite nodes: each `.boxy` program and each
+/// stage of a `.lss` evaluation's Solved program. This measures the
 /// actual compile-time program without depending on CPU scheduling, target
 /// instruction selection, or the compiler's optimization level.
 const ProgramMeasure = struct {
@@ -66,7 +68,7 @@ const ProgramMeasure = struct {
     }
 };
 
-fn measureLiteralList(literal_count: usize) TestError!Measurement {
+fn measureLiteralList(literal_count: usize, strategy: base.SpecializationStrategy) TestError!Measurement {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -91,10 +93,10 @@ fn measureLiteralList(literal_count: usize) TestError!Measurement {
     const path = try tmp.dir.realPathFileAlloc(io, "Repro.roc", gpa);
     defer gpa.free(path);
 
-    var build = try compile_build.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
+    var build = try compile_build.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, strategy);
     defer build.deinit();
     var measure: ProgramMeasure = .{};
-    build.boxy_program_observer = .{ .context = &measure, .observe = ProgramMeasure.observe };
+    build.compile_time_program_observer = .{ .context = &measure, .observe = ProgramMeasure.observe };
     try build.build(path);
     const coord = build.coordinator.?;
     try std.testing.expect(!coord.hasUserErrors());
@@ -112,23 +114,25 @@ fn measureLiteralList(literal_count: usize) TestError!Measurement {
         if (root.kind != .constant) continue;
         constants += 1;
         try std.testing.expect(root.payload == .const_node);
-        const value = artifact.const_store.get(root.payload.const_node);
-        try std.testing.expect(value == .list and value.list.items == .nodes);
-        try std.testing.expectEqual(literal_count, value.list.items.nodes.len);
-        for (value.list.items.nodes, 0..) |node, index| {
-            const word = artifact.const_store.get(node);
-            try std.testing.expect(word == .nominal);
-            const bytes = artifact.const_store.get(word.nominal.backing);
-            try std.testing.expect(bytes == .list and bytes.list.items == .packed_bytes);
+        // The list is stored as its image: its descriptor, then its items,
+        // each a nominal over a list of bytes, whose bytes follow.
+        const image = artifact.const_store.image(artifact.const_store.imageOf(root.payload.const_node) orelse return error.TestUnexpectedResult);
+        const word = 8;
+        try std.testing.expectEqual(@as(u64, literal_count), std.mem.readInt(u64, image.bytes[word..][0..word], .little));
+        const items: usize = @intCast(std.mem.readInt(u64, image.bytes[0..word], .little));
+        for (0..literal_count) |index| {
+            const item = image.bytes[items + index * 3 * word ..][0 .. 3 * word];
+            const len: usize = @intCast(std.mem.readInt(u64, item[word..][0..word], .little));
+            const start: usize = @intCast(std.mem.readInt(u64, item[0..word], .little));
             const expected = try std.fmt.allocPrint(gpa, "w{d}", .{index});
             defer gpa.free(expected);
-            try std.testing.expectEqualStrings(expected, artifact.const_store.blobData(bytes.list.items.packed_bytes.bytes));
+            try std.testing.expectEqualStrings(expected, image.bytes[start..][0..len]);
         }
     }
     try std.testing.expectEqual(@as(usize, 1), constants);
 
-    // The constant reads no function value, so the `.boxy` evaluator
-    // completes it (design.md "Compile-Time Evaluation Under `.lss`").
+    // The constant is evaluated by the strategy's own evaluator (design.md
+    // "Compile-Time Evaluation Strategy").
     try std.testing.expect(measure.measurement.statements != 0);
     return measure.measurement;
 }
@@ -137,13 +141,15 @@ test "issue 11666: compile-time from_quote list LIR grows linearly" {
     // https://github.com/roc-lang/roc/issues/11666
     // Doubling a list of independent conversions should double the work,
     // with room for fixed scaffolding. Every stored byte is checked above.
-    const small = try measureLiteralList(64);
-    const large = try measureLiteralList(128);
-    const linear = large.statements <= small.statements * 5 / 2;
-    if (!linear) std.debug.print(
-        "from_quote list CTFE LIR grew nonlinearly: 64/128 literals produced " ++
-            "{d}/{d} reachable statements and {d}/{d} releases\n",
-        .{ small.statements, large.statements, small.releases, large.releases },
-    );
-    try std.testing.expect(linear);
+    for ([_]base.SpecializationStrategy{ .boxy, .lss }) |strategy| {
+        const small = try measureLiteralList(64, strategy);
+        const large = try measureLiteralList(128, strategy);
+        const linear = large.statements <= small.statements * 5 / 2;
+        if (!linear) std.debug.print(
+            "{t} from_quote list CTFE LIR grew nonlinearly: 64/128 literals produced " ++
+                "{d}/{d} reachable statements and {d}/{d} releases\n",
+            .{ strategy, small.statements, large.statements, small.releases, large.releases },
+        );
+        try std.testing.expect(linear);
+    }
 }

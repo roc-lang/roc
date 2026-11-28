@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=A tuple holding references to a polymorphic function, destructured; one element is then used at two types
+description=A tuple constant holding references to a polymorphic function, destructured; one element is then used at two types
 type=snippet
 ~~~
 # SOURCE
@@ -15,23 +15,9 @@ main = {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - generalize_alias_in_tuple.md:7:14:7:17
+NIL
 # PROBLEMS
-~~~clojure
-(reports
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 7 14) (end 7 17))
-		(headline
-			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
-		(document
-			(source-region (file "generalize_alias_in_tuple.md") (start 7 14) (end 7 17) (annotation error) (line-text "    (a(1), a(\"x\"), b(2))"))
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be."))))
-~~~
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
@@ -120,15 +106,16 @@ main = {
 					(p-assign (ident "t"))))
 			(e-tuple
 				(elems
-					(e-call (constraint-fn-var 241)
+					(e-call (constraint-fn-var 248)
 						(e-lookup-local
 							(p-assign (ident "a")))
-						(e-runtime-error (tag "erroneous_value_expr")))
-					(e-call (constraint-fn-var 242)
+						(e-num (value "1")))
+					(e-call (constraint-fn-var 251)
 						(e-lookup-local
 							(p-assign (ident "a")))
-						(e-runtime-error (tag "erroneous_value_expr")))
-					(e-call (constraint-fn-var 243)
+						(e-string
+							(e-literal (string "x"))))
+					(e-call (constraint-fn-var 254)
 						(e-lookup-local
 							(p-assign (ident "b")))
 						(e-num (value "2"))))))))
@@ -138,10 +125,10 @@ main = {
 (inferred-types
 	(defs
 		(patt (type "c -> c"))
-		(patt (type "(Dec -> Dec, Dec -> Dec)"))
-		(patt (type "(Dec, Dec, Dec)")))
+		(patt (type "(c -> c, d -> d)"))
+		(patt (type "(Dec, Str, Dec)")))
 	(expressions
 		(expr (type "c -> c"))
-		(expr (type "(Dec -> Dec, Dec -> Dec)"))
-		(expr (type "(Dec, Dec, Dec)"))))
+		(expr (type "(c -> c, d -> d)"))
+		(expr (type "(Dec, Str, Dec)"))))
 ~~~

@@ -583,6 +583,9 @@ fn collectCases(gpa: std.mem.Allocator, arena: std.mem.Allocator, cases: *std.Ar
     }
     for (eval_tests.tests) |tc| {
         if (tc.opt_in and !include_opt_in) continue;
+        // Every case compiles under every strategy here, so a case ignored
+        // under any one strategy does not run at all.
+        if (tc.ignore != null) continue;
         const expected: ?[]const u8 = switch (tc.expected) {
             // Frontend-problem and compile-time-only cases execute nothing
             // at runtime, so neither strategy is exercised.
@@ -719,6 +722,12 @@ pub fn main(init: std.process.Init) RunnerError!void {
             totals.child_failed,
         },
     );
+
+    std.debug.print("\nignored cases:\n", .{});
+    for (eval_tests.tests) |tc| {
+        const ignore = tc.ignore orelse continue;
+        std.debug.print("  {s} (until https://github.com/roc-lang/roc/issues/{d} is fixed)\n", .{ tc.name, ignore.issue });
+    }
 
     std.debug.print("\nshape coverage exemptions:\n", .{});
     for (corpus.equality_exemptions) |exemption| std.debug.print("  equality {s}: {s}\n", .{ @tagName(exemption.kind), exemption.reason });

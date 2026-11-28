@@ -1,5 +1,6 @@
 //! Numeric source lists must remain compact through their first evaluation.
 const std = @import("std");
+const base = @import("base");
 const check = @import("check");
 const CoreCtx = @import("ctx").CoreCtx;
 const roc_target = @import("roc_target");
@@ -12,8 +13,9 @@ const TestError = compile_build.InitError || compile_build.BuildRootError ||
 
 const Measurement = struct { statements: usize = 0, locals: usize = 0, unpacked_lists: usize = 0 };
 
-/// Measures each `.boxy` compile-time program as it is lowered, before it
-/// runs and before the checked constant can be restored from ConstStore.
+/// Measures each compile-time program as it is lowered, before it runs and
+/// before the checked constant can be restored from ConstStore: each `.boxy`
+/// program and each stage of a `.lss` evaluation's Solved program.
 /// Abandoned rewrite rows count too: even transient IR must not grow with
 /// the number of literal elements.
 const ProgramMeasure = struct {
@@ -41,11 +43,18 @@ const StderrCapture = struct {
     }
 };
 
-fn checkList(source: []const u8, scalar: check.ConstStore.ConstPackedScalar, expected: []const u8) TestError!Measurement {
-    return checkListWithDebug(source, scalar, expected, &.{});
+fn checkList(source: []const u8, scalar: check.ConstStore.ConstPackedScalar, expected: []const u8, strategy: base.SpecializationStrategy) TestError!Measurement {
+    return checkListWithDebug(source, scalar, expected, &.{}, strategy);
 }
 
-fn checkListWithDebug(source: []const u8, scalar: check.ConstStore.ConstPackedScalar, expected: []const u8, messages: []const []const u8) TestError!Measurement {
+/// `checkListWithDebug` under each strategy's compile-time evaluator.
+fn checkListEveryStrategy(source: []const u8, scalar: check.ConstStore.ConstPackedScalar, expected: []const u8, messages: []const []const u8) TestError!void {
+    for ([_]base.SpecializationStrategy{ .boxy, .lss }) |strategy| {
+        _ = try checkListWithDebug(source, scalar, expected, messages, strategy);
+    }
+}
+
+fn checkListWithDebug(source: []const u8, scalar: check.ConstStore.ConstPackedScalar, expected: []const u8, messages: []const []const u8, strategy: base.SpecializationStrategy) TestError!Measurement {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -55,14 +64,14 @@ fn checkListWithDebug(source: []const u8, scalar: check.ConstStore.ConstPackedSc
     defer gpa.free(cwd);
     const path = try tmp.dir.realPathFileAlloc(io, "Repro.roc", gpa);
     defer gpa.free(path);
-    var build = try compile_build.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, .lss);
+    var build = try compile_build.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io, strategy);
     defer build.deinit();
     var stderr_capture: StderrCapture = .{};
     defer stderr_capture.bytes.deinit(gpa);
     build.filesystem.ctx = &stderr_capture;
     build.filesystem.vtable.writeStderr = StderrCapture.write;
     var measure: ProgramMeasure = .{};
-    build.boxy_program_observer = .{ .context = &measure, .observe = ProgramMeasure.observe };
+    build.compile_time_program_observer = .{ .context = &measure, .observe = ProgramMeasure.observe };
     try build.build(path);
     const coord = build.coordinator.?;
     try std.testing.expect(!coord.hasUserErrors());
@@ -90,18 +99,19 @@ fn checkListWithDebug(source: []const u8, scalar: check.ConstStore.ConstPackedSc
         constants += 1;
         value_form = root.completion == .write_value;
         try std.testing.expect(root.payload == .const_node);
-        const value = artifact.const_store.get(root.payload.const_node);
-        try std.testing.expect(value == .list and value.list.items == .packed_bytes);
-        const packed_list = value.list.items.packed_bytes;
-        try std.testing.expectEqual(scalar, packed_list.element.?);
-        try std.testing.expectEqual(expected.len / scalar.byteWidth(), packed_list.len);
-        try std.testing.expectEqualSlices(u8, expected, artifact.const_store.blobData(packed_list.bytes));
+        // The list is stored as its image: its descriptor, then its items'
+        // bytes behind their allocation's header.
+        const image = artifact.const_store.image(artifact.const_store.imageOf(root.payload.const_node) orelse return error.TestUnexpectedResult);
+        const word = 8;
+        try std.testing.expectEqual(@as(u64, expected.len / scalar.byteWidth()), std.mem.readInt(u64, image.bytes[word..][0..word], .little));
+        const items: usize = @intCast(std.mem.readInt(u64, image.bytes[0..word], .little));
+        try std.testing.expectEqualSlices(u8, expected, image.bytes[items..][0..expected.len]);
     }
     try std.testing.expectEqual(@as(usize, 1), constants);
     // A list of literals is in value form, which the checked-value writer
-    // completes with no program; any other constant reads no function
-    // value, so the `.boxy` evaluator completes it (design.md "Value-Form
-    // Roots", "Compile-Time Evaluation Under `.lss`").
+    // completes with no program; the strategy's own evaluator completes any
+    // other constant (design.md "Value-Form Roots", "Compile-Time Evaluation
+    // Strategy").
     if (value_form) {
         try std.testing.expectEqual(@as(usize, 0), measure.measurement.statements);
     } else {
@@ -112,22 +122,24 @@ fn checkListWithDebug(source: []const u8, scalar: check.ConstStore.ConstPackedSc
 
 test "issue 11908: numeric literal list evaluation has constant LIR size" {
     const gpa = std.testing.allocator;
-    var small: Measurement = undefined;
-    for ([_]usize{ 8, 512 }) |count| {
-        var source: std.ArrayList(u8) = .empty;
-        defer source.deinit(gpa);
-        // The concatenation is evaluated, so the literal list is lowered
-        // into the evaluator's program.
-        try source.appendSlice(gpa, "module [values]\nvalues : List(U8)\nvalues = List.concat([], [");
-        const expected = try gpa.alloc(u8, count);
-        defer gpa.free(expected);
-        for (expected, 0..) |*byte, index| {
-            byte.* = @truncate(index);
-            try source.print(gpa, "{d},", .{byte.*});
+    for ([_]base.SpecializationStrategy{ .boxy, .lss }) |strategy| {
+        var small: Measurement = undefined;
+        for ([_]usize{ 8, 512 }) |count| {
+            var source: std.ArrayList(u8) = .empty;
+            defer source.deinit(gpa);
+            // The concatenation is evaluated, so the literal list is lowered
+            // into the evaluator's program.
+            try source.appendSlice(gpa, "module [values]\nvalues : List(U8)\nvalues = List.concat([], [");
+            const expected = try gpa.alloc(u8, count);
+            defer gpa.free(expected);
+            for (expected, 0..) |*byte, index| {
+                byte.* = @truncate(index);
+                try source.print(gpa, "{d},", .{byte.*});
+            }
+            try source.appendSlice(gpa, "])\n");
+            const measured = try checkList(source.items, .u8, expected, strategy);
+            if (count == 8) small = measured else try std.testing.expectEqualDeep(small, measured);
         }
-        try source.appendSlice(gpa, "])\n");
-        const measured = try checkList(source.items, .u8, expected);
-        if (count == 8) small = measured else try std.testing.expectEqualDeep(small, measured);
     }
 }
 
@@ -151,13 +163,15 @@ test "issue 11908: packed source numeral lists preserve scalar bits" {
     for (cases) |case| {
         const source = try std.fmt.allocPrint(std.testing.allocator, "module [values]\nvalues : List({s})\nvalues = [{s}]\n", .{ case.name, case.values });
         defer std.testing.allocator.free(source);
-        const measured = try checkList(source, case.scalar, case.expected);
-        try std.testing.expectEqual(@as(usize, 0), measured.unpacked_lists);
+        for ([_]base.SpecializationStrategy{ .boxy, .lss }) |strategy| {
+            const measured = try checkList(source, case.scalar, case.expected, strategy);
+            try std.testing.expectEqual(@as(usize, 0), measured.unpacked_lists);
+        }
     }
 }
 
 test "issue 11908: list packing preserves custom numeral conversions" {
-    _ = try checkList(
+    try checkListEveryStrategy(
         \\module [values]
         \\N := U8.{
         \\    from_numeral : Numeral -> Try(N, [InvalidNumeral(Str)])
@@ -168,11 +182,12 @@ test "issue 11908: list packing preserves custom numeral conversions" {
     ,
         .u8,
         "\x07\x07",
+        &.{},
     );
 }
 
 test "issue 11908: list packing preserves element computations and debug observations" {
-    _ = try checkListWithDebug(
+    try checkListEveryStrategy(
         \\module [values]
         \\values : List(U8)
         \\values = [1, {

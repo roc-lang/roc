@@ -11766,6 +11766,44 @@ test "RC complete payload moves while parent representation has a later scalar f
     try testing.expectEqual(@as(usize, 0), f.countRc(extracted, .incref));
 }
 
+test "RC owned complete payload takes only the enclosing record slot" {
+    for ([_]bool{ false, true }) |reads_old_tag| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+        const fields = try f.layouts.putStructFields(&.{
+            .{ .index = 0, .layout = f.tag_str },
+            .{ .index = 1, .layout = .str },
+        });
+        const text = try f.local(.str);
+        const tag = try f.local(f.tag_str);
+        const sibling = try f.local(.str);
+        const record = try f.local(fields);
+        const field = try f.local(f.tag_str);
+        const alias = try f.local(f.tag_str);
+        const extracted = try f.local(.str);
+        const result = try f.local(.i64);
+        const later = try f.local(.str);
+
+        const ret = try f.ret(later);
+        const read_sibling = try f.assignRefField(later, record, 1, ret);
+        const next = if (reads_old_tag) next: {
+            const old = try f.local(.str);
+            const ignored = try f.local(.i64);
+            break :next try f.assignTagPayload(old, field, try f.assignCall(ignored, &.{old}, read_sibling));
+        } else read_sibling;
+        const consume = try f.assignCall(result, &.{extracted}, next);
+        const project = try f.assignTagPayload(extracted, alias, consume);
+        const bind = try f.assignRefLocal(alias, field, project);
+        const read_tag = try f.assignRefField(field, record, 0, bind);
+        const build = try f.assignStruct(record, &.{ tag, sibling }, read_tag);
+        const make_tag = try f.assignTag(tag, 1, text, build);
+        const body = try f.assignStr(text, "payload", try f.assignStr(sibling, "sibling", make_tag));
+        _ = try f.addProc(&.{}, body, .str);
+        try f.run();
+        try testing.expectEqual(@as(usize, @intFromBool(reads_old_tag)), f.countRc(extracted, .incref));
+    }
+}
+
 test "RC residual shell metadata uses semantic field indices" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();

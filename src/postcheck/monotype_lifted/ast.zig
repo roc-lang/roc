@@ -273,7 +273,7 @@ pub const ProgramView = struct {
     local_name_table: *const Mono.LocalNameTable,
 
     /// A template's stored evidence vector in this program's evidence columns.
-    pub fn constFnEvidence(self: ProgramView, spans: Mono.ConstEvidenceSpans) check.ConstStore.ConstFnEvidenceVector {
+    pub fn constFnEvidence(self: *const ProgramView, spans: Mono.ConstEvidenceSpans) check.ConstStore.ConstFnEvidenceVector {
         return .{
             .nodes = self.const_fn_evidence[spans.nodes.start..][0..spans.nodes.len],
             .targets = self.const_fn_evidence_targets[spans.targets.start..][0..spans.targets.len],
@@ -281,102 +281,102 @@ pub const ProgramView = struct {
         };
     }
 
-    pub fn getComptimeValueRoot(self: ProgramView, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
+    pub fn getComptimeValueRoot(self: *const ProgramView, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
         return self.comptime_value_roots[@backingInt(id)];
     }
 
-    pub fn procDebugName(self: ProgramView, symbol: Common.Symbol) ?names.ExportNameId {
+    pub fn procDebugName(self: *const ProgramView, symbol: Common.Symbol) ?names.ExportNameId {
         return self.proc_debug_names.get(symbol);
     }
 
-    pub fn exprLoc(self: ProgramView, id: ExprId) base.SourceLoc {
+    pub fn exprLoc(self: *const ProgramView, id: ExprId) base.SourceLoc {
         return self.expr_locs[@backingInt(id)];
     }
 
-    pub fn exprRegion(self: ProgramView, id: ExprId) base.Region {
+    pub fn exprRegion(self: *const ProgramView, id: ExprId) base.Region {
         return self.expr_regions[@backingInt(id)];
     }
 
-    pub fn stmtLoc(self: ProgramView, id: StmtId) base.SourceLoc {
+    pub fn stmtLoc(self: *const ProgramView, id: StmtId) base.SourceLoc {
         return self.stmt_locs[@backingInt(id)];
     }
 
-    pub fn stmtRegion(self: ProgramView, id: StmtId) base.Region {
+    pub fn stmtRegion(self: *const ProgramView, id: StmtId) base.Region {
         return self.stmt_regions[@backingInt(id)];
     }
 
-    pub fn comptimeSite(self: ProgramView, id: ComptimeSiteId) ComptimeSite {
+    pub fn comptimeSite(self: *const ProgramView, id: ComptimeSiteId) ComptimeSite {
         return self.comptime_sites[@backingInt(id)];
     }
 
-    pub fn localName(self: ProgramView, id: LocalId) []const u8 {
+    pub fn localName(self: *const ProgramView, id: LocalId) []const u8 {
         return self.local_name_table.text(self.local_names[@backingInt(id)]);
     }
 
     /// The CaptureId of a local. Every local that participates in a capture set
     /// carries one; asserts it is present.
-    pub fn captureIdOfLocal(self: ProgramView, id: LocalId) check.CheckedModule.CaptureId {
+    pub fn captureIdOfLocal(self: *const ProgramView, id: LocalId) check.CheckedModule.CaptureId {
         return self.locals[@backingInt(id)].identity.captureId() orelse
             Common.invariant("lifted capture local had no CaptureId");
     }
 
-    pub fn exprSpan(self: ProgramView, span_: Span(ExprId)) []const ExprId {
+    pub fn exprSpan(self: *const ProgramView, span_: Span(ExprId)) []const ExprId {
         return self.expr_ids[span_.start..][0..span_.len];
     }
 
-    pub fn patSpan(self: ProgramView, span_: Span(PatId)) []const PatId {
+    pub fn patSpan(self: *const ProgramView, span_: Span(PatId)) []const PatId {
         return self.pat_ids[span_.start..][0..span_.len];
     }
 
-    pub fn typedLocalSpan(self: ProgramView, span_: Span(TypedLocal)) []const TypedLocal {
+    pub fn typedLocalSpan(self: *const ProgramView, span_: Span(TypedLocal)) []const TypedLocal {
         return self.typed_locals[span_.start..][0..span_.len];
     }
 
-    pub fn signatureVarSteps(self: ProgramView, span_: Span(SignatureVarStep)) []const SignatureVarStep {
+    pub fn signatureVarSteps(self: *const ProgramView, span_: Span(SignatureVarStep)) []const SignatureVarStep {
         return self.signature_var_steps[span_.start..][0..span_.len];
     }
 
-    pub fn captureOperandSpan(self: ProgramView, span_: Span(CaptureOperand)) []const CaptureOperand {
+    pub fn captureOperandSpan(self: *const ProgramView, span_: Span(CaptureOperand)) []const CaptureOperand {
         return self.capture_operands[span_.start..][0..span_.len];
     }
 
-    pub fn stmtSpan(self: ProgramView, span_: Span(StmtId)) []const StmtId {
+    pub fn stmtSpan(self: *const ProgramView, span_: Span(StmtId)) []const StmtId {
         return self.stmt_ids[span_.start..][0..span_.len];
     }
 
-    pub fn fieldExprSpan(self: ProgramView, span_: Span(FieldExpr)) []const FieldExpr {
+    pub fn fieldExprSpan(self: *const ProgramView, span_: Span(FieldExpr)) []const FieldExpr {
         return self.field_exprs[span_.start..][0..span_.len];
     }
 
-    pub fn fieldAccessSegmentSpan(self: ProgramView, span_: Span(FieldAccessSegment)) []const FieldAccessSegment {
+    pub fn fieldAccessSegmentSpan(self: *const ProgramView, span_: Span(FieldAccessSegment)) []const FieldAccessSegment {
         return self.field_access_segments[span_.start..][0..span_.len];
     }
 
-    pub fn recordDestructSpan(self: ProgramView, span_: Span(RecordDestruct)) []const RecordDestruct {
+    pub fn recordDestructSpan(self: *const ProgramView, span_: Span(RecordDestruct)) []const RecordDestruct {
         return self.record_destructs[span_.start..][0..span_.len];
     }
 
-    pub fn strPatternStepSpan(self: ProgramView, span_: Span(Mono.StrPatternStep)) []const Mono.StrPatternStep {
+    pub fn strPatternStepSpan(self: *const ProgramView, span_: Span(Mono.StrPatternStep)) []const Mono.StrPatternStep {
         return self.str_pattern_steps[span_.start..][0..span_.len];
     }
 
-    pub fn branchSpan(self: ProgramView, span_: Span(Branch)) []const Branch {
+    pub fn branchSpan(self: *const ProgramView, span_: Span(Branch)) []const Branch {
         return self.branches[span_.start..][0..span_.len];
     }
 
-    pub fn getExpr(self: ProgramView, id: ExprId) Expr {
+    pub fn getExpr(self: *const ProgramView, id: ExprId) Expr {
         return self.exprs[@backingInt(id)];
     }
 
-    pub fn getPat(self: ProgramView, id: PatId) Pat {
+    pub fn getPat(self: *const ProgramView, id: PatId) Pat {
         return self.pats[@backingInt(id)];
     }
 
-    pub fn getFn(self: ProgramView, id: FnId) Fn {
+    pub fn getFn(self: *const ProgramView, id: FnId) Fn {
         return self.fns[@backingInt(id)];
     }
 
-    pub fn ifBranchSpan(self: ProgramView, span_: Span(IfBranch)) []const IfBranch {
+    pub fn ifBranchSpan(self: *const ProgramView, span_: Span(IfBranch)) []const IfBranch {
         return self.if_branches[span_.start..][0..span_.len];
     }
 };

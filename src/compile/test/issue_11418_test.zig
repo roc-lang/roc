@@ -114,13 +114,12 @@ test "issue 11418: shared LIR generation leaves runtime-only procedures to the r
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
     try std.testing.expect(session.runtime_prepared != null);
-    // The `.boxy` evaluator completed `Helper.answer` before the Solved
-    // program was specialized, so that program restores its stored value
-    // and is specialized once (design.md "Compile-Time Evaluation Under
-    // `.lss`").
-    try std.testing.expect(session.runtime_stages == .evaluation);
-    try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
-    try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
+    // The Solved program evaluates `Helper.answer`, and the runtime program
+    // is specialized again from its stored value (design.md "Compile-Time
+    // Evaluation Under `.lss`").
+    try std.testing.expect(session.runtime_stages == .respecialized);
+    try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
+    try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
 
     var runtime = try session.takeRuntime(allocator, session.runtime_roots, target);
     defer runtime.deinit();
@@ -129,12 +128,16 @@ test "issue 11418: shared LIR generation leaves runtime-only procedures to the r
     for ([_][]const u8{ "runtime_only_a", "runtime_only_b" }) |name| {
         try std.testing.expectEqual(@as(usize, 1), countNamedProcs(&runtime.lir_result.store, name));
     }
-    // The runtime consumer continues that specialization.
-    try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
-    try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
-    if (session.completed) |*completed| for (completed.programs()) |program| {
+    // The runtime consumer continues that second specialization.
+    try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
+    try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
+    // The evaluation's programs ran `Helper.answer` without lowering the
+    // runtime-only procedures.
+    const completed = if (session.completed) |*completed| completed else return error.TestUnexpectedResult;
+    try std.testing.expect(completed.programs().len != 0);
+    for (completed.programs()) |program| {
         const host_store = &program.lir_result.store;
         const runtime_only_count = countNamedProcs(host_store, "runtime_only_a") + countNamedProcs(host_store, "runtime_only_b");
         try std.testing.expectEqual(@as(usize, 0), runtime_only_count);
-    };
+    }
 }

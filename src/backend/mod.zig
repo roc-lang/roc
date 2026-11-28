@@ -10,6 +10,7 @@ const invariant = @import("base").invariant;
 const roc_target = @import("roc_target");
 
 pub const dev = @import("dev/mod.zig");
+const abiOf = dev.isa.abiOf;
 pub const wasm = @import("wasm/mod.zig");
 
 comptime {
@@ -276,7 +277,7 @@ test "x86_64 Windows hosted U128 return stores all 16 bytes from XMM0" {
         .hosted = .some(.{ .symbol = symbol, .dispatch_index = 0 }),
     }, .none);
 
-    const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(.x64win);
+    const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(abiOf(.x64win));
     var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, .default);
     defer codegen.deinit();
     codegen.generation_mode = .object_file;
@@ -332,7 +333,7 @@ test "x86_64 Windows U128 entrypoint return loads all 16 bytes into XMM0" {
         .ret_layout = .u128,
     }, .none);
 
-    const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(.x64win);
+    const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(abiOf(.x64win));
     var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, .default);
     defer codegen.deinit();
     codegen.generation_mode = .object_file;

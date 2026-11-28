@@ -60,6 +60,8 @@ pub const Inputs = struct {
     root: usize,
     /// Symbols the host must provide when the app imports them. Sorted.
     host_required: []const []const u8,
+    /// Where the stored images the units' pool imports name are.
+    pool: unit_walk.PoolSource,
 };
 
 /// Link `inputs` into `output`, whose first `host.segments().len` bytes
@@ -77,7 +79,9 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
 
     // What the program reaches from the `provides` symbols.
     const host = inputs.host;
-    var walk: unit_walk.Walk = .{ .gpa = gpa, .images = images.items, .resolver = .{ .exports = &exports, .host = .{ .context = &host, .find = findHostSymbol }, .host_required = inputs.host_required } };
+    var pool: unit_walk.Pool = .{ .source = inputs.pool };
+    defer pool.deinit(gpa);
+    var walk: unit_walk.Walk = .{ .gpa = gpa, .images = images.items, .resolver = .{ .exports = &exports, .host = .{ .context = &host, .find = findHostSymbol }, .host_required = inputs.host_required, .pool = &pool } };
     defer walk.deinit();
     try walk.init();
     for (host.provides()) |provide| {
@@ -95,6 +99,12 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     const reached = try gpa.alloc(bool, images.items.len);
     defer gpa.free(reached);
     for (walk.states, reached) |state, *placed| placed.* = state != null;
+    // The stored images reached atoms name, each placed once.
+    pool.markKept(walk.states);
+    try pool.layOut(gpa);
+    timing.pool_named = pool.entries.items.len;
+    timing.pool_placed = pool.kept.items.len;
+    timing.pool_bytes = pool.size;
 
     // Placement order: the support image, then the units by content digest.
     var order: std.ArrayList(u32) = .empty;
@@ -148,6 +158,10 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         places[index].data = data_vmaddr + rw_file_size;
         rw_file_size += view.data().len;
     }
+    // The constant pool follows the images' data.
+    rw_file_size = std.mem.alignForward(u64, rw_file_size, pool.alignment);
+    const pool_base = data_vmaddr + rw_file_size;
+    rw_file_size += pool.size;
     var rw_mem_size = rw_file_size;
     for (order.items) |index| {
         const view = images.items[index].view;
@@ -244,6 +258,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
                     break :host vaddr;
                 },
                 .missing => unreachable, // a missing host symbol failed the link above
+                .pool => |entry| pool.address(entry, pool_base),
             };
         }
     }
@@ -261,7 +276,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         const place = places[index];
         for (view.sites()) |site| {
             if (@as(UnitImage.SiteKind, @fromBackingInt(site.kind)) != .abs64) continue;
-            if (site.atom.get()) |atom| if (!reached_atoms[index][atom]) continue;
+            if (view.siteAtom(site)) |atom| if (!reached_atoms[index][atom]) continue;
             const region: UnitImage.Region = @fromBackingInt(site.region);
             switch (region) {
                 .data => {},
@@ -279,6 +294,11 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
             }
             try rebases.append(gpa, fixup);
         }
+    }
+    // Every pointer word of the kept stored images.
+    for (pool.kept.items) |entry_index| {
+        const entry = pool.entries.items[entry_index];
+        for (entry.image.pointers) |pointer| try rebases.append(gpa, .{ .segment = data_segment_index, .offset = pool_base - data_vmaddr + entry.offset + pointer });
     }
     // The provides: their windows' contents and fixups.
     const host_data_segment: usize = for (exe.sections) |section| {
@@ -385,6 +405,9 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         .dirty_pages_end = exe.first_content,
         .dirty_ranges = &.{},
     };
+    // Each kept stored image, once, its pointer words relocated as it is
+    // copied.
+    pool.write(mapped[@intCast(context.fileOffsetOf(pool_base))..][0..@intCast(pool.size)], pool_base);
     var copy_list: std.ArrayList(fanout.Copy) = .empty;
     defer copy_list.deinit(gpa);
     var symbol_ranges: std.ArrayList(fanout.Range) = .empty;
@@ -394,7 +417,8 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     for (order.items) |index| {
         const view = images.items[index].view;
         const place = places[index];
-        const atoms_reached = reached_atoms[index];
+        // The block's reached atoms; the writable data is placed whole.
+        const atoms_reached = reached_atoms[index][0..view.atoms().len];
         var atom: u32 = 0;
         while (atom < atoms_reached.len) {
             if (!atoms_reached[atom]) {
@@ -856,7 +880,7 @@ const Task = struct {
         const bindings = context.bindings[range.image];
         const atoms_reached = context.reached_atoms[range.image];
         for (view.sites()[range.first..][0..range.count]) |site| {
-            if (site.atom.get()) |atom| if (!atoms_reached[atom]) continue;
+            if (view.siteAtom(site)) |atom| if (!atoms_reached[atom]) continue;
             const region: UnitImage.Region = @fromBackingInt(site.region);
             const kind: UnitImage.SiteKind = @fromBackingInt(site.kind);
             const out = context.regionOut(place, view, region);

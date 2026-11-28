@@ -17,10 +17,9 @@ const Root = graph_mod.Root;
 const TemplateKey = graph_mod.TemplateKey;
 const Walker = graph_mod.Walker;
 const FunctionTypeMemo = graph_mod.FunctionTypeMemo;
-const buildForBoxySelection = graph_mod.buildForBoxySelection;
 const rootHoldsFunction = graph_mod.rootHoldsFunction;
 
-test "Boxy selection retains imported representation readiness and shares cyclic summaries" {
+test "Boxy root graph shares cyclic summaries across roots" {
     const allocator = std.testing.allocator;
     var parsed = try Inspected.parseProgram(allocator, .module,
         \\module [first, second, third]
@@ -52,19 +51,17 @@ test "Boxy selection retains imported representation readiness and shares cyclic
     defer allocator.free(views);
     views[0] = checked.importedView(consumer);
     for (parsed.import_artifacts, views[1..]) |*artifact, *view| view.* = checked.importedView(artifact);
-    var has_lss_only_value = false;
-    for (views[1..]) |view| for (view.compile_time_roots.roots.items()) |root| {
-        if (!root.needsEvaluation(.lss) and root.needsEvaluation(.boxy)) has_lss_only_value = true;
-    };
-    try std.testing.expect(has_lss_only_value);
     try std.testing.expectEqual(@as(usize, 3), consumer.root_requests.compile_time_requests.items().len);
     var roots: [3]Root = undefined;
     for (&roots, consumer.root_requests.compile_time_requests.items()) |*root, request| {
         root.* = .{ .module = 0, .root = request.compile_time_root.get().?, .request = request };
     }
-    var graph = try buildForBoxySelection(allocator, &.{consumer}, .{ .root = checked.loweringView(consumer), .imports = views[1..] }, &roots);
+    const artifacts = try allocator.alloc(*const checked.CheckedModuleArtifact, views.len);
+    defer allocator.free(artifacts);
+    artifacts[0] = consumer;
+    for (parsed.import_artifacts, artifacts[1..]) |*artifact, *out| out.* = artifact;
+    var graph = try graph_mod.build(allocator, artifacts, &roots);
     defer graph.deinit(allocator);
-    try std.testing.expectEqualSlices(bool, &.{ true, true, false }, graph.unavailable_boxy_reads);
     // The imported values are visible, not roots this batch owns or schedules.
     for (graph.deps) |deps| try std.testing.expectEqual(@as(usize, 0), deps.len);
 
@@ -72,12 +69,11 @@ test "Boxy selection retains imported representation readiness and shares cyclic
     for ([_]bool{ false, true }) |reverse| {
         var walker = try Walker.initViews(allocator, views, &roots);
         defer walker.deinit();
-        walker.check_unlisted_readiness = true;
         for (0..roots.len) |position| {
             const ordinal = if (reverse) roots.len - 1 - position else position;
             const deps = try walker.dependencies(roots[ordinal], @intCast(ordinal));
-            allocator.free(deps);
-            try std.testing.expectEqual(graph.unavailable_boxy_reads[ordinal], walker.unavailable_boxy_read);
+            defer allocator.free(deps);
+            try std.testing.expectEqualSlices(u32, graph.deps[ordinal], deps);
         }
         const decoded = walker.summaries.count();
         const edges = walker.summary_templates.items.len;
@@ -86,8 +82,8 @@ test "Boxy selection retains imported representation readiness and shares cyclic
             for (0..roots.len) |position| {
                 const ordinal = if (round % 2 == 0) position else roots.len - 1 - position;
                 const deps = try walker.dependencies(roots[ordinal], @intCast(ordinal));
-                allocator.free(deps);
-                try std.testing.expectEqual(graph.unavailable_boxy_reads[ordinal], walker.unavailable_boxy_read);
+                defer allocator.free(deps);
+                try std.testing.expectEqualSlices(u32, graph.deps[ordinal], deps);
             }
         }
         try std.testing.expectEqual(decoded, walker.summaries.count());
@@ -97,12 +93,12 @@ test "Boxy selection retains imported representation readiness and shares cyclic
     }
 
     const FailureCase = struct {
-        fn run(a: Allocator, module: *checked.CheckedModuleArtifact, imports: []const checked.ImportedModuleView, requested: []const Root) Allocator.Error!void {
-            var candidate = try buildForBoxySelection(a, &.{module}, .{ .root = checked.loweringView(module), .imports = imports }, requested);
+        fn run(a: Allocator, modules: []const *const checked.CheckedModuleArtifact, requested: []const Root) Allocator.Error!void {
+            var candidate = try graph_mod.build(a, modules, requested);
             defer candidate.deinit(a);
         }
     };
-    try std.testing.checkAllAllocationFailures(allocator, FailureCase.run, .{ consumer, views[1..], @as([]const Root, &roots) });
+    try std.testing.checkAllAllocationFailures(allocator, FailureCase.run, .{ @as([]const *const checked.CheckedModuleArtifact, artifacts), @as([]const Root, &roots) });
 }
 
 test "CTFE root classification resolves nominal backings throughout the checked program" {

@@ -1232,7 +1232,7 @@ pub fn devEvalTopLevelExpects(
             .symbol_name = symbol_name,
             .proc = root_proc,
             .arg_layouts = arg_layouts,
-            .ret_layout = lowered.lir_result.store.getProcSpec(root_proc).ret_layout,
+            .ret_layout = lowered.lir_result.store.getProcSpecImmediate(root_proc).ret_layout,
         };
         roots_len += 1;
     }
@@ -1290,12 +1290,11 @@ pub fn finalizedComptimeReplStr(resources: *const ParsedResources) Error![]const
         };
         while (true) {
             switch (resources.checked_artifact.const_store.get(node)) {
-                .str => |str| return resources.checked_artifact.const_store.strBytes(str.bytes),
+                // The root is the inspected `Str`, whose image is its descriptor.
+                .image => |image| return resources.checked_artifact.const_store.image(image).strAt(0),
                 .nominal => |nominal| node = nominal.backing,
                 .boxy_fn,
                 .pending,
-                .zst,
-                .scalar,
                 .list,
                 .box,
                 .tuple,
@@ -1401,7 +1400,7 @@ pub fn parseProgram(
             const root_name = evalRootName(source_kind, false);
             const root_def_idx = main_checked.can.explicitRootDefByName(root_name) orelse base.invariant("eval helper invariant violated: compile-time REPL root `{s}` was not found", .{root_name});
             const root_def = main_checked.module_env.store.getDef(root_def_idx);
-            if (main_checked.module_env.store.getExpr(root_def.expr) != .e_runtime_error) {
+            if (main_checked.module_env.store.exprKind(root_def.expr) != .e_runtime_error) {
                 const body_expr = main_checked.checker.compileTimeExecutableRootBody(root_def_idx) orelse base.invariant("eval helper invariant violated: compile-time REPL root body was not recorded", .{});
                 explicit_root_storage[0] = .{
                     .kind = .repl_expr,
@@ -1760,8 +1759,8 @@ fn zeroArgRootInvariant(message: []const u8) noreturn {
 
 fn zeroArgRootBody(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ZeroArgRootBody {
     const def = module_env.store.getDef(def_idx);
-    const lambda_idx = switch (module_env.store.getExpr(def.expr)) {
-        .e_closure => |closure| closure.lambda_idx,
+    const lambda_idx = switch (module_env.store.exprKind(def.expr)) {
+        .e_closure => module_env.store.exprView(def.expr).e_closure.get(.lambda_idx),
         .e_lambda => def.expr,
         .e_num,
         .e_frac_f32,
@@ -1822,8 +1821,8 @@ fn zeroArgRootBody(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ZeroArgRo
         => zeroArgRootInvariant("compile-time REPL root was not a lambda"),
         .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
-    const lambda = switch (module_env.store.getExpr(lambda_idx)) {
-        .e_lambda => |lambda| lambda,
+    const lambda = switch (module_env.store.exprKind(lambda_idx)) {
+        .e_lambda => module_env.store.exprView(lambda_idx).e_lambda.decode(),
         .e_num,
         .e_frac_f32,
         .e_frac_f64,

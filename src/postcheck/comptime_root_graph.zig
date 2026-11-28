@@ -70,6 +70,58 @@ const Effects = struct {
     }
 };
 
+/// A producer's effects while the fixpoint grows them: each list grows by
+/// appending, and its set answers membership.
+const Total = struct {
+    reads: std.ArrayList(u32) = .empty,
+    read_set: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    /// Per read, how many of that producer's values this has taken.
+    taken: std.ArrayList(usize) = .empty,
+    values: std.ArrayList(u32) = .empty,
+    value_set: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    /// The prefix of `values` whose effects this has added.
+    expanded: usize = 0,
+    value_call: bool = false,
+
+    fn deinit(self: *Total, allocator: Allocator) void {
+        self.reads.deinit(allocator);
+        self.read_set.deinit(allocator);
+        self.taken.deinit(allocator);
+        self.values.deinit(allocator);
+        self.value_set.deinit(allocator);
+    }
+
+    /// Add `effects`; true when this grew.
+    fn add(self: *Total, allocator: Allocator, effects: *const Effects) Allocator.Error!bool {
+        var grew = false;
+        for (effects.reads.items) |producer| {
+            if (self.read_set.contains(producer)) continue;
+            try self.reads.ensureUnusedCapacity(allocator, 1);
+            try self.taken.ensureUnusedCapacity(allocator, 1);
+            try self.read_set.put(allocator, producer, {});
+            self.reads.appendAssumeCapacity(producer);
+            self.taken.appendAssumeCapacity(0);
+            grew = true;
+        }
+        for (effects.values.items) |value| {
+            if (try self.addValue(allocator, value)) grew = true;
+        }
+        if (effects.value_call and !self.value_call) {
+            self.value_call = true;
+            grew = true;
+        }
+        return grew;
+    }
+
+    fn addValue(self: *Total, allocator: Allocator, value: u32) Allocator.Error!bool {
+        try self.values.ensureUnusedCapacity(allocator, 1);
+        const entry = try self.value_set.getOrPut(allocator, value);
+        if (entry.found_existing) return false;
+        self.values.appendAssumeCapacity(value);
+        return true;
+    }
+};
+
 /// Merge sorted `items` into sorted `list`; true when it grew.
 fn unionInto(allocator: Allocator, list: *std.ArrayList(u32), items: []const u32) Allocator.Error!bool {
     if (items.len == 0) return false;
@@ -215,14 +267,18 @@ pub fn build(allocator: Allocator, program: *const Lifted.Program, producers: []
 
     // A producer's evaluation has its function's effects. When it calls a
     // function value, every function value it creates or a value it reads
-    // holds may run too, which can add more; iterate to the fixpoint.
-    const totals = try allocator.alloc(Effects, producers.len);
+    // holds may run too, which can add more; iterate to the fixpoint. A
+    // total adds each value's effects, and takes each value of a producer it
+    // reads, once.
+    const totals = try allocator.alloc(Total, producers.len);
+    var initialized: usize = 0;
     defer {
-        for (totals) |*effects| effects.deinit(allocator);
+        for (totals[0..initialized]) |*total| total.deinit(allocator);
         allocator.free(totals);
     }
     for (totals, producers) |*total, producer| {
         total.* = .{};
+        initialized += 1;
         _ = try total.add(allocator, &groups.items[@backingInt(closed.get(@backingInt(producer.fn_id)).?)]);
     }
     var changed = true;
@@ -230,12 +286,19 @@ pub fn build(allocator: Allocator, program: *const Lifted.Program, producers: []
         changed = false;
         for (totals) |*total| {
             if (!total.value_call) continue;
-            for (total.reads.items) |producer| {
-                if (try unionInto(allocator, &total.values, totals[producer].values.items)) changed = true;
+            for (0..total.reads.items.len) |read_index| {
+                const producer = total.reads.items[read_index];
+                // A total can read its own producer, whose values grow as
+                // this takes them, so each value is read by position.
+                while (total.taken.items[read_index] < totals[producer].values.items.len) {
+                    const value = totals[producer].values.items[total.taken.items[read_index]];
+                    total.taken.items[read_index] += 1;
+                    if (try total.addValue(allocator, value)) changed = true;
+                }
             }
-            var index: usize = 0;
-            while (index < total.values.items.len) : (index += 1) {
-                const value = total.values.items[index];
+            while (total.expanded < total.values.items.len) {
+                const value = total.values.items[total.expanded];
+                total.expanded += 1;
                 if (try total.add(allocator, &groups.items[@backingInt(closed.get(value).?)])) changed = true;
             }
         }
@@ -248,7 +311,9 @@ pub fn build(allocator: Allocator, program: *const Lifted.Program, producers: []
         allocator.free(deps);
     }
     for (totals, deps) |*total, *out| {
-        out.* = try allocator.dupe(u32, total.reads.items);
+        const reads = try allocator.dupe(u32, total.reads.items);
+        std.sort.pdq(u32, reads, {}, std.sort.asc(u32));
+        out.* = reads;
         built += 1;
     }
     return .{ .deps = deps };

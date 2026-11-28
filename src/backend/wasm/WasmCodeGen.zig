@@ -9335,7 +9335,7 @@ fn localDyn(self: *const Self, local: ProcLocalId) ?LIR.DynLocal {
 /// result is dynamic.
 fn currentDynResult(self: *const Self) ?ProcLocalId {
     const proc_id = self.current_proc_id orelse return null;
-    return self.store.getProcSpec(proc_id).dyn_result.get();
+    return self.store.getProcSpecImmediate(proc_id).dyn_result.get();
 }
 
 fn emitBoxyRuntimeCall(self: *Self, entry: BoxyRuntimeSignatures.Entry) Allocator.Error!void {
@@ -9745,7 +9745,7 @@ fn emitTailCarry(self: *Self, args: anytype, params: anytype, moved: []u32) Allo
 /// stack pointer from the frame pointer releases it.
 fn generateDynFrameAlloc(self: *Self) Allocator.Error!void {
     const proc_id = self.current_proc_id orelse wasmInvariantFmt("WASM/codegen invariant violated: frame_alloc outside a procedure", .{});
-    const locals = self.store.getLocalSpan(self.store.getProcSpec(proc_id).frame_locals);
+    const locals = self.store.getLocalSpan(self.store.getProcSpecImmediate(proc_id).frame_locals);
     // The epilogue restores the stack pointer only for a procedure with a
     // frame, so the region's procedure has one.
     _ = try self.allocStackMemory(0, 1);

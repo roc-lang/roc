@@ -308,9 +308,11 @@ test "a nominal top-level value with an unpinned type argument can be inspected"
     try test_env.assertNoErrors();
 }
 
-test "a top-level value whose unpinned type part carries a method requirement is rejected" {
-    // Comparing `empty` requires `is_eq` of its item type, and nothing picks
-    // the type that method comes from.
+test "comparing a polymorphic constant requires the method of the comparison's own instance" {
+    // `empty`'s item type carries no requirement, so `empty` quantifies it
+    // (design.md "Polymorphic Constants"): the comparison's `is_eq` is a
+    // requirement of its own instance, which nothing else fixes and so is
+    // decided, not of `empty`.
     const source =
         \\empty = []
         \\
@@ -320,10 +322,10 @@ test "a top-level value whose unpinned type part carries a method requirement is
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("Polymorphic Value");
+    try test_env.assertNoErrors();
 }
 
-test "inspecting a top-level value does not discharge a method requirement on its unpinned type part" {
+test "inspecting and comparing a polymorphic constant are checked at their own instances" {
     const source =
         \\empty = []
         \\
@@ -334,7 +336,7 @@ test "inspecting a top-level value does not discharge a method requirement on it
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("Polymorphic Value");
+    try test_env.assertNoErrors();
 }
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.

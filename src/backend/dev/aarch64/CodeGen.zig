@@ -8,7 +8,7 @@ const collections = @import("collections");
 const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
-const RocTarget = @import("roc_target").RocTarget;
+const Abi = @import("../isa.zig").Abi;
 
 const EmitMod = @import("Emit.zig");
 const Registers = @import("Registers.zig");
@@ -24,22 +24,20 @@ const RegisterWidth = Registers.RegisterWidth;
 
 /// Parameterized aarch64 code generator.
 /// All aarch64 targets use the AAPCS64 calling convention.
-pub fn CodeGen(comptime target: RocTarget) type {
-    // Validate this is an aarch64 target
-    const arch = target.toCpuArch();
-    if (arch != .aarch64) {
-        @compileError("aarch64.CodeGen requires a little-endian aarch64 target");
+pub fn CodeGen(comptime machine_abi: Abi) type {
+    if (machine_abi.isa() != .aarch64) {
+        @compileError("aarch64.CodeGen requires an aarch64 ABI");
     }
 
-    const Emit = EmitMod.Emit(target);
+    const Emit = EmitMod.Emit(machine_abi);
     const CC = Call; // AAPCS64 for all aarch64 targets
 
     return struct {
         const Self = @This();
         const nop_inst: u32 = 0xD503201F;
 
-        /// The target this CodeGen was instantiated for
-        pub const roc_target = target;
+        /// The ABI this CodeGen was instantiated for
+        pub const code_abi = machine_abi;
 
         /// Number of general-purpose registers
         pub const NUM_GENERAL_REGS = 32;
@@ -1163,9 +1161,9 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
 // Tests - use explicit target instantiation
 
-const LinuxCodeGen = CodeGen(.arm64linux);
-const WinCodeGen = CodeGen(.arm64win);
-const MacCodeGen = CodeGen(.arm64mac);
+const LinuxCodeGen = CodeGen(.aarch64_aapcs);
+const WinCodeGen = CodeGen(.aarch64_windows);
+const MacCodeGen = CodeGen(.aarch64_apple);
 
 test "prologue and epilogue" {
     var cg = LinuxCodeGen.init(std.testing.allocator);
@@ -1270,10 +1268,9 @@ test "CodeGen works for all aarch64 targets" {
     try std.testing.expectEqual(LinuxCodeGen.CALLEE_SAVED_GENERAL_MASK, WinCodeGen.CALLEE_SAVED_GENERAL_MASK);
     try std.testing.expectEqual(LinuxCodeGen.CALLEE_SAVED_GENERAL_MASK, MacCodeGen.CALLEE_SAVED_GENERAL_MASK);
 
-    // Verify target is correctly set
-    try std.testing.expectEqual(RocTarget.arm64linux, LinuxCodeGen.roc_target);
-    try std.testing.expectEqual(RocTarget.arm64win, WinCodeGen.roc_target);
-    try std.testing.expectEqual(RocTarget.arm64mac, MacCodeGen.roc_target);
+    try std.testing.expectEqual(Abi.aarch64_aapcs, LinuxCodeGen.code_abi);
+    try std.testing.expectEqual(Abi.aarch64_windows, WinCodeGen.code_abi);
+    try std.testing.expectEqual(Abi.aarch64_apple, MacCodeGen.code_abi);
 }
 
 test "patch conditional jump keeps near targets short" {
@@ -1290,7 +1287,7 @@ test "patch conditional jump keeps near targets short" {
     const cond_inst = std.mem.readInt(u32, code[patch..][0..4], .little);
     const reserved_inst = std.mem.readInt(u32, code[patch + 4 ..][0..4], .little);
 
-    try std.testing.expectEqual(@as(u4, @backingInt(EmitMod.Emit(.arm64linux).Condition.ne)), @as(u4, @truncate(cond_inst)));
+    try std.testing.expectEqual(@as(u4, @backingInt(EmitMod.Emit(.aarch64_aapcs).Condition.ne)), @as(u4, @truncate(cond_inst)));
     try std.testing.expectEqual(@as(u19, @intCast(@divExact(@as(i64, @intCast(target - patch)), 4))), @as(u19, @truncate(cond_inst >> 5)));
     try std.testing.expectEqual(@as(u32, 0xD503201F), reserved_inst);
 }
@@ -1308,13 +1305,13 @@ test "patch conditional jump expands far targets" {
     const skip_inst = std.mem.readInt(u32, code[patch..][0..4], .little);
     const branch_inst = std.mem.readInt(u32, code[patch + 4 ..][0..4], .little);
 
-    try std.testing.expectEqual(@as(u4, @backingInt(EmitMod.Emit(.arm64linux).Condition.eq)), @as(u4, @truncate(skip_inst)));
+    try std.testing.expectEqual(@as(u4, @backingInt(EmitMod.Emit(.aarch64_aapcs).Condition.eq)), @as(u4, @truncate(skip_inst)));
     try std.testing.expectEqual(@as(u19, 2), @as(u19, @truncate(skip_inst >> 5)));
     try std.testing.expectEqual(@as(u6, 0b000101), @as(u6, @truncate(branch_inst >> 26)));
     try std.testing.expectEqual(@as(u26, @intCast(@divExact(@as(i64, @intCast(target - (patch + 4))), 4))), @as(u26, @truncate(branch_inst)));
 }
 
-const TestEmit = EmitMod.Emit(.arm64linux);
+const TestEmit = EmitMod.Emit(.aarch64_aapcs);
 const test_veneer_bytes = LinuxCodeGen.pcrel_veneer_bytes;
 const br_ip0_inst: u32 = 0xD61F0200;
 const blr_ip0_inst: u32 = 0xD63F0200;

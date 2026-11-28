@@ -89,9 +89,13 @@ const LowerBothPathsError = std.mem.Allocator.Error ||
     Coordinator.AppDiscoveryError ||
     @import("../coordinator.zig").CoordinatorError ||
     lir.CheckedPipeline.LowerResourceError ||
-    error{TestUnexpectedResult};
+    error{ TestUnexpectedResult, TestExpectedEqual };
 
-fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std.testing.TmpDir, source: []const u8, inline_mode: lir.CheckedPipeline.InlineMode) LowerBothPathsError!Lowered {
+/// Which program the runtime consumer continues (design.md "Compile-Time
+/// Evaluation Under `.lss`").
+const RuntimeStages = std.meta.Tag(eval.CompileTimeFinalization.ProgramSession.RuntimeStages);
+
+fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std.testing.TmpDir, source: []const u8, inline_mode: lir.CheckedPipeline.InlineMode, expected_stages: RuntimeStages) LowerBothPathsError!Lowered {
     const io = std.testing.io;
     try tmp_dir.dir.createDirPath(io, ".roc_echo_platform");
     for (platform_files) |file| try tmp_dir.dir.writeFile(io, .{ .sub_path = file.path, .data = file.source });
@@ -126,11 +130,11 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
     try coord.finishCheckedProgram(.executable_artifacts);
     if (coord.hasUserErrors()) return error.TestUnexpectedResult;
     const session = &coord.program_session.?;
-    // The `.boxy` evaluator completed the app's compile-time roots before
-    // the Solved program was specialized, so that program restores their
-    // stored values and is specialized once, and the runtime consumer
-    // continues it (design.md "Compile-Time Evaluation Under `.lss`").
-    try std.testing.expect(session.runtime_stages == .evaluation);
+    // When the Solved program evaluated a pending compile-time root, the
+    // runtime consumer continues a program specialized again from the
+    // stored values; when every root completed in value form, it continues
+    // the one specialization.
+    try std.testing.expectEqual(expected_stages, std.meta.activeTag(session.runtime_stages));
     try std.testing.expect(session.runtime_prepared != null);
     var continued = try session.takeRuntime(gpa, session.runtime_roots, optimizedTarget(inline_mode));
     errdefer continued.deinit();
@@ -205,7 +209,7 @@ test "two equal compile-time tables freeze to one backing in the continued runti
         \\    Echo.line!(Str.inspect(List.get(second, List.len(args))))
         \\    Ok({})
         \\}
-    , .wrappers);
+    , .wrappers, .respecialized);
     defer lowered.deinit();
 
     const continued = &lowered.continued;
@@ -232,6 +236,33 @@ test "two equal compile-time tables freeze to one backing in the continued runti
     try std.testing.expectEqual(@as(usize, 0), countLowLevel(&continued.lir_result, .list_append_unsafe));
     try std.testing.expectEqual(@as(usize, 0), countLowLevel(&lowered.restored.lir_result, .list_append_unsafe));
     try std.testing.expect(countListSlots(&lowered.restored.lir_result) > 0);
+}
+
+test "distinct constant images emit one copy of their imported file" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const payload = "shared file bytes, long enough that every target needs an allocation";
+    try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "asset.bin", .data = payload });
+    var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\import "asset.bin" as asset : List(U8)
+        \\first = [asset, [1.U8]]
+        \\second = [[2.U8], asset]
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(List.get(first, List.len(args))))
+        \\    Echo.line!(Str.inspect(List.get(second, List.len(args))))
+        \\    Ok({})
+        \\}
+    , .wrappers, .evaluation);
+    defer lowered.deinit();
+    var copies: usize = 0;
+    for (lowered.image) |node| copies += std.mem.count(u8, node.bytes, payload);
+    try std.testing.expectEqual(@as(usize, 1), copies);
 }
 
 test "an empty compile-time list stays immutable even when a consumer appends" {
@@ -263,7 +294,7 @@ test "an empty compile-time list stays immutable even when a consumer appends" {
         \\    Echo.line!(Str.inspect(List.append(buffer, List.len(args))))
         \\    Ok({})
         \\}
-    , .wrappers);
+    , .wrappers, .respecialized);
     defer lowered.deinit();
 
     for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
@@ -302,7 +333,7 @@ test "a compile-time table only read stays immutable data" {
         \\    Echo.line!(Str.inspect(List.get(table, List.len(args) + 1)))
         \\    Ok({})
         \\}
-    , .wrappers);
+    , .wrappers, .respecialized);
     defer lowered.deinit();
     for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
         // Both reads borrow the same immutable table.
@@ -329,7 +360,7 @@ test "a compile-time table consumed by a write stays immutable and requires copy
         \\    Echo.line!(Str.inspect(List.get(written, 0)))
         \\    Ok({})
         \\}
-    , .wrappers);
+    , .wrappers, .respecialized);
     defer lowered.deinit();
     for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
         // An update cannot turn the read into a constructor or make the
@@ -365,7 +396,7 @@ test "a compile-time table consumed through an uninlined builtin wrapper stays i
         \\    Echo.line!(Str.inspect(List.get(written, 0)))
         \\    Ok({})
         \\}
-    , .none);
+    , .none, .respecialized);
     defer lowered.deinit();
     for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
         // Calling through a wrapper does not authorize reconstruction.
@@ -400,7 +431,7 @@ test "a compile-time table re-bound through a helper starts from immutable data"
         \\    Echo.line!(Str.inspect(List.get($t, 0)))
         \\    Ok({})
         \\}
-    , .wrappers);
+    , .wrappers, .respecialized);
     defer lowered.deinit();
     for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
         // The loop starts from the immutable table. Later iterations may
@@ -531,7 +562,14 @@ test "a constant aggregate's image does not grow with its copies, and every cons
             defer arena.deinit();
             var tmp_dir = std.testing.tmpDir(.{});
             defer tmp_dir.cleanup();
-            var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir, try aggregateSource(arena.allocator(), shape, count), .none);
+            // A literal list and a string literal are in value form, which
+            // the checked-value writer completes with no program; every other
+            // shape's constant is evaluated by the Solved program.
+            const expected_stages: RuntimeStages = switch (shape) {
+                .literal_scalars, .runtime_repeat => .evaluation,
+                .nested_rows, .heap_strings, .string_records => .respecialized,
+            };
+            var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir, try aggregateSource(arena.allocator(), shape, count), .none, expected_stages);
             defer lowered.deinit();
             sizes[index] = try programSize(&lowered.continued.lir_result);
             restored_sizes[index] = try programSize(&lowered.restored.lir_result);
@@ -551,18 +589,24 @@ test "a constant aggregate's image does not grow with its copies, and every cons
                     try std.testing.expectEqual(@as(usize, 1), buffers);
                 },
                 .nested_rows => {
-                    // Every element names the one row in the image.
-                    var rows: usize = 0;
-                    var outer: ?static_data_exports.StaticDataExport = null;
+                    // The value is one stored image: the outer list's
+                    // descriptor, its items, and the one row every item
+                    // names, so the block's pointers are the descriptor's
+                    // and one per item, and they point at two places.
+                    var block: ?static_data_exports.StaticDataExport = null;
                     for (lowered.image) |item| {
-                        // A row is its elements behind a refcount header,
-                        // with no pointers of its own.
-                        if (item.relocations.len == 0 and item.bytes.len >= row_len * @sizeOf(u64) and item.bytes.len <= (row_len + 2) * @sizeOf(u64)) rows += 1;
-                        if (item.relocations.len == count) outer = item;
+                        if (item.relocations.len == count + 1) block = item;
                     }
-                    try std.testing.expectEqual(@as(usize, 1), rows);
-                    const elements = (outer orelse return error.TestUnexpectedResult).relocations;
-                    for (elements) |relocation| try std.testing.expectEqual(elements[0].target_symbol_name, relocation.target_symbol_name);
+                    const pointers = (block orelse return error.TestUnexpectedResult).relocations;
+                    var targets: [2]i64 = .{ pointers[0].addend, pointers[0].addend };
+                    for (pointers) |relocation| {
+                        try std.testing.expectEqual(pointers[0].target_symbol_name, relocation.target_symbol_name);
+                        if (relocation.addend != targets[0]) {
+                            if (targets[1] == targets[0]) targets[1] = relocation.addend;
+                            try std.testing.expectEqual(targets[1], relocation.addend);
+                        }
+                    }
+                    try std.testing.expect(targets[0] != targets[1]);
                 },
                 .heap_strings, .string_records => {},
             }

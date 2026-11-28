@@ -2543,6 +2543,7 @@ pub fn build(b: *std.Build) void {
         .build_options = roc_modules.build_options,
         .zig_default_test_runner = b.createModule(.{
             .root_source_file = b.path("vendor/zig_test_runner.zig"),
+            .imports = &.{.{ .name = "stale_borrow_allocator", .module = roc_modules.stale_borrow_allocator }},
         }),
     };
 

@@ -35,6 +35,140 @@ pub const Target = union(enum) {
     host: u64,
     /// A symbol the host must provide and does not.
     missing,
+    /// A stored constant's image in the constant pool, by its index among
+    /// the pool's entries (`Pool.entries`).
+    pool: u32,
+};
+
+/// A stored constant's image as the constant pool reads it.
+pub const PoolImage = UnitImage.PoolImage;
+
+/// Finds a stored image by its digest.
+pub const PoolSource = UnitImage.PoolSource;
+
+/// The pool source of a link whose images name no stored image.
+pub fn emptyPoolSource() PoolSource {
+    return .{ .context = &empty_pool_context, .find = findNoImage };
+}
+
+var empty_pool_context: u8 = 0;
+
+fn findNoImage(_: *anyopaque, _: [32]u8) error{OutOfMemory}!?PoolImage {
+    return null;
+}
+
+/// The constant pool of a link (design.md "Constant Pool"): the stored
+/// images the images' pool imports (`UnitImage.import_pool`) name, each
+/// once whatever number of images names it. An image is placed only when a
+/// reached atom names it (`markKept`), at an offset that is a function of
+/// the kept images' digests alone (`layOut`); a link copies each kept image
+/// once and relocates its pointer words to where it placed it.
+pub const Pool = struct {
+    source: PoolSource,
+    entries: std.ArrayList(Entry) = .empty,
+    by_digest: std.AutoHashMapUnmanaged([32]u8, u32) = .empty,
+    /// The kept entries' indices in placement order: by digest.
+    kept: std.ArrayList(u32) = .empty,
+    /// The pool region's size and alignment once laid out.
+    size: u64 = 0,
+    alignment: u64 = 8,
+
+    pub const Entry = struct {
+        digest: [32]u8,
+        image: PoolImage,
+        kept: bool = false,
+        /// The image's offset in the pool region, once laid out.
+        offset: u64 = 0,
+    };
+
+    pub fn deinit(self: *Pool, gpa: Allocator) void {
+        self.entries.deinit(gpa);
+        self.by_digest.deinit(gpa);
+        self.kept.deinit(gpa);
+    }
+
+    /// The entry of the image the pool import named `name` names.
+    fn entryOf(self: *Pool, gpa: Allocator, name: []const u8) Allocator.Error!u32 {
+        const digest = UnitImage.poolDigestOfName(name) orelse
+            base.invariant("unit image link invariant violated: the pool import {s} names no image digest", .{name});
+        const gop = try self.by_digest.getOrPut(gpa, digest);
+        if (gop.found_existing) return gop.value_ptr.*;
+        const image = try self.source.find(self.source.context, digest) orelse
+            base.invariant("unit image link invariant violated: no checked module of the program stores the image {s}", .{name});
+        gop.value_ptr.* = @intCast(self.entries.items.len);
+        try self.entries.append(gpa, .{ .digest = digest, .image = image });
+        return gop.value_ptr.*;
+    }
+
+    /// Keep every entry an edge of a reached atom of a placed image names.
+    pub fn markKept(self: *Pool, states: []const ?Walk.State) void {
+        for (states) |state_or_null| if (state_or_null) |state| {
+            for (state.targets, state.imports_used) |target, used| switch (target) {
+                .pool => |entry| if (used) {
+                    self.entries.items[entry].kept = true;
+                },
+                .app, .host, .missing => {},
+            };
+        };
+    }
+
+    /// Lay the kept entries out in digest order, each at its alignment.
+    pub fn layOut(self: *Pool, gpa: Allocator) Allocator.Error!void {
+        for (self.entries.items, 0..) |entry, index| if (entry.kept) try self.kept.append(gpa, @intCast(index));
+        std.mem.sort(u32, self.kept.items, self.entries.items, struct {
+            fn lessThan(entries: []const Entry, a: u32, b: u32) bool {
+                return std.mem.order(u8, &entries[a].digest, &entries[b].digest) == .lt;
+            }
+        }.lessThan);
+        var at: u64 = 0;
+        for (self.kept.items) |index| {
+            const entry = &self.entries.items[index];
+            const entry_align: u64 = @max(entry.image.alignment, 8);
+            self.alignment = @max(self.alignment, entry_align);
+            at = std.mem.alignForward(u64, at, entry_align);
+            entry.offset = at;
+            at += entry.image.bytes.len;
+        }
+        self.size = at;
+    }
+
+    /// The pool-region offset of the target of pointer word `pointer` of
+    /// kept entry `entry`: the entry's offset plus the block offset the
+    /// word holds.
+    pub fn pointerTarget(entry: Entry, pointer: u32) u64 {
+        return entry.offset + std.mem.readInt(u64, entry.image.bytes[pointer..][0..8], .little);
+    }
+
+    /// How many pointer words the kept entries hold: the absolute words a
+    /// loader relocates.
+    pub fn pointerCount(self: *const Pool) u64 {
+        var count: u64 = 0;
+        for (self.kept.items) |index| count += self.entries.items[index].image.pointers.len;
+        return count;
+    }
+
+    /// Write every kept entry at its offset in `region`, the pool region's
+    /// bytes, its pointer words holding the addresses they point at when
+    /// the region is at `base_address`.
+    pub fn write(self: *const Pool, region: []u8, base_address: u64) void {
+        for (self.kept.items) |index| {
+            const entry = self.entries.items[index];
+            const out = region[@intCast(entry.offset)..][0..entry.image.bytes.len];
+            @memcpy(out, entry.image.bytes);
+            for (entry.image.pointers) |pointer| {
+                std.mem.writeInt(u64, out[pointer..][0..8], base_address + pointerTarget(entry, pointer), .little);
+            }
+        }
+    }
+
+    /// The address a pool import resolves to when the region is at
+    /// `base_address`: its entry's, or zero for an entry no reached atom
+    /// names, which no placed field reads.
+    pub fn address(self: *const Pool, entry: u32, base_address: u64) u64 {
+        const placed = self.entries.items[entry];
+        if (!placed.kept) return 0;
+        return base_address + placed.offset;
+    }
 };
 
 /// One export of an image, as `collectExportsOf` reads it.
@@ -224,11 +358,19 @@ pub const Native = struct {
         /// error, and an import resolving to nothing else is a compiler
         /// invariant.
         host_required: []const []const u8,
+        /// The constant pool pool imports resolve to; a link of images that
+        /// name none may leave it out.
+        pool: ?*Pool = null,
         missing: std.StringArrayHashMapUnmanaged(void) = .empty,
 
         pub fn resolve(self: *Resolver, gpa: Allocator, images: []const Image, image: u32, import_index: u32) Allocator.Error!unit_walk_Target {
             const view = images[image].view;
-            const name = view.name(view.imports()[import_index].name);
+            const import = view.imports()[import_index];
+            const name = view.name(import.name);
+            if (import.flags & UnitImage.import_pool != 0) {
+                const pool = self.pool orelse base.invariant("unit image link invariant violated: an image names the pool image {s} and the link has no pool", .{name});
+                return .{ .pool = try pool.entryOf(gpa, name) };
+            }
             if (self.exports.get(name)) |found| return .{ .app = found };
             if (self.host.find(self.host.context, name)) |host| return .{ .host = host };
             if (findSorted(self.host_required, name) == null) {
@@ -247,7 +389,7 @@ pub const Native = struct {
         return image.view.imports().len;
     }
     pub fn atomCount(image: Image) usize {
-        return image.view.atoms().len;
+        return image.view.atomCount();
     }
     pub fn roots(image: Image) []const u32 {
         return image.view.roots();
@@ -255,20 +397,22 @@ pub const Native = struct {
     pub fn atomEdges(image: Image, atom: u32) []const u32 {
         return image.view.atomEdges(atom);
     }
-    pub fn edge(_: Image, entry: u32) Edge {
-        if (entry & UnitImage.edge_import == 0) return .{ .atom = entry };
-        return .{ .import = entry & ~UnitImage.edge_import };
+    pub fn edge(image: Image, entry: u32) Edge {
+        return switch (image.view.decodeEdge(entry)) {
+            .atom => |atom| .{ .atom = atom },
+            .import => |import| .{ .import = import },
+        };
     }
     pub fn rootEdge(image: Image, entry: u32) Edge {
         return edge(image, entry);
     }
     pub fn symbolAtom(image: Image, symbol: u32) ?u32 {
-        return image.view.symbolAtoms()[symbol].get();
+        return image.view.symbolAtom(symbol);
     }
     pub fn reference(target: unit_walk_Target) ?SymbolRef {
         return switch (target) {
             .app => |found| found,
-            .host, .missing => null,
+            .host, .missing, .pool => null,
         };
     }
     pub fn exportCount(image: Image) u32 {

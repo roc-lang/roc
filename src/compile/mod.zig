@@ -223,6 +223,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/source_single_use_inline_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11249_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11263_test.zig"));
+    std.testing.refAllDecls(@import("test/stored_image_parts_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11286_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11299_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11290_test.zig"));
@@ -298,6 +299,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11527_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11908_test.zig"));
     std.testing.refAllDecls(@import("test/packed_tag_lists_test.zig"));
+    std.testing.refAllDecls(@import("test/polymorphic_constant_instances_test.zig"));
     std.testing.refAllDecls(@import("test/optimized_literal_roots_test.zig"));
     std.testing.refAllDecls(@import("test/demand_driven_ctfe_test.zig"));
     std.testing.refAllDecls(@import("test/value_form_roots_test.zig"));

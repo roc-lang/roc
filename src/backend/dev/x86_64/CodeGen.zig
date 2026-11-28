@@ -3,12 +3,11 @@
 //! This module provides x86_64-specific code generation including
 //! function prologues/epilogues and instruction selection.
 //!
-//! CodeGen is parameterized by RocTarget to support cross-compilation.
-//! Use CodeGen(target) to get a specialized type for a specific target.
+//! CodeGen is parameterized by the dev-backend `Abi` it emits code for.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const RocTarget = @import("roc_target").RocTarget;
+const Abi = @import("../isa.zig").Abi;
 
 const EmitMod = @import("Emit.zig");
 const Registers = @import("Registers.zig");
@@ -24,21 +23,20 @@ const FloatReg = Registers.FloatReg;
 const RegisterWidth = Registers.RegisterWidth;
 
 /// Parameterized x86_64 code generator.
-/// Use CodeGen(target) to get a specialized type for a specific RocTarget.
-pub fn CodeGen(comptime target: RocTarget) type {
-    // Validate this is an x86_64 target
-    if (target.toCpuArch() != .x86_64) {
-        @compileError("x86_64.CodeGen requires an x86_64 target");
+/// Use CodeGen(machine_abi) to get a specialized type for one calling convention.
+pub fn CodeGen(comptime machine_abi: Abi) type {
+    if (machine_abi.isa() != .x86_64) {
+        @compileError("x86_64.CodeGen requires an x86_64 ABI");
     }
 
-    const Emit = EmitMod.Emit(target);
-    const CC = if (target.isWindows()) WindowsFastcall else SystemV;
+    const Emit = EmitMod.Emit(machine_abi);
+    const CC = if (machine_abi.isWindows()) WindowsFastcall else SystemV;
 
     return struct {
         const Self = @This();
 
-        /// The target this CodeGen was instantiated for
-        pub const roc_target = target;
+        /// The ABI this CodeGen was instantiated for
+        pub const code_abi = machine_abi;
 
         /// Number of general-purpose registers
         pub const NUM_GENERAL_REGS = 16;
@@ -52,7 +50,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Bitmask of callee-saved general registers available for allocation
         /// System V: RBX, R12, R13, R14, R15 (not RBP - it's the frame pointer)
         /// Windows: RBX, RSI, RDI, R12, R13, R14, R15 (not RBP - it's the frame pointer)
-        pub const CALLEE_SAVED_GENERAL_MASK: u32 = if (target.isWindows())
+        pub const CALLEE_SAVED_GENERAL_MASK: u32 = if (machine_abi.isWindows())
             (1 << @backingInt(GeneralReg.RBX)) |
                 (1 << @backingInt(GeneralReg.RSI)) |
                 (1 << @backingInt(GeneralReg.RDI)) |
@@ -70,7 +68,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Size of the callee-saved register area
         /// Windows: 7 registers * 8 bytes = 56 bytes
         /// System V: 5 registers * 8 bytes = 40 bytes
-        pub const CALLEE_SAVED_AREA_SIZE: i32 = if (target.isWindows()) 56 else 40;
+        pub const CALLEE_SAVED_AREA_SIZE: i32 = if (machine_abi.isWindows()) 56 else 40;
 
         emit: Emit,
         allocator: Allocator,
@@ -548,9 +546,8 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
 // Tests - use explicit target instantiation for cross-platform testing
 
-const LinuxCodeGen = CodeGen(.x64linux);
-const WinCodeGen = CodeGen(.x64win);
-const MacCodeGen = CodeGen(.x64mac);
+const LinuxCodeGen = CodeGen(.x86_64_sysv);
+const WinCodeGen = CodeGen(.x86_64_windows);
 
 test "prologue and epilogue" {
     var cg = LinuxCodeGen.init(std.testing.allocator);
@@ -912,34 +909,4 @@ test "emitPrologueWithAlloc produces 16-byte aligned frame" {
         if (code[i + 1] == 0x81) break std.mem.readInt(u32, code[i + 3 ..][0..4], .little);
     } else return error.TestUnexpectedResult;
     try std.testing.expect(imm % 16 == 0);
-}
-
-test "MacCodeGen matches LinuxCodeGen (both System V)" {
-    // macOS and Linux both use System V ABI - verify they're identical
-    try std.testing.expectEqual(LinuxCodeGen.CALLEE_SAVED_GENERAL_MASK, MacCodeGen.CALLEE_SAVED_GENERAL_MASK);
-    try std.testing.expectEqual(LinuxCodeGen.CALLEE_SAVED_AREA_SIZE, MacCodeGen.CALLEE_SAVED_AREA_SIZE);
-    try std.testing.expectEqual(LinuxCodeGen.roc_target.isWindows(), MacCodeGen.roc_target.isWindows());
-
-    // Both should NOT be Windows
-    try std.testing.expect(!LinuxCodeGen.roc_target.isWindows());
-    try std.testing.expect(!MacCodeGen.roc_target.isWindows());
-}
-
-test "MacCodeGen prologue/epilogue matches LinuxCodeGen" {
-    // macOS and Linux should produce identical code (both System V)
-    var mac_cg = MacCodeGen.init(std.testing.allocator);
-    defer mac_cg.deinit();
-
-    var linux_cg = LinuxCodeGen.init(std.testing.allocator);
-    defer linux_cg.deinit();
-
-    // Emit prologue and epilogue for both
-    try mac_cg.emitPrologueWithAlloc(0);
-    try mac_cg.emitEpilogue();
-
-    try linux_cg.emitPrologueWithAlloc(0);
-    try linux_cg.emitEpilogue();
-
-    // Should produce identical code
-    try std.testing.expectEqualSlices(u8, linux_cg.getCode(), mac_cg.getCode());
 }

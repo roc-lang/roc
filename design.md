@@ -745,6 +745,7 @@ reads that distinction, or anything else, back out of the spelling:
 | `roc__d{N}` | the value owner `N` holds | program |
 | `roc__d{N}_{k}` | the `k`th further node (from 1) of owner `N`'s value | program |
 | `roc__h{hash}` | a datum named by content: a string literal's backing, a carried constant, or a constant a wasm unit defines for itself (`UnitCompile.contentNamedStaticData`) | shared |
+| `roc__i{digest}` | a stored constant's image, by its digest in hex (`lir.Program.poolImageSymbolName`; design "Constant Pool") | shared |
 | `roc__p{hash}` | a procedure, by its `ProcIdentity` | shared |
 | `roc__p{hash}.{k}` | the `k`th fragment function (from 1) of a procedure's wasm code ("Wasm Function Limits") | shared |
 
@@ -762,8 +763,11 @@ another kept value still points into its data, so compaction renames every kept
 node after the first kept value in export order whose data graph reaches it, in
 the order a walk from that value finds them. `lir.Program`
 (`staticDataSymbolName`, `staticDataNodeSymbolName`,
-`content_data_symbol_prefix`) and `ProcIdentity.symbol_name_prefix` are the
-only places these forms are spelled.
+`content_data_symbol_prefix`, `pool_image_symbol_prefix`) and
+`ProcIdentity.symbol_name_prefix` are the only places these forms are
+spelled; a unit image reads the pool form back
+(`UnitImage.poolDigestOfName`), and the backend asserts at compile time that
+its prefix is `lir.Program`'s.
 
 Debug information shows a procedure by its source name and states its
 `roc__p{hash}` symbol as the linkage name ("Procedure Source Names"), so
@@ -2493,7 +2497,8 @@ roots (`CompileTimeRootTable.fromModule`), after it has published the
 module's dispatch plans: a numeral with a `from_numeral` plan is not in value
 form, and a literal with a conversion root always has such a plan, so the
 conversion roots published later decide nothing. Deciding reads the checked
-types and changes none.
+types and changes none. The walk classifies each part by its node kind before it decodes the
+part, so a part that cannot be in value form is never decoded.
 
 A lookup is decided last, once every root of the module exists with its
 request eligibility: publication resolves it from checked CIR to the root it
@@ -2533,34 +2538,33 @@ root. A root for which any of these could happen is not in value form.
 The writer stores the root under the plan, layout and stored type the
 `.boxy` compile-time evaluator stores it under, computed from the root's
 result type exactly as that evaluator's lowering computes them, by a program
-of the same modules that lowers nothing (`postcheck.Boxy.ValueSchema`). Under
-`.lss` too, every root that reads no function value is the `.boxy`
-evaluator's ("Compile-Time Evaluation Under `.lss`"), so this is the one
-representation either strategy stores such a root in. One store writer
-serves both producers (`eval/const_store_writer.zig`): the plan-directed walk,
-the node shapes it fills, the field and variant order, packed scalar and
-product lists, nominal wrapping, and the stored type are shared, and only
-where a value's parts come from differs: an evaluator's result memory, the
-checked expression's parts, or the stored value of a constant the expression
-reads. A numeral's bytes are the bytes lowering gives the literal
-(`exact_numeral.encodeBits`), and a literal list or string has no capacity
-beyond its items (Static Lists And Strings Keep Their Capacity). A string of
-one segment and a bytes literal are stored as blobs borrowed from the
-module's string literal store, with no copy ("Constant Storage"); a bytes
-literal is the packed items of its `List(U8)`. A read of a
-constant is the constant's stored value, capacity included: the writer
-copies the read root's nodes into the reading root's store under the
-reading root's own plan, choosing each tag's variant by name, so a read at a
-wider tag row stores the same value, and copying a packed list's bytes as
-they are, since a list of one item type packs one way. It reads a root of
-the module being written from the store being written, since every artifact
-of one checked identity owns its own store, and an imported root from the
-schema's view of its module.
-Every part of a value-form root is a node of its own: the writer shares no
-node between two parts, equal or not, nor with the root it reads. Sharing is
-an evaluator's record that two parts were one allocation, and a checked
-expression has no allocations to record. Equal string and packed list bytes
-are still stored once, because the store interns blob data by content.
+of the same modules that lowers nothing (`postcheck.Boxy.ValueSchema`).
+The writer is the same under either strategy, so this is the one
+representation either strategy stores a value-form root in. A value-form
+root is data alone, so it is stored as its image (Stored Images), and the
+writer (`ConstStoreWriter.ValueFormImage`) writes that image straight from the
+checked expression, part by part at the 64-bit layout of the root's type,
+exactly as `NativeRootExport.imageRoot` writes an evaluation of the same
+expression, and as `NativeRootExport.imageRootAt` writes one a Solved
+program evaluated at rows its joins widened (Stored Images): a numeral's bytes are the bytes lowering gives the literal
+(`exact_numeral.encodeBits`), a literal list or string has no capacity
+beyond its items (Static Lists And Strings Keep Their Capacity), a bytes
+literal's items are the imported file's bytes and a file imported as `Str` is
+a string of that one segment, each list's items are in an allocation of their
+own, and each tag is written as the
+discriminant of the variant its plan names. A read of a constant is the
+constant's stored value, capacity included: the read root's image,
+relocated into memory, is copied through the reading part's plan by the
+pass that copies an evaluation's memory (`NativeRootExport.imagePart`), so
+each of its allocations lands where an evaluation reading the constant
+would put it. It reads a root of the module being written from the store
+being written, since every artifact of one checked identity owns its own
+store, and an imported root from the schema's view of its module. An image
+holds each content once: finishing it merges allocations of equal bytes
+whose pointer words name allocations of equal content into the first of
+them (`ImageGraph.mergeEqualAllocations`), as an evaluation reads equal
+literals from one static allocation, so the writer's image and the
+evaluator's agree whatever either shared.
 
 A value-form root reads only roots the writer completes, so finalization
 completes every pending one before any evaluator starts: the evaluators'
@@ -2831,11 +2835,12 @@ retain and remap both child slots and referenced procedures. Identical frozen
 nodes can share storage by their contents and relocations.
 
 A stored value that is data alone, holding no function value and no failed
-value anywhere inside it, is one slot naming its ConstStore node
-(`Program.storedDataAlone`), whatever it holds: the data encoder writes it
-from the store through its type's plan, so the work of every pass and backend
-is independent of how many values it holds, and only the encoder's is
-proportional to them. The encoder writes each stored value straight into
+value anywhere inside it, is an image (Stored Images), and is one slot naming
+its ConstStore node whatever it holds: a root's image, or the image of a
+part of a stored function value, which the data encoder copies as one block,
+or re-encodes at a reader's other layout, so the work of every pass and
+backend is independent of how many values it holds, and only the encoder's
+is proportional to them. The encoder writes each stored value straight into
 the bytes of the value holding it, and shares among its readers the frozen
 descriptor of every value that owns an allocation (a stored list, a box, an
 allocated string, and a product or tag a recursive type keeps behind a box),
@@ -3040,17 +3045,15 @@ values, their representation metadata, and the procedures' own identities.
 
 Boxy runtime lowering is a distinct declared specialization strategy: that
 consumer's runtime roots are excluded from the LSS union and lowered by the
-separate Boxy pipeline after checking completes. Under either strategy the
-`.boxy` evaluator completes every compile-time root that reads no function
-value ("Compile-Time Evaluation Under `.lss`"). This split follows the
-selected strategy, never a failed specialization attempt.
+separate Boxy pipeline after checking completes. Compile-time evaluation uses
+the same selected strategy ("Compile-Time Evaluation Under `.lss`").
+This split follows the selected strategy, never a failed specialization attempt.
 
 #### Demand-Driven Compile-Time Specialization
 
 Compile-time evaluation runs the compile-time roots, and the literal roots
-that specializations register. Under `.lss`, the `.boxy` evaluator has
-completed every compile-time root that reads no function value before the
-Solved program is specialized ("Compile-Time Evaluation Under `.lss`").
+that specializations register. Under `.lss`, pending constants are evaluated
+in the Solved program ("Compile-Time Evaluation Under `.lss`").
 Checking already gave every literal whose
 conversion is closed a compile-time root of its own (an interpolation's
 included, which is validate-only), and every literal whose conversion depends
@@ -5420,8 +5423,12 @@ A data file a module imports is likewise hashed once, when the canonicalize
 task reads it. Its digest is the file dependency's `content_hash`, which both
 the module's source-input hash and watch mode read. The resolved literal names
 that dependency. Storing or copying its exact bytes as a checked constant
-preserves the digest; evaluating a new value does not infer one. Monotype
-uses equal file digests to give those literals one immutable backing owner.
+preserves the digest; evaluating a new value does not infer one. A stored
+image remains self-contained: its sorted file ranges name the unchanged
+bytes within it, not a file the loader must reopen. Emission can therefore
+give two different constants one immutable file backing without confusing
+their types, descriptors, or whole-image identities. Bytes that fit inline
+in a string descriptor need no backing allocation.
 
 Watch mode's file state for a readable file is the source digest of the file's
 bytes exactly as they are on disk, because that is what a refresh check can
@@ -5930,7 +5937,10 @@ debug invariant checks it against the serialized `display_module_name_idx`.
 
 The cache id does not include target ABI, pointer width, layout ids, field offsets,
 alignment decisions, backend choice, object format, code-generation options,
-post-check lowering strategy, or post-check specialization state.
+post-check lowering strategy, or post-check specialization state. The checked
+module cache files an entry under that id and the compilation's strategy
+(`coordinator.checkedEntryKey`), because the stored images in it are at the
+layouts of the strategy whose evaluator wrote them (Stored Images).
 
 Module boundaries are cache boundaries only. They must never change the final
 runtime behavior or performance of the compiled program, except for debug
@@ -5963,11 +5973,13 @@ LIR, LirImage data, object code, or executable binary output must include the lo
 strategy and every target/backend input that can change the lowered
 representation.
 
-The checked module cache stores checked Roc values only. Roc language values are
-target-independent except for pointer-sized Roc values if the language exposes
-them to compile-time evaluation. Compiler runtime representation data are not
-Roc values and must never enter `ConstStore`: runtime addresses, allocation
-identity, layout ids, runtime discriminants, field offsets, LIR proc ids,
+The checked module cache stores checked Roc values. A value that is data
+alone is stored as its image, the memory it occupies at the 64-bit layout of
+its stored type (Stored Images), so its bytes hold that layout's field
+offsets and discriminants and its pointer words hold block offsets; the
+entry is therefore filed per strategy. Beyond that, compiler runtime
+representation data must never enter `ConstStore`: runtime addresses,
+allocation identity, layout ids, LIR proc ids,
 backend symbols, object-format details, and backend state are all outside the
 checked value domain. Host interaction exists only at runtime, so host handles
 and host results cannot be compile-time values. If Roc exposes pointer-sized
@@ -5995,6 +6007,30 @@ included—plus statically-resolvable type-qualified method-call targets and
 associated values named through a local type alias (Associated Item Lookup
 Through Aliases). It is transient checking input computed from canonicalization output when
 checking starts and freed with the checker; a checked module never stores it.
+
+The walk that collects a def's name references does not enter a
+literal-only subtree. Canonicalization decides, as it adds each expression
+from its kind and its already-added children, whether the expression's whole
+subtree is literals and structural constructions (numeric, string and bytes
+literals, empty and payload-free constructions, and lists, tuples, tags and
+records without an update base built from such subtrees), and records it in
+a bit column of the node store (`NodeStore.exprIsLiteralOnly`), serialized
+with the module. Nominal constructions are never literal-only, because the
+defaults a construction omits contribute references. Such a subtree names
+no definition. Checking rewrites no node of it into a lookup, call,
+procedure or nominal construction: its in-place rewrites target lookups,
+operators, method and dispatch calls, interpolations and nominal
+constructions, and the one that can reach a literal replaces it with a
+runtime error whose evaluated operands are its own literal-only children.
+So skipping the subtree leaves every def's references unchanged, including
+when the order is computed again after strict cycles reject definitions.
+
+Top-level demand dependencies (`buildCheckedDependencyGraph`) walk every
+body without that skip. A literal that converts through a custom or
+specialized `from_numeral` or `from_quote` is a demand edge
+(`DemandAnalyzer.visitLiteralNode`), and checking decides which literals do
+only after canonicalization, inside literal-only subtrees; with no parent
+links, the checker cannot clear the bit of the subtrees that hold one.
 
 Because groups are checked in dependency order, a name reference between
 groups always points at an already-checked def. There is no re-entrant
@@ -6102,6 +6138,26 @@ such as the tail of a top-level value's tag row widened by a generalized
 function's use, would be quantified by that function while the value still
 shares it. Pinned by `src/check/test/issue_13011_test.zig`, the rank tests
 in `src/check/test/unify_test.zig`, and `test/cli/Issue13011StoreWrites.roc`.
+
+### Type Store Pools
+
+A type store keeps the variables, record fields and tags its descriptors
+hold in three pools, and while checking runs it only appends to them: no
+entry is rewritten once appended, and a discarded probe drops only what it
+appended. A range is therefore interchangeable with any other range holding
+the same entries, and ranges may be shared by several descriptors and tags.
+Two consequences keep checking from appending entries no class will hold:
+
+- An empty vars range is `Range.empty()`, which a descriptor stores as
+  `stored_empty_var_range`. Appending no variables appends nothing, not even
+  the length slot a non-empty range keeps before its start.
+- A row merge whose merged row comes out equal, entry for entry, to the own
+  row of either operand stores that operand's range instead of a copy
+  (`Unifier.storedRowEntries`). Merging two rows with the same labels gives
+  the second row's entries whenever their payloads and marks are the second's,
+  so most merges append no row. A merged row that differs from both, such as
+  one whose shared tag stops being pattern-only or whose field takes a kind
+  variable from one side and a value variable from the other, is appended.
 
 ### Descriptor Words
 
@@ -6870,10 +6926,9 @@ recorded separately: evidence already finds them through the type.
 ### Value Bindings Generalize By Expression
 
 Adding an annotation may only make a binding's type less flexible, never more.
-Whether a binding generalizes is therefore decided by its right-hand side
-alone, never by its annotation (`Check.shouldGeneralize`,
-`Check.bindingRhsGeneralizes`); this follows Roc RFC 0010 ("Let-generalization:
-Let's not?"), except that number literals do not generalize either:
+Whether a binding generalizes is therefore decided by its right-hand side and
+its position, never by its annotation (`Check.shouldGeneralize`,
+`Check.bindingRhsGeneralizes`, `Check.topLevelConstantGeneralizes`):
 
 - A binding whose right-hand side is a function definition (a lambda, a
   closure, an annotation-only signature, a hosted lambda, or a derived method)
@@ -6882,19 +6937,25 @@ Let's not?"), except that number literals do not generalize either:
   (local, imported, or associated, as in `shorthand = FooBar.myfunc`),
   generalizes. The reference does no work, and it is exactly as polymorphic
   as the binding it names.
+- A top-level constant generalizes over every type variable of its type that
+  carries no requirement, and keeps every one that carries one weak
+  (Polymorphic Constants, below). `empty = []` and `id = mk({})` are
+  polymorphic; `five = 5` is weak, because its type carries a literal
+  conversion requirement ("weak top-level literal rejects second use at
+  different type", below).
 - Every other value binding is weak: it has one type, shared by every use.
-  This includes `empty = []`, `id = mk({})`, a number literal ("weak top-level
-  literal rejects second use at different type", below), and a conditional,
-  match, or block whose value is a lambda.
+  This includes every local value binding (`empty = []` inside a function
+  body) and a conditional, match, or block whose value is a lambda, when it is
+  local.
 
-A weak top-level value's type may keep a variable that nothing pins, like the
-item type of `empty = []`. The checker rejects such a value with
-`polymorphic_value` ("Polymorphic Value") only when that variable carries a
-static-dispatch requirement (`reportPolymorphicTopLevelValues`), as `expect
-empty == []` gives it one: nothing chooses the type the method comes from.
-Without a requirement the variable is decided (Decided Variables), and every
-use of the value is accepted, whichever function it is passed to:
-`Str.inspect(empty)` renders `[]`.
+A weak top-level value's type may keep a variable that nothing pins. The
+checker rejects such a value with `polymorphic_value` ("Polymorphic Value")
+when that variable carries a static-dispatch requirement
+(`reportPolymorphicTopLevelValues`): nothing chooses the type the method comes
+from. A variable without a requirement is never weak at the top level: the
+constant quantifies it, and each use instantiates it (`expect empty == []`
+compares the `expect`'s own instance, whose item type nothing else fixes, so
+it is decided; Decided Variables).
 
 An expression-position function generalizes only where its consumer
 instantiates it: a binding's right-hand side, or a stored-value construction
@@ -6920,12 +6981,18 @@ construction edge still instantiates whatever it quantifies.
 An annotation cannot make a weak binding polymorphic. An annotation on a weak
 binding that introduces a type variable, named (`a`, `_a`) or an anonymous
 `..`, claims a polymorphism the binding does not have and is rejected with
-`polymorphic_value_annotation` ("Value Is Not Polymorphic"):
+`polymorphic_value_annotation` ("Value Is Not Polymorphic"). A top-level
+constant quantifies every variable its annotation introduces, so its
+annotation is rejected exactly when it has a where clause, which gives an
+introduced variable a requirement (`Check.topLevelValueAnnotationIsRejected`):
+`items : List(a) where [a.to_str : a -> Str]` / `items = []` is rejected, and
+`empty : List(a)` / `empty = []`, `id : a -> a` / `id = mk({})` and
+`parse_left : Parser(List(U8), [Left(U64), ..], _)` are accepted. A local
+binding's annotation is rejected by the rules below:
 
-- `empty : List(a)` / `empty = []`, `id : a -> a` / `id = mk({})`,
-  `f : a -> a` / `f = if c |x| x else |x| x`, `pair : (List(a), U8)`, and a
-  local `xs : List(b)` whose `b` no enclosing annotation introduced are all
-  rejected.
+- A local `xs : List(b)` / `xs = []` whose `b` no enclosing annotation
+  introduced, a local `f : a -> a` / `f = if c |x| x else |x| x`, and a
+  local `pair : (List(a), U8)` are all rejected.
 - A type variable the annotation looks up from an enclosing annotation is not
   introduced by it: inside `f : a -> List(a)`, a local `empty : List(a)` /
   `empty = []` is accepted, because the enclosing binding quantifies `a`.
@@ -6934,11 +7001,13 @@ binding that introduces a type variable, named (`a`, `_a`) or an anonymous
 - A where clause constrains a variable the annotation introduces, so a value
   annotation with one is rejected through that variable.
 - An implicitly opened row extension (an extensionless tag union in an output
-  position, Polarity) is not written, so it is not rejected: on a value it is
-  the row the Polarity table's VALUE rows describe. An explicit
+  position, Polarity) is not written, so it is not rejected: on a local value
+  it is the row the Polarity table's VALUE rows describe. An explicit
   `..` is written. In an output position it means exactly what its absence
-  means, so on a value binding it can only ask for a quantified row; it is
-  rejected, and the report says to remove it.
+  means, so on a local value binding it can only ask for a quantified row; it
+  is rejected, and the report says to remove it. On a top-level constant, as
+  on a function's result, the implicitly opened row is quantified already,
+  and an explicit `..` there is reported as a redundant open tag union.
 
 The report never names a type the program did not write. Its headline says
 the binding "isn't defined as a function (like `|x| ...`)", which is accurate
@@ -6987,17 +7056,240 @@ Both sides are pinned in `src/check/test/value_binding_generalization_test.zig`
 and `src/check/test/issue_12016_test.zig`. Accepted: annotated syntactic
 functions used at two types, value aliases, concrete annotations, `_` holes, a
 local annotation naming only an enclosing variable, the thunk form used at two
-types, a lambda stub, and the issue 12016 program. Rejected: each annotation
-listed above, `...` and `crash` stubs (with their dedicated hint), and a
-rejected binding used at two types (a list, a function value called at two
-types, a local, and a top-level binding used from two functions), each with
-exactly one error; an unannotated weak value used at two types is an ordinary
-mismatch. Using an unannotated top-level value at two wider tag unions is not
-two types either: its uses share one row and widen it together (Value Rows:
-Uses Share One Row).
+types, a lambda stub, the issue 12016 program, and every polymorphic constant
+form (an annotated or unannotated empty list, an eta-reduced call result, a
+tuple and a record holding a type variable, a tag row read at two unions, a
+placeholder constant, and a constant mixing an unconstrained and a
+constrained variable). Rejected: each local annotation listed above, a
+top-level annotation with a where clause, `...` and `crash` stubs in a local
+binding (with their dedicated hint), and a rejected binding used at two types
+(a list, a function value called at two types, a local, and a top-level
+binding used from two functions), each with exactly one error; an
+unannotated weak value used at two types (a local list, or a top-level number
+literal) is an ordinary mismatch.
 `test/echo/value_annotation_not_polymorphic.roc` runs a program past its
 unreached rejected bindings until it reaches one and crashes there, and
 `test/echo/issue_12016_stored_branch_lambdas.roc` runs the stored lambdas.
+
+### Polymorphic Constants
+
+A top-level constant generalizes over every type variable of its type that
+carries no requirement, whether or not it is annotated. Open tag rows and
+open record rows count as such variables. A variable that carries a
+requirement does not generalize: the constant keeps it weak, exactly as a
+weak value keeps every variable, so number literals keep one shared type. A
+local value binding is weak, including one the compiler hoists into a
+compile-time root (a hoisted constant), so a hoisted constant never
+generalizes and has one type (see below).
+
+```roc
+empty : List(_a)
+empty = []
+
+parse_left : Parser(List(U8), [Left(U64), ..], _)
+parse_left = Parser.const(|n| Left(n)).skip(Parser.Utf8.codeunit('L')).keep(Parser.Utf8.digits({}))
+
+parse_line : Parser(List(U8), [Left(U64), Right(U64)], _)
+parse_line = Parser.one_of([parse_left, parse_right])
+```
+
+`empty` is read at `List(U8)` and `List(Str)`; `parse_left`'s open output row
+is read at the closed union `parse_line` names.
+
+**What counts as a requirement.** The constant's right-hand side is a
+generalization boundary of its own (`Check.topLevelConstantGeneralizes`: a
+value definition bound to one name, in a binding group of its own, that no
+platform requirement types). Before boundary defaulting and again before the
+boundary generalizes, `Check.keepRequirementVarsWeak` pins at the enclosing
+rank every class at the boundary's rank that carries a requirement, with every
+class the requirement reaches:
+
+- a static-dispatch constraint on a flexible or rigid variable, a literal
+  conversion's among them, and a literal's undetermined type
+  (`Flex.literal`, Deferred Literal Conversion);
+- every dispatch the boundary still has waiting: the deferred
+  static-dispatch queues, a recursive dispatch judged once inference finishes
+  (`open_recursive_dispatches`), a generated codec parked for module
+  finalization (`final_codec_dispatch_constraints`), and a requirement the
+  body copied from a scheme onto a receiver it shares with an enclosing scope,
+  which waits in `instantiation_dispatchers` until that receiver is grounded;
+- the undetermined field kind of a record literal and a record literal's
+  uncommitted tail (the rule below).
+
+**A record literal's uncommitted tail and undetermined field kinds are not
+open rows.** Neither is a variable the program can write: the record has
+exactly its fields, and its tail only lets a use lift it into a nominal type
+(Uncommitted Record Tails), or a kind decide whether a field is optional. A
+polymorphic constant therefore keeps both weak, and every use shares the one
+lift and the one kind decision, as uses of a weak value do. Accepted:
+`shared = { count: 1.U64 }` read once as `c : Counter` and once as
+`shared.describe()` ("a value binding's uses share its lift",
+`uncommitted_record_tail_test.zig`), and an optional field supplied on one
+branch and omitted on the other under a `?:` annotation ("record - opt -
+conditional presence accepted (annotated)", `type_checking_integration.zig`).
+Rejected: the same `shared` read once as `Counter` and once as another
+nominal with the same backing is a mismatch ("a value binding committed by one
+use rejects another nominal"). Quantifying the tail instead would let each use
+lift the constant into a different nominal, and the record literal's one
+construction could no longer carry an omitted optional field for one use and
+not another.
+
+A pinned class is weak: it is one variable shared by every use, related to the
+program by its uses, and closed, defaulted, or reported when the module
+finishes, as a weak value's variable is. Everything else at the boundary's
+rank generalizes. Because the constant quantifies only variables that carry no
+requirement, it owns no requirement: its frame activates no scheme owner, and
+every requirement its body records belongs where a weak value's would.
+
+An annotation introducing a variable is accepted unless a where clause gives
+one of them a requirement (Value Bindings Generalize By Expression). A rigid
+annotation variable cannot acquire a requirement except through such a clause,
+because an unconstrained rigid accepts no method.
+
+Pinned on both sides by `value_binding_generalization_test.zig`,
+`let_polymorphism_integration_test.zig`, the value-row and polarity tests in
+`type_checking_integration.zig`, `issue_13011_test.zig`,
+`issue_11246_test.zig`, `test/echo/polymorphic_constant_empty.roc` and
+`test/echo/polymorphic_constant_parser.roc`.
+
+Only a binding checking generalized is a polymorphic constant: literal
+argument publication reads that decision from the binding's solved
+variable (its rank is `generalized`), never from how many variables its
+entry wrapper's type still mentions. A weak value whose type keeps a
+variable (one a platform requirement types, an unresolved requirement
+checking reported, an uncommitted record tail no use committed) is one
+value, evaluated once at its own root. An unannotated top-level value that
+always crashes binds nothing (`hoist_roots.Body.valueless_binding`): its
+valueless-binding root is the one evaluation of its right-hand side, which
+reports its `dbg`, `expect` and `crash`, so it has no instances either.
+
+**Polymorphic recursion cannot reach a constant at a growing type.** A use of
+a constant inside a generic function gives the constant's quantified
+variables types over the function's variables; nothing flows back, so a
+constant takes part in no recursion of the flow graph Polymorphic Recursion
+judges. A generic function that reaches itself at a growing type is rejected
+there whatever constants it reads, so every instance of a constant that a
+program reaches is finite in number and is reached from a closed
+instantiation.
+
+**Evaluation.** Every closed type instance at which a constant is used is
+evaluated at compile time and stored as a constant of its own, one root per
+constant and closed type, as a literal argument root is one per literal and
+closed type (Literal Arguments). The constant's own value is a literal
+requirement of its entry wrapper's scheme (`LiteralArgumentKind.constant_instance`,
+whose site names the constant's root), so the machinery that places literal
+conversions places instances: every use of the constant, a call or method
+dispatch of a polymorphic callable binding among them, is an edge
+instantiating that scheme; an edge at a closed type is a `literal_argument`
+root of the edge's module holding the instance, and an edge at an open type
+inside a generic function forwards the instance as a literal requirement of
+that function's scheme, up the call chain to the call site where the type is
+closed. A dispatch to a method bound to a polymorphic callable binding
+(`wrap = mk(empty)`) instantiates the binding's scheme where checking
+resolves the dispatch (`Check.instantiateDispatchTargetMethodVar`), which
+records that instantiation as the dispatch's scheme use; the evidence node
+carries it as its substitution, and the edge instantiates every literal
+requirement of the binding's entry wrapper at it: the binding's own value
+and every instance the binding's body forwards (`empty` at the binding's
+variable).
+Inspection's call of a `to_inspect` override is a dispatch edge too, held by
+no template: checking records the override's instance at `T -> Str`
+(Inspect Overrides), and where `T` takes no type argument that instance is
+closed, so a polymorphic binding the override is bound to has a root there.
+A use whose instance no edge names (a frame that derives its literal
+arguments from its types, a dictionary entry) reads the root of some module
+holding that constant at that closed type (`Program.constantInstance`,
+Monotype's instance index): every root of one constant at one type holds
+one value.
+
+An instance root's value is stored whatever it holds: an image for data, and
+nodes for a value holding a function. The evaluator of the compilation's own
+strategy evaluates it, as it evaluates every constant: under `.lss`, the
+Solved program. Its
+evaluation is the only place the constant's body runs: the root enters the
+frames of the schemes its edge instantiates and calls the constant's entry
+wrapper there with that frame's descriptors, dictionaries and literal
+arguments. Under `.boxy` a use reads the stored instance its edge names, and
+a forwarded use reads its own literal argument, a word of its type table
+holding an immortal callable that restores the stored instance; a value of a
+type the body does not know cannot be one table word, so the word is the
+callable, which never recomputes. The callable's code is a generated worker
+of the reading program (`WorkerKey.root_restore`, `Program.rootRestoreWorker`),
+not the root's entry wrapper: it restores the root's stored value where it
+is read, and is named by that value's content (the stored value's digest
+and its type), so every unit restoring one instance defines one procedure,
+which a link keeps once. No unit emits the wrapper of a stored instance, and
+a unit reading an instance another module holds embeds the value, so a
+module's importer-facing digest covers the stored value of each of its
+unsealed instance roots (`boxy_interface.Digests.hashStoredValues`): a
+program deriving an instance from its types reads whichever module's root
+holds it. In a compile-time program evaluating the instance, the word reads
+the root's slot instead (`WorkerKey.root_slot`). Under `.lss` a use
+reads the stored instance its edge names, or, in a compile-time program
+evaluating that instance, the instance's slot. A forwarded use inside a
+generalized local scope that a use of the scope lowers (a scheme alias, `pick
+= color` read by `dbg pick`) is named by that use's edge, outward through the
+edges of the scopes the instance is forwarded through until one names a root
+(`EvidenceChain.entered_by`): the root may be at a type that only the graph's
+sealing would fix in the reading body, as `pick : [Purple, Mauve]` read by
+nothing that closes its row. The lookup of a destructuring scheme alias,
+lowered at a use of a name it binds, is named by that use's edge
+(`BodyContext.destructured_alias_use`). A forwarded use in a specialization of
+a top-level scheme reads the instance its closed type names: the variables
+the instance is forwarded over are the scheme's, which the specialization
+fixes. A read that finds no instance is a compiler bug, with one exception:
+inspection's call of a `to_inspect` override whose owner takes type arguments
+(`T(a) -> Str`) computes the binding it is bound to in place
+(`InstanceRead.open_inspect_override`). Inspection reaches the owner at
+whatever arguments the inspected value has, in generic code too, where
+`Str.inspect` carries no requirement that could forward the instance to a
+caller, so no checked edge can name the instance at a closed type. The
+binding's body computes at the call the value an instance root at that type
+would store, and a `dbg` or `expect` in it runs there too.
+No global mutable state and no adapter or re-tagging wrapper exists. Each
+instance's stored functions are built at that closed instance, so their type
+descriptors are that instance's.
+
+One evaluation of each polymorphic constant, the *canonical* one, instantiates
+every generalized variable at its row default, or the empty tag union `[]`
+(`LiteralEdge.canonical`, `LiteralArgumentRoot.canonical`). It runs in every
+compilation, `roc check` included, whether or not a use requests that
+instance (a use at that very instance shares its root), and it is the one
+evaluation that reports the constant's `dbg`, `expect` and `crash`. Every
+other instance's evaluation suppresses `dbg` and `expect` output
+(`reportsObservations`); its failure (a crash, an allocation failure) is
+reported as an ordinary compile-time failure. `roc check` and `roc build`
+report the same things. A reader with no use type (the wasm target
+configuration's) reads the canonical instance. N instances cost N
+compile-time evaluations and N copies in the binary, and an unannotated
+constant can gain instances silently; both are accepted.
+
+A use of a name a destructuring scheme alias binds (`(f, _) = Hooks.pair`,
+`{ twice } = rec`) instantiates the declaration's lookup at that use: the
+evidence pass records the quantified variables of the name's scheme beside
+the use's site substitution (`StaticDispatchPlanTable.destructured_uses`),
+and the use's edge (`LiteralEdge.use` at the use) instantiates the lookup's
+callee at the lookup's substitution with those variables at the use's
+types. The lookup itself is no edge. Boxy lowers the declaration at each use
+and reads the lookup's literal arguments from the use's edge
+(`Builder.destructured_use`); Monotype reads the instance its closed type
+names. A variable of the declaration the name does not mention, and any
+variable no scheme around an edge quantifies and that is not decided, is
+fixed by no use: the instance at such a type is a sealed root, as a literal
+there is converted at the sealed type, so every read names an instance.
+
+A constant hoisted out of a function body is never polymorphic: it is a
+local value binding, which is weak (Value Bindings Generalize By
+Expression), so every read shares its one type, its own root is its one
+value, and every read restores it.
+
+A constant whose type mentions a platform's abstract type (`[Model : model]
+for main`) has the type of the app it is paired with, which checking the
+platform does not know. Its type is closed but for those types, so its root
+is requested (`CompileTimeRoot.pairing_typed`) with a request that waits for
+the pairing (`RootRequest.requires_pairing`), and the pairing evaluates it at
+the app's types (Platform/App Composition) and stores it. Every read restores
+that value; such a constant has no other instance.
 
 ## Checked Boundary
 
@@ -7097,21 +7389,84 @@ sealed. It consists of exactly these parts:
   nothing else does.
 
 **Sealing.** Checking canonicalizes the solver store in place as its last
-write before sealing it (`types.Store.canonicalizeAndSeal`). Every slot comes
-to name its class's storage root directly; every variable a descriptor, a type
-argument or record field pool, or a nominal declaration holds becomes its
-class's checked representative; and every record and tag union row absorbs the
-rows its extension chain reaches, so a sealed row is flat and its extension is
-never itself a row. Canonicalization walks the slots once, the variable and
-field pools once, and the live descriptors once. The descriptor pass reads
-each descriptor's kind and goes further only for a function, a record or a tag
-union, the kinds that hold a variable inline: it replaces a function's return
-or a row's extension by its representative, and resolving an extension also
-tells whether the extension is itself a row, so a row that must absorb its
-chain is found and flattened in that same step. A static-dispatch constraint
+write before sealing it (`types.Store.canonicalizeAndSealReached`). Every class
+comes to be stored at its checked representative, which every other member
+names directly; every variable a descriptor, a type argument or record field
+pool, or a nominal declaration holds becomes its class's checked
+representative; and every record and tag union row a reader
+can name absorbs the rows its extension chain reaches, so such a row is flat
+and its extension is never itself a row. Canonicalization walks the slots
+once and the live descriptors once before any row is flattened. The
+descriptor pass reads each descriptor's kind and goes further only for a
+function, a record or a tag union, the kinds that hold a variable inline: it
+replaces a function's return or a row's extension by its representative, and
+resolving an extension also tells whether the extension is itself a row. Pool
+entries are not canonicalized in place: closing the gaps (below) rewrites
+each surviving entry to its representative as it moves, so an entry no class
+reaches is never canonicalized.
+
+When some row's extension is a row, sealing traces the store from its roots
+and flattens each row the trace reaches, before reading that row's children.
+The roots are every variable a reader may start from: each CIR node's own
+variable, each variable a node or a recorded checker output names besides
+(`Check.SealRoots`), and each nominal declaration's backing. Every root
+publication or a later producer reaches is one of these, so no root is added
+after sealing. A row no root reaches keeps its chain and is never read: the
+solver's superseded row parts, such as the tails an inferred union outgrew,
+cost nothing to seal. Reading a sealed row whose extension is a row is a
+compiler bug, asserted in debug builds. When no row's extension is a row,
+there is nothing to flatten and no trace runs. A static-dispatch constraint
 keeps the function variable checking recorded for it, because that variable
-identifies the constraint; a reader resolves it with one slot read. The
-checked type id of a source type is its checked representative's bit pattern,
+identifies the constraint; a reader resolves it with one slot read.
+
+Canonicalization then closes the gaps the store's dead entries leave. The
+sealed store is the same store with its gaps closed, not a second
+representation. Every class survives, stored at its checked representative:
+the slot pass makes the representative's slot hold the descriptor and every
+other member's slot name the representative. A variable survives when
+canonicalization made it (every variable below the count the store held when
+checking began, which covers every CIR node's variable), when it is a
+class's representative, when a holder outside the store names it, or when a
+surviving static-dispatch constraint or interpolation row names it as its
+own variable. Every variable the store's descriptors, pools and nominal
+declarations hold is a representative, so this is complete. Every other
+variable dies: a merged-away member nothing names. A pool or identity row
+survives when a surviving descriptor names it, directly, through a tag's
+argument range or through a constraint's numeral and interpolation rows, or
+when a nominal declaration's formals name it. A constraint row also survives
+when a holder names its index, or when a holder names its function variable,
+because a reader finds a constraint by the function variable checking
+recorded at its dispatch site. A derived-map selection survives with its
+class.
+
+Every column keeps its survivors in their original order and slides each down
+to its rank: the number of survivors before it, read from the column's
+liveness bit set as a running count per mask word plus a population count
+within the word. No translation table is built, a survivor only ever moves
+down, so each column closes in place in one forward pass, a range shared by
+two descriptors stays shared, and anything sorted by index stays sorted.
+Variables below the canonical count keep their numbers. Representatives are
+marked in the slot and descriptor passes above; the pool and identity rows
+are marked by one more pass over the live descriptors once flattening has
+made every row final, and one pass over the constraint pool keeps the rows
+holders reach by function variable. Closing then
+walks each column once: the pools first, rewriting their variables to
+representatives and renumbering them as they move, then the slots, which
+name only representatives and so are renumbered without reading one another,
+then the descriptors.
+
+The holders outside the store are exactly what checking recorded before
+sealing: the `ModuleEnv` side tables and CIR node payloads that name a
+variable or a constraint index (`ModuleEnv.visitSealHolders`) and the
+checking problems (`problem.Store.visitSealHolders`). A holder keeps the
+variable it recorded, representative or not, since several holders identify
+a relation by its raw variable; checking hands each one to sealing once to
+keep it alive and once to renumber it. Snapshots name variables only as keys
+of their own presentation stores and are not holders. Everything published
+after sealing (`CheckedTypeStore`, `sealed_var_facts`, type keys) is sized
+and numbered by the sealed store.
+
+The checked type id of a source type is its checked representative's bit pattern,
 so a rendered payload's children
 alias the store's own variable pools and every reader receives
 representatives. Five columns beside the module's synthesized-type store
@@ -7134,7 +7489,14 @@ These buffers are reset to empty owners so later destruction is safe. The
 solved columns, nominal declarations, derived-map selections, stable variable
 ids, and borrowed slices into the solved pools remain owned by the sealed
 store until its last consumer is done. No serialized layout changes at this
-boundary, and releasing checker buffers neither allocates nor walks types.
+boundary, and releasing checker buffers walks no types.
+
+Once the gaps have closed, sealing moves every column into storage that
+holds exactly its entries: an allocated column is reallocated to its length
+and a reservation returns its unused tail ("Table Storage Lifecycles"). When
+checking finishes a module it does the same for the module's CIR node store,
+string literal bytes and side lists (`ModuleEnv.releaseUnusedCapacity`), so
+no finished module keeps growth room alive for the rest of the build.
 
 There is no second representation of any of this. No pass copies types,
 bodies, templates, names, plans or roots into another table after checking.
@@ -7169,7 +7531,10 @@ checked procedure templates for promoted callables. It does not store
 post-check representation data. In particular, the checked module does not
 contain runtime type payloads, value conversion plans, callable-set
 descriptors, boxy `TypeDesc` data, boxy dictionaries, erased callable ABI
-decisions, layout ids, runtime tag discriminants, or backend encodings.
+decisions, layout ids, or backend encodings. A stored image's bytes are the
+value at the 64-bit layout of its stored type, so they hold that layout's
+field offsets and discriminants (Stored Images); nothing else in the checked
+module does.
 
 The method registry is a view over the checked module: each retained method's
 callable type is the solver variable of its definition. Derived declarations
@@ -7284,7 +7649,8 @@ checking. When checking completes (`checkFileInternal`, after
 the dispatch relation merges and `finalizeLiteralDispatchResolutions`),
 the checker records, in the module's own check task, every node that is
 erroneous in its own right (`ModuleEnv.erroneous_nodes`,
-`Check.recordErroneousNodes`): a runtime error node; an expression or
+`Check.recordErroneousNodes`), other than a runtime error node, which is
+erroneous by its kind alone: an expression or
 pattern whose type reaches erroneous content (a top-level definition's
 pattern is read at the definition's type); a call whose function constraint
 type, or an interpolation whose assembler type, reaches erroneous content; a
@@ -7302,12 +7668,13 @@ after checking, are on-demand analyses of the sealed module
   checked error or unreachable, propagated through evaluation order), inspect
   elision, and the state merges and loop mutations Monotype threads through
   control flow;
-- per module: whether an expression contains a diagnostic error (its own
-  `erroneous_nodes` entry, any child's, a dispatch total resolution rejected,
-  and, when a dispatch was rejected, a resolved local constant reference to
-  an erroneous value; the constant-following part crosses definitions, so it
-  is one slot for the module), and which templates and nested procedure sites
-  are single-source calls.
+- per module: which templates and nested procedure sites are single-source
+  calls.
+
+Publication alone asks whether an expression contains a diagnostic error (its
+own `erroneous_nodes` entry, a runtime error, a retired expression, or any
+child's), and only
+before it seals template references; see "Static Dispatch In Monotype".
 
 There is no propagation pass over finished bodies during checking or
 checked module assembly, and no analysis result is serialized.
@@ -7330,6 +7697,9 @@ type is created the first time something asks for it, through the module's
 slot for that request ("On-Demand Analyses And Write-Once Slots"), and lives
 as long as the module. A type id names either a solver variable of a module or
 an entry of its synthesized-type store; readers never need to know which.
+Publication ends by moving the store's columns, and those of the module's
+published tables, into allocations that hold exactly their entries; a column
+that a later request grows regrows from its length.
 
 Ids are not interned across solver classes: two solver variables whose types
 are equal keep two ids, and creating a synthesized type computes no key, so
@@ -7341,8 +7711,11 @@ consumer that needs one entry per type asks the module's view for the one id
 its key index holds for the type's key (`canonicalId`) or compares two ids
 with `sameType`. A type that reaches an identity variable is identified by
 its id alone, because its key names its variables only by position. Whether
-a type reaches an identity variable is found by walking the types it reaches,
-never through its key.
+a type reaches an identity variable is stored with the type, never read
+through its key: publication marks it on each source type when it first
+reaches that type (`SealedVarFacts.identity_variables`), and a synthesized
+type settles it from its children once its payload is filled
+(`CheckedTypeRoot.identity`).
 
 A synthesized type's key is computed on first demand through its own key
 slot, like a source type's. A synthesized function type records that its key
@@ -7425,7 +7798,10 @@ its variables, equal across modules for equal types, and stable across
 compilations. Keys exist because procedure identities, evidence digests,
 generated-codec content digests and the constant store need an identity with
 exactly those properties. A key is computed on first demand for one root,
-through that root's key slot, and never eagerly for a whole module.
+through that root's key slot, and never eagerly for a whole module. A
+synthesized-type store keeps its key slots in pages of 64 behind a
+write-once page directory, so a page is allocated only when a key of one of
+its roots is first requested.
 In-workspace memos that only need "the same type within this program" use
 in-workspace structural identity, not keys.
 
@@ -7516,8 +7892,8 @@ cache entry stores one: a cache hit recomputes each result on its first demand.
   strongly connected component of the module's call graph, never per root.
 - Per-module slots: the key index (one over source types, one over
   synthesized types), interface capabilities, the method registry view,
-  provided exports, the nodes whose dispatch plan cannot run, diagnostic
-  errors, and single-source calls.
+  provided exports, the nodes whose dispatch plan cannot run, and
+  single-source calls.
 
 A slot (`collections.OnceSlot`) is a state word with three states: empty,
 claimed and done; a claimed word also records whether a consumer is parked on
@@ -7581,6 +7957,13 @@ scan the native mapping. A concurrent snapshot can count a successful result
 before its slot reaches `done`; quiescent counts equal completed keys. No key
 storage, diagnostic counter or derived result is serialized.
 
+A module's key writers (the source-key writer and the synthesized-key writer)
+keep the descriptions, classes and keys of every type they have digested, so
+later requests share that work. Publication ends by freeing both writers
+(`releaseWriter`): the slots keep every key it computed, and a request made
+after publication starts a fresh writer under the same lock. The writers'
+descriptions therefore never outlive publication alongside the module.
+
 There is no scheduling edge between modules. A module's analyses are never
 ordered after its importers, nothing waits for demand to flow top-down, and
 the read path takes no lock.
@@ -7637,6 +8020,22 @@ of a node's shape costs what reading the node costs:
   declaration bits (a top-level definition's pattern, a rejected method
   declaration, a promoted procedure's pattern, a recursive value
   declaration and its binders, a scheme-alias binder, a field default).
+  While it visits each reached node it also lists, by kind, the nodes
+  publication looks for: calls, statically dispatched expressions, value
+  lookups, binding statements, lambdas and closures, and whether a runtime
+  error node is reached. Publication's retired-call, dispatch-plan,
+  dispatch-constraint, dispatch-type-root, resolved-reference,
+  local-pattern-role and callable-derived-scheme passes read those lists
+  instead of scanning every node of the module.
+  The index also records each reached node's parent and, bottom up as it
+  finishes each unit, which expressions have a subtree made only of
+  literals and constructions (`ModuleIndex.inertExprs`). Template
+  reference collection and nested procedure site collection skip such a
+  subtree whole, after clearing from that set every subtree holding a
+  literal with a conversion plan or an expression where the walk records
+  something of its own (a generalized local scope, a nested function use,
+  a callable-derived scheme): nothing in what is skipped would be
+  recorded, so every collected list keeps its contents and order.
   The analyses themselves are computed on first demand. A unit's analyses
   keep their memos in dense arrays indexed by position in the unit and
   touch each node of the unit once per analysis; divergence is decided for
@@ -12111,68 +12510,24 @@ have zero runtime list allocation in a size cart even though the eval allocation
 harness, which does not perform final constant hoisting, observes one base-list
 allocation.
 
-Strings and flat scalar or fixed-product lists use one shared content-interned blob store.
-`List(U8)` therefore has the same constant-storage cost as a `Str` containing
-the same bytes, and equal string/list contents reuse one blob. A blob the
-checked-value writer stores from a literal of the store's own module (a string
-of one segment, or a file imported as bytes) is borrowed from the module's
-string literal store rather than copied (`ConstStore.BlobBacking`): those
-bytes never change once the module is canonicalized and live as long as the
-store, so the literal's bytes are resident once. A borrowed blob occupies its
-offsets in the blob bytes as if it were stored there, so serialization writes
-it in place and a serialized store is the same whichever of its blobs are
-borrowed; a loaded store owns all of them. A packed list
-view records its scalar encoding or fixed-product width and item count separately
-from its byte view. Fixed products are records, tuples, and nominal wrappers
-composed entirely of scalars, discriminant-only tag unions and zero-sized
-products; a list of a discriminant-only tag union is a list of such products
-with one leaf. A tag union is discriminant-only when its const plan's
-payloads are all fixed products and its committed layout is its
-discriminant alone on every target (`PackedData.Plan.discriminantOnly`):
-every payload is zero-sized, as `{}`, a record or tuple of zero-sized
-fields, a union of one tag, or a nominal wrapping one is, so `Bool`, `[A,
-B]` and `[A({}), B]` are, and `[A(U8), B]` is not. Their existing checked
-types define checked field order; bytes concatenate leaves in that order
-without host padding. A discriminant-only union's leaf is as wide as its
-discriminant (one byte up to 256 tags, two up to 65536) and holds the index
-of the item's tag among its union's tags in byte-wise name order, which is
-the order that assigns discriminants, so it is the discriminant's
-little-endian bytes and every reader lays it out as it lays out a scalar;
-the payloads have no bytes to store or restore, and a union of one tag is
-zero-sized and has no leaf. The tag a leaf holds is read through the
-checked type, as a scalar's bits are, and a value's reads share its type,
-tags included (Value Rows: Uses Share One Row). Lists containing other value shapes retain explicit
-child nodes so their graph edges and sharing stay visible. A restored list of
-such values that is data alone is a stored list (see "Compile-Time Evaluation
-And Static Storage"), which no stage represents item by item.
+A stored value that is data alone is an image (Stored Images), whatever it
+holds: a list of scalars or products is one block holding its items as the
+evaluation's memory held them, at the 64-bit layout, with every F32 or F64
+NaN Roc's one quiet NaN. A value-form literal (a string, or a file imported
+as bytes) is data alone, so its root is stored as its image, whose allocation
+holds a copy of the literal's bytes: an image is one block, which a read
+copies whole and a digest covers whole, so its bytes are the image's own. A
+list holding a function is stored as nodes, its items one node each; a
+restored list of values that is data alone is a stored list (see
+"Compile-Time Evaluation And Static Storage"), which no stage represents item
+by item.
 
 Constant writing and target lowering compile a field-copy plan once per explicit
 representation. Plans use committed layout field indexes and offsets, preserve
 stored scalar bits, and initialize target padding. Compatible contiguous
 regions use bulk copies.
 
-The constant store writer stores an evaluated list of scalars or fixed
-products with one decision per list, never one per item. A packed item is its
-leaves' little-endian bits, except that every F32 or F64 NaN is Roc's one
-quiet NaN whatever bits the evaluation produced, as a stored scalar's is. A
-discriminant is little-endian in memory on every host. On a
-little-endian host an integer, `Dec` or vector list's memory, and a product
-list's memory when its layout has no padding and no float leaf (a list of
-`Bool`s or of other discriminant-only tag unions among them), already is that
-encoding and is stored as it is. A float list is copied in one vectorized pass
-that replaces NaN lanes, and a product list with float leaves is copied by its
-plan's regions and then has each float leaf's NaN replaced. A big-endian host
-packs each item on its own. A value-form list of numerals that reads no
-constant encodes its numerals at the item type, decided once for the list,
-into the memory a list of them occupies, and packs that memory as an
-evaluated list's. A value-form list of products writes each item's leaves,
-a discriminant-only tag union as the discriminant of the variant its plan
-names, into
-the memory the list occupies and packs that memory as an evaluated list's, so
-a literal list and an evaluated one store the same bytes. Debug builds check a
-bulk-stored scalar list, and every tag leaf of a packed product
-list, against storing each item on its own, and check every tag leaf a
-packing plan encodes or decodes names one of its union's tags. Packed data remains a literal through specialization;
+A packed list literal (below) remains a literal through specialization;
 list length must not create per-item LIR statements, including in static
 initializers. Literal backings are shared by explicit owner-relative identity
 through IR stages. Boxy consumes its committed layout without unrolling the
@@ -12891,13 +13246,14 @@ rules:
 | --- | --- | --- |
 | A FUNCTION signature | A quantified flex in the generalized scheme, instantiated fresh at every call | Each caller may use the result at a wider union, independently of every other caller |
 | A LOCAL VALUE binding | ONE weak flex shared by every use in the enclosing body | Uses may widen the shared row, and what accumulates is what every use sees |
-| A TOP-LEVEL VALUE binding | ONE weak flex shared by every use in the module, bounded by the annotation, closed when the module finishes checking | Nothing: the row lists exactly the annotation's tags at every use, and a use needing another tag is a mismatch at the use (Value Rows: Uses Share One Row) |
+| A TOP-LEVEL CONSTANT | A quantified flex in the constant's scheme, instantiated fresh at every use (Polymorphic Constants); one weak flex closed when the module finishes checking only when a requirement keeps the row weak | Each use may read the constant at a wider union, independently of every other use |
 | A HOST-BOUNDARY annotation (a hosted lambda, a `provides` def, a platform `requires` type) | None: the row is generated exactly as written (`AnnotationGenCtx.opening = .as_written`) | Nothing |
 
-A value binding generalizes only when its right-hand side does (Value
+A value binding generalizes by its right-hand side and its position (Value
 Bindings Generalize By Expression), so a FUNCTION row covers functions and
-value aliases and the two VALUE rows cover every other value binding; an
-annotation never moves a binding between them. A host boundary opts out
+value aliases, the CONSTANT row covers top-level constants, and the LOCAL
+VALUE row covers every other value binding; an annotation never moves a
+binding between them. A host boundary opts out
 because the host is a fixed ABI rather than a Roc producer participating in
 unification.
 
@@ -13024,14 +13380,15 @@ positions, shared across its sequential files and paths and released at invocati
 exit. Standalone formatting owns the same data for that call; independent
 workers never share mutable analysis state.
 
-The two VALUE rows treat an inferred value (`x = Boom`) and an annotated one
-alike: the value's body is bounded by the audit, and writing `..` on a value
-is rejected (Value Bindings Generalize By Expression), because a value cannot
-quantify a row. A local value's shared row behaves like any inferred local
-row and is sealed by Monotype's row defaults. A top-level value's row is
-shared by its module's uses and closes when the module finishes checking;
-Value Rows: Uses Share One Row states that rule and why each alternative was
-rejected.
+The LOCAL VALUE row treats an inferred value (`x = Boom`) and an annotated one
+alike: the value's body is bounded by the audit, and writing `..` on a local
+value is rejected (Value Bindings Generalize By Expression), because a local
+value cannot quantify a row. A local value's shared row behaves like any
+inferred local row and is sealed by Monotype's row defaults. A top-level
+constant's row is quantified like a function result's, and a written `..`
+on it is redundant; a row a requirement keeps weak is shared by its module's
+uses and closes when the module finishes checking. Value Rows: Uses Share One
+Row states the weak rule and why each alternative was rejected.
 
 An ALIAS carries its implicit row variables as hidden ordinary rigid
 parameters. `MyResult(a) : Try(a, [MyError])` has an additional internal
@@ -13811,9 +14168,13 @@ decides.
 
 ### Value Rows: Uses Share One Row
 
-A value binding (one that does not generalize; Value Bindings Generalize By
-Expression) has exactly one type and is evaluated once. Its tag rows follow
-one rule whether the value is local or top-level:
+A value binding that does not generalize (a local value binding, or a
+top-level constant's variables that carry a requirement; Value Bindings
+Generalize By Expression, Polymorphic Constants) has exactly one type and is
+evaluated once. A top-level constant's open tag rows carry no requirement, so
+it quantifies them and each use instantiates its own copy; the rules below
+are the rules of a weak row, which is a local value's row or a row a
+requirement keeps weak:
 
 - An UNANNOTATED value's open row is one weak flex shared by every use in the
   enclosing scope. Uses that need wider unions widen the shared row, and the
@@ -13850,6 +14211,21 @@ A value's record follows the same rule through its uncommitted tail
 into a nominal type does so for every use, and the tail commits to the empty record when the module finishes
 checking.
 
+A field access or direct tag pattern demands a member, not a remainder. Its
+fresh, unnamed tail is existential: when relating the member merely binds its
+payload to the receiver's slot, the joined type is the receiver's row itself.
+No other use observes a copy of its remaining labels. This does not apply to
+a rest binder, a shared extension, or a relation that changes field kind or
+tag provenance.
+
+When a field access or pattern introduces a previously absent member into an
+inferred open row, every existing reference to the old extension must see the
+new member. The row may combine adjacent disjoint runs of members, but an
+absorbed part remains valid in isolation, and a marked tag copied out of it
+remains the same diagnostic fact (Pattern-Only Tags). A later demand for a
+member one of those runs holds binds to that entry and leaves the row as it
+is. A bounded or rigid tail cannot be extended by this rule.
+
 A use of a top-level value is therefore never a widening of the value: no
 row coercion and no `ModuleEnv` record exist for value uses. Where a
 value with a closed row flows into an annotated function's RESULT, Row
@@ -13879,15 +14255,14 @@ rebuilds the tag or asks for the annotation it needs.
 
 #### Rejected alternatives
 
-- Generalizing a top-level value over its implicitly opened rows and
-  evaluating it at compile time once per concrete specialization. Each use
-  type would get its own evaluation of the value's body: duplicated work, and
-  `dbg`, `expect`, and compile-time failures observed once per type, which
-  then need deduplication rules; a specialization needed by more than one
-  finalization program evaluates more than once; and a use inside a stored
-  closure's runtime body recomputes the value on every call. Roc RFC 0010
-  rejects generalizing values precisely because a value's computation must
-  not multiply with its uses.
+- Keeping every top-level constant weak (Roc RFC 0010's rule). A constant
+  such as `empty = []` or a parser whose output row is open could then be used
+  at one type only, and an annotation saying otherwise would be rejected.
+  Polymorphic Constants generalize instead and evaluate each closed instance
+  at compile time; the reporting rules there (one canonical evaluation
+  reports `dbg`, `expect` and `crash`) answer the duplication this rule
+  avoided, and a use inside a generic function reads a stored instance passed
+  to it rather than recomputing the constant.
 - A widening copy per use with a conversion at each read (the rule this one
   replaces), or with the value materialized once per read layout at compile
   time. The first converts at runtime; the second needs the frozen-image
@@ -17332,6 +17707,16 @@ site to any family below must classify it here.
 
 Other solved-graph mutations:
 
+- `keepRequirementVarsWeak`—policy: Polymorphic Constants. At a polymorphic
+  constant's generalization boundary, every class at the boundary's rank that
+  carries a requirement, with every class the requirement reaches, is pinned
+  at the enclosing rank (`pinVarAtRank`, the primitive Invariant D pins
+  dispatch obligations with), so the constant quantifies only variables that
+  carry no requirement. Accepted side: `value_binding_generalization_test.zig`
+  (a constant used at two types, a constant mixing an unconstrained and a
+  constrained variable); rejected side: a number-literal constant used at two
+  number types is a mismatch, and a where-clause annotation is rejected.
+
 - `Store.rebindSourceReferences`—mechanism: checking-interface declaration
   normalization (Checked cache identity and native checking interfaces). The
   producer establishes declaration slots before this store-owned operation
@@ -17850,10 +18235,11 @@ const SpecializationStrategy = enum {
 ```
 
 The command-line spelling is `--specialize=yes` for `.lss` and
-`--specialize=no` for `.boxy`. Every command accepts the flag. A command with
-no runtime consumer (`roc check`, `roc docs`, `roc bump`, `roc bundle`,
-`roc repl`, the language server) ignores it and compiles under `.boxy`, whose
-compile-time evaluator completes every root. If the flag is omitted,
+`--specialize=no` for `.boxy`. Every command accepts the flag. `roc check`
+honors it for compile-time evaluation, defaulting to `.boxy` independently
+of `--opt`. Other commands with no runtime consumer (`roc docs`, `roc bump`,
+`roc bundle`, `roc repl`, the language server) compile under `.boxy`.
+For runtime commands, if the flag is omitted,
 `--opt=speed` uses `.lss` and
 every other optimization level (`dev`, `interpreter`, `size`) uses `.boxy`
 (`currentRuntimeSpecializationStrategy`); an explicit flag selects the
@@ -17887,11 +18273,9 @@ to drive the trampoline, just as for ordinary calls. Specialized results pass
 unchanged through these tail positions; representation conversions execute as
 LIR before returning, never as runtime descriptor operations.
 
-Compile-time evaluation follows its own rule ("Compile-Time Evaluation
-Strategy"): the `.boxy` compile-time evaluator completes every root that
-neither holds a function value nor reads one under either strategy, and the
-selected strategy's evaluator completes the rest, so a `.boxy` compilation
-evaluates every root as `.boxy` programs (`finalizeProgramBoxy`).
+Compile-time evaluation uses the selected strategy for constants as well as
+function-valued roots ("Compile-Time Evaluation Strategy"). A `.boxy`
+compilation evaluates its roots as Boxy programs (`finalizeProgramBoxy`).
 
 Compiler progress text follows the selected strategy. `.lss` reports the
 lambda-set-specializing work as `Specializing`. `.boxy` reports the same
@@ -19081,9 +19465,9 @@ special-cased: a literal at a builtin number type takes the same path as one
 at a user type, through the builtin type's own `from_numeral`.
 
 The checker records the data in every checked module, whatever strategy
-the compilation runs under: the data describes the program, and a checked
-module serves both strategies' programs (its cache identity names no
-strategy).
+the compilation runs under: the data describes the program, and checking
+computes it from the module's typing inputs alone (a checked module's entry
+is filed per strategy only because of its stored images, Stored Images).
 
 - A scheme's *literal requirements* (`CheckedProcedureTemplate.literal_requirements`,
   and the dispatch scope's `literal_requirements`): one per literal of its own body
@@ -19130,12 +19514,14 @@ strategy).
   and nothing reads the argument (`.unbound`). Otherwise, as in
   `x = helper({})` where `helper : {} -> Sql(a)` and nothing fixes `a`, the
   variable seals and the edge is where the literal's type stops changing: it
-  is a *sealed* root (`LiteralArgumentRoot.sealed`), a validate-only
-  `literal_argument` root at the sealed type. Its conversion cannot depend on
-  the variable, which no value of the program has, so compile-time
-  evaluation runs it once and reports its rejection, and the runtime program
-  converts the literal through the root's wrapper. A sealed root is always
-  requested, although its type is not concrete. A
+  is a *sealed* root (`LiteralArgumentRoot.sealed`), a `literal_argument`
+  root at the sealed type. Its conversion cannot depend on the variable,
+  which no value of the program has, so compile-time evaluation runs it once,
+  reports its rejection, and stores its value like any other literal
+  argument root's, which the root's wrapper restores for every reader. A
+  sealed root is always requested, although its type is not concrete. A
+  polymorphic constant's instance at such a type is a sealed root too, and
+  reads restore it: a constant is never `.unbound`. A
   template's `literal_argument_demand` lists the
   roots its edges read, so compile-time evaluation orders them before any
   evaluation of the template.
@@ -19182,19 +19568,16 @@ strategy).
   whose stored result holds the failure, so a compilation that restores the
   result from the checked-module cache reports it again without converting
   the literal again.
-- A literal argument root is the `.boxy` evaluator's, and every compilation
-  evaluates it like any pending root of its modules, under either strategy,
-  so a checked module holds the same values whichever strategy completed
-  it. A `.boxy` compilation evaluates it in dependency order: the request
+- A literal argument root that is no polymorphic constant's instance is the
+  `.boxy` evaluator's, and every compilation evaluates it like any pending
+  root of its modules, under either strategy, so a checked module holds the
+  same values whichever strategy completed it. A `.boxy` compilation evaluates it in dependency order: the request
   scheduler (`CompileTimeRequestScheduler`) and the finalizer's completion
   state walk the scheme a root's edge instantiates and treat a template's
   `literal_argument_demand` as reads, so each root completes before any root
   whose evaluation calls through it. A `.lss` compilation hands these roots
-  to the `.boxy` evaluator with every other root whose evaluation reads no
-  function value, in the one program that evaluates them before its Solved
-  program is specialized ("Compile-Time Evaluation Under `.lss`"); one that
-  reads a value of a root holding a function value completes once the
-  Solved program's roots have, with every pending root whose value it reads
+  to the `.boxy` evaluator once the Solved program's roots have completed
+  ("Compile-Time Evaluation Under `.lss`"), with every pending root whose value it reads
   that the Solved program did not demand. A module's own finalization
   outside a program session (the baked Builtin's among them) hands each
   batch's literal argument roots to the `.boxy` evaluator.
@@ -19232,8 +19615,10 @@ from its type table where the literal is (`Body.literalThunkLocal`), not in
 its entry chain: only that literal reads the word, so a body holds each of
 its literal arguments only across the call that converts it, and the
 ownership facts of a body with many literals do not carry every one of them
-across every join. The callable is the root's entry wrapper composed as a
-dictionary entry (`Body.rootThunk`): its body restores the stored value
+across every join. For a polymorphic constant's stored instance the
+callable is the reading program's own restore thunk (`WorkerKey.root_restore`,
+Polymorphic Constants). For any other root it is the root's entry wrapper
+composed as a dictionary entry (`Body.rootThunk`): its body restores the stored value
 (`CompileTimeRootPayload.const_node`), or, where none is stored (the root is
 being evaluated, or holds a function), converts the literal in the frames of
 the schemes its edge instantiates (`Body.lowerLiteralArgumentRoot`,
@@ -19690,12 +20075,15 @@ Nothing a module emits depends on a module that imports it:
   not, since every use of a converted literal restores the root's stored
   value or converts the literal in place, and neither is a validation root's,
   which has no value for any body to read;
-  nor is the wrapper of a constant whose stored value is data alone
-  (`Program.storedDataAlone`) and whose template no longer names an entry
-  procedure, because every read of such a constant restores the stored value
-  into the reading body, so a constant no body reads puts no data in any
-  object; a stored function value's wrapper is emitted, since its restore
-  lowers the workers the value names, which other objects link against;
+  nor is the wrapper of a constant whose value is stored and whose
+  template no longer names an entry procedure, of a callable binding whose
+  value is stored, or of a polymorphic constant's stored instance, because
+  every read of such a value restores it into the reading body, so a
+  constant no body reads puts no data in any object, and an object imports
+  an image a body reads from the constant pool rather than carrying it
+  (Constant Pool); the workers a stored function value names, which
+  readers restoring it link against, are set up by the unit directly
+  (Stored Function Values), without lowering the lambdas' owner;
 - its conversion workers are its own and memoized within it alone;
 - ARC solves each of its procedures' ownership signatures from the procedure's
   body and its callees, and a call from another module demands no ownership
@@ -19799,10 +20187,8 @@ outcome files"), which it writes under either strategy.
 and program output. `roc
 check` accepts `--opt` and `--specialize` and ignores both: it has no runtime
 consumer, so it compiles under `.boxy`, whose evaluator completes every one
-of the module's roots. The checked module itself names no strategy: both evaluators store
-the same values, and every compilation hands a literal argument root
-("Literal Arguments") to the `.boxy` evaluator, so a module checked under
-one strategy is served to the other.
+of the module's roots. A checked module's cache entry is filed per strategy (Stored Images): a
+module checked under one strategy is not served to the other.
 
 The per-module Boxy cache is exactly as simple as the checked-module cache,
 and Per-Module Output is the invariant that makes it possible:
@@ -20159,21 +20545,21 @@ objects.
 
 ### Compile-Time Evaluation Strategy
 
-`--specialize` selects the runtime lowering, and which evaluator completes
-the roots holding function values (`CompileTimeFinalization.Options.strategy`).
-In a program's compilation, every other compile-time root is the `.boxy`
-compile-time evaluator's under either strategy, so the compilation lowers and
-compiles each procedure its compile-time roots reach once, and a checked
-module holds the same values whichever strategy completed it ("Compile-Time
-Evaluation Under `.lss`"). A module finalized on its own, outside a program
-session (the baked Builtin's among them), is a program of that module alone
-and splits its roots between the two evaluators the same way.
+`--specialize` selects both runtime lowering and compile-time evaluation
+(`CompileTimeFinalization.Options.strategy`): `.lss` specializes ordinary
+constants and function-valued roots alike; `.boxy` evaluates them without
+specialization. Value-form roots require no execution, and literal argument
+and interpolation conversion roots retain their Boxy-only validation
+("Literal Arguments"). A module finalized on its own, including the baked
+Builtin, follows the same rule as a program of that module alone.
 
 Every producer of checked modules names its strategy; the finalization option
 has no default, and neither do the `BuildEnv` and `Coordinator` that drive a
-compilation, which take the strategy as a parameter of `init`. One rule
-decides it everywhere: the strategy of the runtime program that consumes the
-modules, and `.boxy` when nothing lowers them for runtime. The coordinator's
+compilation, which take the strategy as a parameter of `init`. Runtime commands
+use their runtime program's strategy for evaluation too. `roc check` defaults
+to `.boxy`, regardless of `--opt`, but honors both explicit `--specialize`
+settings for compile-time evaluation. Other clients without a runtime consumer
+name `.boxy`. The coordinator's
 compilations take it from their command (`CliBuildEnvOptions.specialization_strategy`).
 The REPL session
 (`roc repl` and the REPL WebAssembly module) evaluates each expression as a
@@ -20230,8 +20616,8 @@ reports the same diagnostics. Neither runs a value-form root: the
 checked-value writer completes those first, under the `.boxy` evaluator's
 plans and stored types ("Value-Form Roots").
 
-Selecting a root's compile-time evaluator by whether its value contains a
-function resolves nominal backings against the **complete checked program**:
+Classifying Boxy roots whose values contain a function resolves nominal
+backings against the **complete checked program**:
 the lowering root, its platform relation modules, and its imports. The pending
 evaluation module list is not a type lookup universe. In particular, a cached
 module with no pending roots can still declare a nominal used by a fresh root
@@ -20444,36 +20830,19 @@ Boundary").
 
 #### Compile-Time Evaluation Under `.lss`
 
-A pending root's routing follows its reachable checked references through every
-visible module, including cached imports. Visibility does not grant permission
-to finalize an imported root. A completed value available only to LSS blocks
-its readers from the pre-Solved Boxy batch; it is not a ready Boxy dependency
-merely because it is absent from that batch's pending roots. Direct template
-dependency and readiness summaries are decoded once per batch and shared by
-the roots that reach them, including through recursive calls.
+A `.lss` compilation (`finalizeProgram`) completes value-form roots directly,
+then evaluates every pending ordinary constant and function-valued root in
+the Solved program's dependency-ordered stages, together with the literal
+roots its specializations register. Boxy-only literal argument and
+interpolation validation follows once those values exist. No ordinary root
+is routed to Boxy merely because its result contains no functions.
 
-A `.lss` compilation (`finalizeProgram`) hands the `.boxy` evaluator every
-pending root that neither holds a function value nor reads, directly or
-through other roots, the value of a root that does; a literal argument root
-counts as holding none, since the `.boxy` evaluator owns it whatever its
-value ("Literal Arguments"). They complete in one program before the Solved
-program is specialized (`evaluateBoxyRoots`, `.before_solved`), so the
-specialization restores every value it reads exactly as a compilation of
-cached modules does: the Solved program of a cold compilation and of a warm
-one are the same program, and an LSS runtime consumer continues it without
-the program being specialized again when it has no root left to evaluate and
-no discovery root to specialize ("Runtime Programs Read Stored Values").
-A root holding a function value is the
-Solved program's, since a `.boxy` function value means nothing to Monotype
-("Stored Function Values"), and so is every root reading one; the Solved
-program evaluates them, and the literal roots its specializations register,
-in dependency-ordered stages, as Compile-Time Constants describes. A literal
-argument root reading a value of a root holding a function value completes
-after the Solved program's roots (`.after_solved`). A compilation whose
-roots hold no function value therefore compiles its compile-time code in one
-program, and specializes nothing for compile-time evaluation but the bodies
-that can register a literal root ("Demand-Driven Compile-Time
-Specialization").
+Each strategy's checked cache entry holds the values its own evaluator
+stored ("Stored Images"), so a cache hit reuses values completed under the
+selected strategy. After fresh evaluation, a runtime consumer specializes from the
+stored values just as a warm compilation does ("Runtime Programs Read Stored
+Values"). A warm LSS compilation with no pending root or discovery work can
+continue its runtime specialization directly.
 
 #### Demanded Checked Body Indexes
 
@@ -20626,6 +20995,26 @@ a type by its structure. A function value's table names its inputs instead:
 in a program that stores function values, each table's word past its needs
 holds its position among the program's tables, whose inputs the lowering
 kept as the static words they were filled with.
+
+Every reader restores a stored value where it reads it, so a module unit
+emits no procedure that restores a stored value for other objects: the
+entry wrapper of a constant, of a callable binding, or of a polymorphic
+constant's instance whose value is stored is not emitted for that purpose
+(`unitEmitsTemplate`). The unit instead sets up the workers each stored
+function value's recipe names exactly as a reader's restore does
+(`seedStoredValueWorkers`, `StoredFn.recipeWorkers`): the recipe's worker
+and the workers of its capture graph's callables and tables, which it
+lowers and exports, each importer-visible (`recordExports`), since a reader
+restoring the value names them. Restoring a lambda reads its owner's scope
+alone (`Decoder.workerAs(.lambda_owner)`, `Program.templateScope`): the
+owner's body ran at compile time, and a lambda reads only the variables,
+dictionaries and literal requirements its owner's worker record holds before
+any lowering. So a lambda written in a constant's own body has the
+constant's entry wrapper as its owner's scope, and the wrapper is neither
+lowered nor emitted for it. A unit defines and exports exactly the workers it
+lowers (`seedUnitWorkers`), so a scope no body of the unit lowers is no
+procedure of its object. A compile-time program evaluating a root enters it
+through its own root procedure, never through another object's wrapper.
 
 A function value has no slot for another root to read, so a module's roots
 holding one, with every pending root they read, run first in their own
@@ -21323,9 +21712,8 @@ type. Reading the source-value cell neither commits the field kind nor relates
 the value to its storage slot; ordinary interface relations and relation freeze
 retain ownership of those decisions.
 
-The per-expression `contains_diagnostic_error` flag ("Per-Expression Checking
-Data") excludes rejected
-expression sites from this relation table; an error-containing checked type is
+Whether an expression contains a diagnostic error ("Per-Expression Checking
+Data") excludes rejected expression sites from this relation table; an error-containing checked type is
 not a valid specialization constraint and never reaches Monotype instantiation.
 Monotype consumes both relation sources before applying defaults or sealing a
 specialization request. It does not scan a checked body to rediscover them.
@@ -23339,40 +23727,28 @@ ineligible method's decision; neither stage branches on `rejected` to choose
 inspection's rendering. The program still reports the declaration's diagnostic
 and cannot be mistaken for valid.
 
-Checked-module construction computes the `contains_diagnostic_error` column
-once every source runtime error and rejected binding use is explicit in the
-bodies: after rejected procedure uses are rewritten to `runtime_error` and
+Checked-module publication computes which reached nodes contain a diagnostic
+error once every source runtime error and rejected binding use is explicit in
+the bodies: after reference resolution retires rejected procedure uses and
 before template references are sealed, because sealing excludes erroneous sites
-from the specialization-interface relation table. Compile-time roots take their
-context-free request eligibility from solved types when the root table is
-built, and each computation of the column only removes eligibility. Runtime
-divergence is computed once, after total dispatch resolution, because rejected
-and unreachable dispatch resolutions diverge.
+from the specialization-interface relation table. A diagnostic error starts
+only at a node checking recorded as erroneous (`ModuleEnv.erroneous_nodes`), at
+a runtime error node, or at an expression reference resolution retired. The
+module index records whether the bodies reach a runtime error node as it
+visits each one, so a module with none of the three contains no diagnostic
+error, and publication answers without walking its bodies. The result is publication scratch, released when
+publication finishes and never serialized. Runtime divergence is computed once,
+after total dispatch resolution, because rejected and unreachable dispatch
+resolutions diverge.
 
-Total dispatch resolution also records a diagnostic-error seed on that exact
-checked expression. A literal's earlier `custom_dispatch` selection proves its
-callable relation, but its selected declaration can subsequently be rejected,
-including by final strict-demand cycle checking. These seeds cannot join the
-ordinary computation: a generic-codec requirement forwarded through the
-enclosing templates' evidence chains takes precedence over a rejected concrete
-target, and those chains come from sealing, which consumes the ordinary column.
-Once all plans are resolved, checked-module construction propagates these seeds through the existing body
-diagnostic analysis before creating compile-time root requests. The conversion
-root and any enclosing constant root evaluate to the checked error they reach;
-independent roots evaluate normally. `unreachable` is not a diagnostic
-seed. The existing `contains_diagnostic_error` field carries this state through serialization;
-the resolution pass merely records whether recovery propagation is needed, so
-successful modules allocate no new index and perform no additional traversal.
-The ordinary body scan is specialized at compile time to omit recovery-graph
-bookkeeping. Error propagation only removes newly erroneous root requests; it
-does not repeat the already-completed context-free type traversal.
-On that recovery path, resolved local constant references supply initializer
-dependencies as well as the ordinary expression, pattern, and statement edges.
-The body traversal records reverse edges in contiguous scratch storage, and a
-monotone worklist propagates each new error once. References through delayed
-function bodies may form cycles; their provisional traversal answers are not
-final until the worklist closes the graph. Independent cycles remain error-free.
-This scratch is released before compile-time evaluation and is never serialized.
+A dispatch whose total resolution is a checked error is not a diagnostic-error
+seed. A literal's earlier `custom_dispatch` selection proves its callable
+relation, but its selected declaration can subsequently be rejected, including
+by final strict-demand cycle checking, and a generic-codec requirement
+forwarded through the enclosing templates' evidence chains takes precedence
+over a rejected concrete target. Lowering crashes for the rejected dispatch, so
+the conversion root and any enclosing constant root evaluate to the checked
+error they reach, and independent roots evaluate normally.
 
 `checked_error` and `unreachable` are rejected, non-returning
 dispatches. Monotype lowers both to an ordinary Roc runtime crash instead of a
@@ -23766,7 +24142,12 @@ dispatch-target record. It never matches records by union-find root, because
 unrelated dispatches whose callables later unify would then share a record.
 Same-name relations must agree on fixed outer function properties:
 rank-1 instantiation can vary types but cannot vary a declaration's argument
-count or known effect mode. Once a scheme's public type is fixed, equivalent
+count or known effect mode. A requirement is held to this where it joins a
+receiver's requirements, against the argument count and effect mode already
+known for its name there; the unifier remembers those for a long list
+(`ConstraintListSummary`) instead of reading the list again for each use. A
+callable whose outer shape becomes known only later is held to it where the
+boundary relates the receiver's requirements or the receiver resolves. Once a scheme's public type is fixed, equivalent
 requirements whose only differences are private generalized variables collapse;
 public type variables remain identity anchors. Collapsing unifies the duplicate's
 callable with the retained one before dropping it, so the union-find records
@@ -25775,13 +26156,14 @@ once; a guard failure re-enters the residual tree for the rows below it without
 re-testing columns already known. Exhaustiveness is consumed, never re-derived:
 a tag test whose arms cover the occurrence type's committed variant set emits
 its last arm as the switch default (a single-variant union emits no dispatch at
-all); open matches keep the `comptime_exhaustiveness_failed` / `runtime_error`
-terminal. Both lowerers end a failed match or destructure in
-`comptime_exhaustiveness_failed`, naming its checked exhaustiveness site,
-exactly when the site is in a compile-time root's own expression (not in a
-function it calls or defines) and checking left the site a pending diagnostic,
-so the evaluator reports the site's empirical failure whichever strategy
-lowered the root; every other failed test ends in `runtime_error`.
+all); open matches keep a failure terminal. Both lowerers end a failed match
+or destructure in `comptime_exhaustiveness_failed`, naming its checked
+exhaustiveness site, exactly when the site is in a compile-time root's own
+expression (not in a function it calls or defines) and checking left the site
+a pending diagnostic, so the evaluator reports the site's empirical failure
+whichever strategy lowered the root; every other failed test ends in a
+`crash` with the message `pattern match failed`, so both strategies report
+the same crash.
 
 A `str_match_set` tries its arms in order, and a backend may decide any group
 of arms together when the outcome equals trying them in order. The LLVM
@@ -28699,8 +29081,12 @@ is a view of the slots it covers. It holds no unit: its field reads are
 reads of the container's slots offset by the view's first slot, so a
 consumed read through it takes those slots from the container, and its
 other uses observe its whole range. A borrowed tag union read out of a
-container is a view of its one slot: nothing reads through it except an
-ownership-complete payload view, which carries the union's whole unit. It is
+container is a view of its one slot. An owned read of the active variant's
+complete refcounted payload can take that slot at the read. Later reads of
+sibling fields need no retain; a later observation of the same slot or intact
+record still needs its unit. The union view itself remains borrowed unless
+it has a separate reason to hold the slot. A borrowed payload view also
+carries the union's whole unit. The union view is
 held when that payload reaches a consuming operand (the closure read out of a
 record of closures, whose captures are unwrapped and passed to the closure
 body), or when it dismantles through that payload view (the held tag-union
@@ -30773,8 +31159,8 @@ into a reused allocation that the capture points into.
 
 The dev backend's shared driver (`LirCodeGen`, `FrameBuilder`,
 `CallingConvention`) serves every instruction set listed in
-`backend/dev/isa.zig`'s `Isa`. Each component computes its `Isa` once from the
-target with `isaOf`, and every instruction-set choice is an exhaustive
+`backend/dev/isa.zig`'s `Isa`. Each component computes its `Isa` once from its
+`Abi`, and every instruction-set choice is an exhaustive
 `switch (isa)` that names each instruction set's answer. The driver never
 compares `isa` with `==` or `!=` and never gives a `switch (isa)` an `else`
 prong: adding an instruction set must make every choice a compile error until
@@ -30785,6 +31171,18 @@ set. Code that builds a backend for a specific target asks `isaOfOrNull`, so
 the list of instruction sets lives only in `isa.zig`. Code that runs generated
 code in-process asks `isa.host`, never `RocTarget.detectNative`, which maps an
 architecture without a code generator to one that has one.
+
+The code generator family (`LirCodeGen`, the per-instruction-set `CodeGen` and
+`Emit`, `CallBuilder`, `DeferredFrameBuilder`) is parameterized by
+`isa.Abi`, never by `RocTarget`. An `Abi` names exactly what the generated
+machine code depends on: the instruction set and the calling convention
+(System V or Windows on x86-64; AAPCS64, Apple or Windows on AArch64). Every
+`RocTarget` with the same `Abi` shares one instantiation, which `abiOfOrNull`
+selects; what differs between those targets, such as the object format, symbol
+naming and CPU level, is runtime data the generator's callers pass in. A
+generator that read anything else about its target at compile time would be
+instantiated once per `RocTarget` again, and each instantiation is compiled
+into every binary that contains the backend.
 
 An explicit reference-count statement on a stack value computes the value's
 address directly into the helper's first argument register and loads an
@@ -31210,9 +31608,9 @@ Compile-time constants use checked finalization after the coordinator's
 frontend tasks have completed. Standalone checking clients complete their
 prepared modules directly. The compilation's strategy decides which of two
 evaluators completes each root ("Compile-Time Evaluation Strategy"). The
-`.boxy` evaluator completes every root of a `.boxy` compilation, and of an
-`.lss` compilation every root that neither holds a function value nor reads
-one, along with every literal argument root:
+`.boxy` evaluator executes the pending roots of a `.boxy` compilation, and
+the Boxy-only literal argument and interpolation validation of an `.lss`
+compilation:
 
 ```text
 checked CIR
@@ -31225,8 +31623,8 @@ checked CIR
   -> store eval result in ConstStore
 ```
 
-The Solved program of an `.lss` compilation completes the roots holding a
-function value and the roots reading one:
+The Solved program of an `.lss` compilation completes pending ordinary
+constants and function-valued roots alike:
 
 ```text
 checked CIR
@@ -31289,14 +31687,15 @@ stored constants is a compiler bug in one of the evaluators or
 in the data they consume.
 
 Both evaluators store the same checked values in `ConstStore`, so a checked
-module holds the same values whichever strategy completed it. A function
+module holds the same values whichever strategy completed it; each strategy
+still files its own entry, since an image is at its writer's layouts and no
+stored value is shared between strategies (Stored Images). A function
 value alone is stored in the representation of the strategy that completed
 it ("Stored Function Values"), which is why a root holding one, and every
 root reading it, belongs to the evaluator of the compilation's own strategy.
-`roc check` and every other compilation with no runtime consumer name
-`.boxy`, so the `.boxy` evaluator completes all of their roots. The
-code-generation backend `--opt` selects affects compile-time evaluation only
-through the strategy it defaults to.
+`roc check` defaults to `.boxy` and honors an explicit `--specialize` for
+compile-time evaluation. The code-generation backend `--opt` selects affects
+compile-time evaluation only through a runtime command's default strategy.
 
 Check-only ARC insertion runs the borrow-inference solver in its single-variant
 form. A shared host/runtime LIR program instead applies its declared runtime
@@ -31306,11 +31705,13 @@ specialization and each commit their own LIR and ARC output; they do not repeat
 checked-to-Monotype lowering.
 
 The evaluator produces a runtime value. Checking then stores that eval
-result as checked-stage data in the checked module's `ConstStore`. `ConstStore`
-stores checked Roc values only. It does not contain Monotype nodes, Lambda
-Solved data, Lambda Mono decision data, runtime addresses, allocation identity,
-layout ids, runtime discriminants, field offsets, LIR locals, LIR procedure
-ids, backend symbols, backend bytes, or host handles.
+result as checked-stage data in the checked module's `ConstStore`: a value
+that is data alone as its image, the memory it occupies at the 64-bit layout
+of its stored type (Stored Images), and a value holding a function or a
+failure as nodes. `ConstStore` contains no Monotype nodes, Lambda Solved
+data, Lambda Mono decision data, runtime addresses, allocation identity,
+layout ids, LIR locals, LIR procedure ids, backend symbols, or host handles;
+an image's pointer words hold offsets into its own block.
 
 Compile-time finalization evaluates dependency-ready roots in batches. Each
 batch is lowered to LIR once, ARC is inserted once, the dev backend emits native
@@ -31465,6 +31866,200 @@ Roots that finish before the slow threshold therefore pay only monitor setup and
 signaling overhead, not the reporting period. Roots that exceed the threshold
 are reported, then the worker waits interruptibly until the next per-root report
 deadline or finalization stop.
+
+### Stored Images
+
+A compile-time root whose value is data alone, holding no function value
+and no failed value, is stored as an image (`ConstStore.ConstImage`), the
+root node's value (`ConstValue.image`): one block holding the value at
+offset 0 and then every live allocation it reaches, at the 64-bit
+little-endian layout of the root's stored type, with the offsets of the
+words that point into the block, the type the value was stored at
+(`ConstImage.root_type`), the content digest of its layout, and its own
+digest. A pointer word holds the block offset it points at. Allocations
+carry static refcount headers, lists and strings keep their capacity (Static
+Lists And Strings Keep Their Capacity), every NaN is Roc's one NaN, and no
+list or string is a seamless slice. The producer decides the form: a root
+whose const plan can hold no function is data alone. A value holding a
+function or a failure is stored as nodes, and each of its parts whose value
+holds no function is an image of its own, the child node's value
+(`ConstStoreWriter.fillPartImage`), at the type the part has in the value's
+stored type, whenever the part's layout is a function of that type alone:
+its const plan holds no function, or holds `.boxy` functions, which every
+layout holds as erased callables, and its type is closed. Two kinds of
+function-free part therefore stay nodes: one of an `.lss` type that can hold
+a function (an empty list of functions, `None` of `[Some(a -> a), None]`),
+whose layout is its lambda sets', which its type does not decide, and a part
+of a `.boxy` capture of a polymorphic function whose type holds a variable
+in the type of a function it could hold. No list is stored as packed bytes,
+and `ConstValue` has no number, string or zero-sized form: a number or a
+string is only ever part of an image. Every
+reader takes an image child as it takes a root's image: Boxy restores it
+through `restoreImageStep`, static data freezes or re-encodes it into the
+value holding it (`StaticInitializerMachine.writeStored`), and Monotype
+restores it as its literal or as one stored static data candidate named by
+the image's node (`BodyContext.restoredImagePart`,
+`StaticDataValue.stored_image`). Whether a root is data alone is whether
+its node is an image (a root's type is closed, and a root holding no
+`.lss` function has a layout its type decides).
+
+Every producer of a data root writes its image. An evaluated root's image is
+written by one copying pass over evaluator memory guided by the root's const
+plan (`NativeRootExport.imageRoot` over `frozen_graph.ImageGraph`, the
+freezer static-data slots use): a list of scalars is one copy, and a shared
+allocation is copied once. That pass writes the 64-bit layout whatever the
+width of the evaluation, reading the evaluator's memory at its own width, so
+a 32-bit compiler host (the interpreter path) stores the images a 64-bit one
+does. A Solved program's root is stored at its declaring module's rows,
+which the program's row joins can widen past (`declaredRootType`); the root's
+plan then carries the stored type's shape (`ConstRootPlan.stored`), and the
+pass writes the image at that shape (`NativeRootExport.imageRootAt`): each
+tag as the stored union's variant of the same name, at the discriminant and
+payload layout the stored type gives it, and each part at its stored
+offsets. The declared row holds each of its labels once, and the value
+inhabits it, so a tag whose name the stored union lacks is a compiler bug. A
+part whose evaluated and stored shapes are one is copied by the ordinary
+pass. This is the inverse of a read's re-encoding below, so every image is at
+the layout of the type it is stored at, whichever program evaluated it.
+A value-form root (Value-Form Roots) is written as its image straight
+from its checked expression (`ConstStoreWriter.ValueFormImage`), part by
+part at the 64-bit layout exactly as the evaluation of the same expression
+is written: each list's items in an allocation of their own, and a constant
+it reads is that constant's image copied through the part's plan
+(`NativeRootExport.imagePart`). Every image holds each allocation content
+once (`ImageGraph.mergeEqualAllocations`). A literal argument root is an
+evaluated root.
+
+The image's digest is computed once, as the image is stored, over the
+identity of the type the value was stored at (`ConstTypeStore.identityDigest`:
+its structure, with tag and field names by their text and named types by
+their declaring module, name and arguments), the content digest of the root's
+layout (`layout.Digests`, a function of the layout's structure alone, the
+same in every program and on every target), the block, and the pointer
+offsets. Two values with one layout and one block at different types (`A` of
+`[A, B]` and `C` of `[C, D]`, or a `Celsius` and a `Fahrenheit` of one
+backing) are different values with different digests, so nothing keyed by a
+digest takes a renamed tag for an unchanged value. Everything that names the value by
+content reads that digest: a module's interface and object-input digests
+(`boxy_interface.Digests.hashRootValue`) never walk an imaged value. Object
+keys are needed without a cache manager too: a runtime unit takes the object
+compile-time evaluation built in the same compilation by its key
+(`BuildEnv.boxyObjectWithKey`).
+
+**Reads.** A read at the image's own layout copies the block once as one
+static data node and relocates each pointer word by the node's address; the
+root's own bytes are the slot's value, its pointer words relocated into the
+block (`StaticInitializerMachine.freezeImage`). The read's layout digest
+equal to the image's decides it. A read at another layout, a 32-bit target's
+or a tag row an LSS row join widened past the stored one, re-encodes the
+image at compile time (`reencodeImage`): the reader commits the stored
+type's layout at the 64-bit width from the type alone, through the shared
+layout graph every strategy's layouts are committed through
+(`ImageLayouts`), reads the image's bytes at that layout and writes each
+part at its own layout through the read's const plan, tags matched by name.
+No second description of the producer's layout is stored: layout is a
+function of type and pointer width only, and a debug compiler asserts that
+the committed layout's digest is the image's.
+
+Reads of number roots, discriminant-only tags and strings stay literals in
+LIR (range proving, branch folding and overflow elision read them). A reader
+decodes such a literal from the image through its stored type
+(`ConstStore.imageLiteral`), never from the reader's own type, which an LSS
+row join may have widened: a number is the root's bytes at its primitive; a
+string is its descriptor's bytes and capacity; and a payload-free tag of a
+union whose value is its discriminant alone (the root is exactly the
+discriminant's width, `layout_shape.discriminantSize`) is the tag at the
+index the root's bytes hold among the union's tags in byte-wise name order
+(the order that assigns discriminants). Each reader then applies its own
+rule: Boxy keeps a number, and a tag its committed layout stores as a
+discriminant alone, as its literal and reads everything else as static data
+(`Builder.restoreImageStep`); Monotype keeps a number, a tag, and a string
+without spare capacity as its literal (`BodyContext.imageLiteralExpr`),
+wrapped in one `.nominal` per nominal layer of the read's type, and makes
+every other image root a stored static data candidate, which Solved-to-LIR
+lowering never treats as immediate. The wasm target-configuration reader
+reads its constants' literals the same way.
+
+An image is at the layouts of the strategy whose evaluator wrote it, so a
+checked module's cache entry is filed under its typing inputs and the
+compilation's strategy (`coordinator.checkedEntryKey`): each strategy keeps
+its own entry, and no stored value is shared between `--specialize=yes` and
+`--specialize=no`. Layout depends on pointer width alone, so one image serves
+every 64-bit target.
+
+Compiler hosts are little-endian, as the checked cache's raw-byte format
+already requires (a big-endian host fails to compile), so an image's bytes
+are the evaluation's own.
+
+### Constant Pool
+
+A stored image is named by its digest wherever it is emitted: static data
+materialization emits a read image's block as one node named
+`roc__i{digest}` (`StaticDataExport.pool_image`), with its pointer words
+relocated to itself, so every program and every unit carrying one image
+names it alike and the name is exact, the digest being the image's identity
+(Stored Images). A whole-program object (`--specialize=yes`, `--opt=speed`
+or `--opt=size`, a pieces composition) defines each image it reads once,
+since one static-data build keeps one block per digest and a composition
+keeps one datum per name.
+
+A `.boxy` unit image holds no image. Its composition leaves every image its
+kept code names out of the unit's data and imports it by name instead, the
+import marked as the pool's (`UnitImage.import_pool`), so a unit's cache
+entry records the digests of the images it reads and none of their bytes.
+The images live in the checked modules' constant stores, which the
+compilation already holds; a consumer finds one by digest through an index
+over the stores (`ConstStore.ImageIndex`). A digest no store holds is a
+compiler invariant: a unit's key covers the stored values its lowering read.
+
+Every consumer of unit images places the images their atoms name:
+
+- A link that places images (the ELF, Mach-O and COFF fast dev links and a
+  dev run's composed run image) resolves pool imports during its atom walk
+  (`unit_walk.Pool`), keeps an image exactly when an edge of a reached atom
+  names it, lays the kept images out in digest order after the placed
+  images' writable data, copies each kept image once, writing its pointer
+  words as the absolute addresses they point at in the same pass, and adds
+  one loader relocation per pointer word (an ELF relative relocation, a
+  Mach-O rebase, a COFF base relocation, a run image rebase). An image no
+  reached atom names is never read.
+- An in-process loader (compile-time evaluation's, `roc test`'s and a glue
+  run's) places an image the first time a loaded image names it, once for
+  the loader's lifetime (`UnitImageLoader.Pool`).
+
+What a link keeps is decided by the atoms of the images, built with each
+unit's image in parallel and exact. A unit's writable data divides into
+atoms like its block: one per datum of the static data a format keeps
+writable (an ELF object's pointer-bearing `.data.rel.ro`, Mach-O's
+`__DATA,__const`), each reached only through an edge of a reached atom, and
+roots for the rest of the writable data (the global offset table, data an
+object keeps outside its static data), which a placed image always reaches.
+A field in writable data reaches its target from its own atom. Writable
+data is still placed whole; a site in an unreached data atom is neither
+written nor given a loader relocation. So a constant is kept exactly when a
+kept function references it, directly or through another kept datum: the
+walk starts from the `provides`, follows every call, address and datum, and
+never consults the checked program's own reachability walk
+(`compile.boxy_reach`), which may miss what only the images know.
+
+The wasm link keeps its own form: a wasm unit defines each image it reads
+as a weak data segment under the image's name (`contentNamedStaticData`),
+and its atom walk keeps one definition of a name, and only the segments
+reached code names. A wasm unit therefore still carries the bytes of the
+images it reads; the walk decides what the module holds exactly as above,
+so a linked wasm module holds each reached image once, as a pooled native
+link does. What the pool would add for wasm is only a smaller unit cache
+entry, and it is not built: a wasm unit's data pointers are not absolute
+words a link writes and a loader rebases but relocations of the unit's
+own module form (`__memory_base` plus an offset, kept as the unit image's
+sites, `UnitCompile.imageOfModule`), and a wasm unit image's data imports
+resolve only to data another linked unit defines (it has no pool marking
+like `UnitImage.import_pool`). Pooling wasm images would take a pool import
+in `WasmUnitImage` and a wasm-side placement emitting those relocations for
+each kept image's pointer words.
+
+`--timings` reports, per fast dev link and composed run image, the images
+the units name, the ones placed, and their bytes.
 
 ## Test Root Ownership
 
@@ -31917,18 +32512,14 @@ tuple, record, and tag-payload fields are slices.
 const ConstStr = ConstBlobDataId;
 ```
 
-A stored string or packed list is a whole blob, never a view into a longer
-one. How evaluation's allocations shared bytes (a seamless slice of a longer
-allocation) is runtime representation and does not enter `ConstStore`; the writer stores each string's own bytes, and equal
-contents share a blob because interning is by content. Capacity is not
+A stored string is a whole blob, never a view into a longer one. How
+evaluation's allocations shared bytes (a seamless slice of a longer
+allocation) is runtime representation and does not enter `ConstStore`; an
+image holds each string's own bytes (Stored Images). Capacity is not
 representation: `ConstList.capacity` records a list's beside its items, which
-may be nodes, a packed blob, or nothing, and `ConstString.capacity` records a
-string's beside its blob (Static Lists And Strings Keep Their Capacity).
-Strings and packed scalar lists intern into the same exact-content namespace.
-Packed multi-byte scalars use little-endian checked-value bytes;
-this is target-independent `ConstStore` data, not a captured host allocation or
-backend-owned byte sequence. Post-check lowering validates the byte count
-against the scalar layout before making a runtime static-data view.
+are nodes or nothing, and `ConstString.capacity` records a string's beside its
+blob (Static Lists And Strings Keep Their Capacity). A string node has no
+producer: a string is data alone, so it is part of an image.
 
 `ConstScalar` is a closed checked scalar representation:
 
@@ -32209,8 +32800,8 @@ expression is read outside its owner.
   parent holds, becomes a read of that local. Each later read is a fresh read
   of the local. Static-data candidates and parts reached again in one restore
   are promoted the same way.
-- A leaf (scalar, string, empty or packed list, zero-sized value, crash) is
-  never bound. Each read restores its own literal, which costs nothing where
+- A leaf (an image, an empty list, a crash) is
+  never bound. Each read restores its own literal or static datum, which costs nothing where
   a shared local would cost a reference count.
 - The let of a promoted node goes around the restore's result, outermost first
   in node completion order, so each let follows the lets its value reads. A
@@ -32398,7 +32989,7 @@ lambda sets the runtime program shares with it, and the runtime program would
 then reach the test's values. Which case applies is decided before anything is
 specialized, from the pending compile-time roots and the discovery roots that
 can register a literal root (`planRoots`). When there are any, evaluation
-specializes exactly what `roc check` specializes, with the program roots as
+specializes exactly what `roc check --specialize=yes` specializes, with the program roots as
 discovery roots, and afterwards the program roots alone are specialized from
 the checked modules, now holding every value stored, exactly as a compilation
 that found them all in the cache specializes it
@@ -33582,7 +34173,11 @@ inside its atom, after the header), each recording what it references and,
 for every reference the image resolved between two of its atoms (and every
 page-relative one inside an atom), where the field is and how it encodes
 its target: an x86_64 displacement, an arm64 branch, page or page offset, or
-the arm64 dev backend's PC-relative address sequence. A link writes only the
+the arm64 dev backend's PC-relative address sequence. The writable data
+divides into atoms too, one per datum of the static data a format keeps
+writable, which decide what is reached but are placed with the rest of the
+writable data (Constant Pool). An image's stored constants are no part of
+it: it imports each from the constant pool. A link writes only the
 atoms the program reaches. An ELF link packs each image's reached atoms
 together in image order and fixes a resolved reference again only when the
 atoms it left out changed what the field encodes; a Mach-O or COFF link
@@ -33973,8 +34568,11 @@ data entries it needs into one page-aligned static pool chunk at the end of its
 allocation, and records in that chunk each entry whose relocations reach no
 code and no address cycle: its bytes, alignment, symbol offset, and relocations,
 with a content hash. Recursive type descriptors point at one another, so an
-entry on such a cycle has no content independent of its placement; it and
-every entry reaching it are written locally.
+entry on a cycle through other entries has no content independent of its
+placement; it and every entry reaching it are written locally. A relocation
+into the entry itself, as a stored image's pointer words are, is placement
+independent: it is hashed as such and matches a candidate's relocation into
+that candidate.
 The shim marks a descriptor accepted before any of that image's code runs.
 Once a descriptor is accepted, the compiler parent links its chunk into the
 session's static pool, whose newest chunk the control block names, and never

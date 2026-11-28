@@ -1788,6 +1788,27 @@ pub fn initWithSourceDigest(
     };
 }
 
+/// Move the node store, the identifier and string literal bytes and every
+/// side list into allocations that hold exactly their entries. Checking
+/// calls this when it finishes the module, so the module keeps no growth room
+/// for the rest of the build; a list that grows again afterwards regrows from
+/// its length.
+pub fn releaseUnusedCapacity(self: *Self) std.mem.Allocator.Error!void {
+    try self.store.releaseUnusedCapacity();
+    try self.common.strings.buffer.releaseUnusedCapacity(self.gpa);
+    try self.common.line_starts.releaseUnusedCapacity(self.gpa);
+    try self.common.idents.interner.bytes.releaseUnusedCapacity(self.gpa);
+    try self.common.idents.interner.ends.releaseUnusedCapacity(self.gpa);
+    inline for (@typeInfo(Self).@"struct".field_names, @typeInfo(Self).@"struct".field_types) |name, field_type| {
+        if (comptime isSideList(field_type)) try @field(self, name).releaseUnusedCapacity(self.gpa);
+    }
+}
+
+/// Whether `T` is one of the module's own growable side lists.
+fn isSideList(comptime T: type) bool {
+    return @typeInfo(T) == .@"struct" and @hasDecl(T, "Range") and @hasDecl(T, "releaseUnusedCapacity");
+}
+
 /// Deinitialize the module environment.
 pub fn deinit(self: *Self) void {
     self.common.deinit(self.gpa);
@@ -4890,6 +4911,70 @@ pub fn nodeIsErroneous(self: *const Self, node_idx: Node.Idx) bool {
     return findSortedByNode(ErroneousNode, self.erroneous_nodes.items(), @backingInt(node_idx)) != null;
 }
 
+/// Hand every type variable and type-store constraint index checking
+/// recorded in this module's side tables and CIR to `visitor`, as sealing
+/// the module's type store needs them (`types.Store.canonicalizeAndSeal`).
+/// Every table that names a variable of the store is visited here, and
+/// nothing else is: a new such table must be added.
+pub fn visitSealHolders(self: *Self, visitor: anytype) void {
+    for (self.for_loop_dispatch_plans.items()) |*plan| {
+        inline for (.{ "iterator_var", "step_var", "iter_fn_var", "next_fn_var" }) |name| visitor.rawVar(&@field(plan, name));
+        visitor.rawVar(&plan.step_topology.one_payload_var);
+        visitor.rawVar(&plan.step_topology.skip_payload_var);
+    }
+    for (self.scheme_uses.items()) |*use| {
+        visitor.rawVar(&use.scheme_root);
+        switch (@as(SchemeUseRecord.Slot, @fromBackingInt(use.slot_kind))) {
+            .nested_function_use, .dispatch_target, .recursive_dispatch_target, .platform_requirement, .where_method_use => visitor.rawVar(&use.slot_data),
+            .value_use, .shared_value_use, .recursive_reference, .recursive_value_reference => {},
+        }
+    }
+    for (self.scheme_use_pairs.items()) |*pair| {
+        visitor.rawVar(&pair.old_var);
+        visitor.rawVar(&pair.fresh_var);
+    }
+    for (self.dispatch_relation_merges.items()) |*merge| {
+        visitor.rawVar(&merge.dropped_fn_var);
+        visitor.rawVar(&merge.retained_fn_var);
+    }
+    for (self.generated_codec_derivations.items()) |*derivation| {
+        inline for (.{
+            "template_constraint_fn_var", "source_constraint_fn_var", "source_runtime_fn_var", "source_shape_var",
+            "source_body_shape_var",      "source_encoding_var",      "source_state_var",      "source_error_var",
+            "constraint_fn_var",          "runtime_fn_var",           "shape_var",             "body_shape_var",
+            "encoding_var",               "state_var",                "error_var",
+        }) |name| visitor.rawVar(&@field(derivation, name));
+    }
+    for (self.generated_codec_calls.items()) |*call| {
+        visitor.rawVar(&call.dispatcher_var);
+        visitor.rawVar(&call.callable_var);
+        visitor.rawVar(&call.evidence_var);
+        visitor.optionalRawVar(&call.subject_var);
+    }
+    for (self.generated_codec_renamings.items()) |*renaming| {
+        visitor.rawVar(&renaming.source_var);
+        visitor.rawVar(&renaming.copy_var);
+    }
+    for (self.generated_codec_recurrences.items()) |*recurrence| {
+        visitor.rawVar(&recurrence.constraint_fn_var);
+        visitor.rawVar(&recurrence.derivation_source_fn_var);
+    }
+    for (self.rejected_static_dispatches.items()) |*rejected| visitor.rawVar(&rejected.constraint_fn_var);
+    for (self.inspect_override_instances.items()) |*instance| visitor.rawVar(&instance.callable_var);
+    for (self.row_coerced_results.items()) |*result| visitor.rawVar(&result.wide_var);
+    for (self.platform_requirement_solutions.items()) |*solution| visitor.typeVar(&solution.solved_var);
+    for (self.platform_requirement_identity_vars.items()) |*var_| visitor.typeVar(var_);
+    for (self.binding_scheme_codec_requirements.items()) |*requirement| {
+        // A synthetic pristine imported scheme names its variable in place
+        // of a node; a node is below every variable sealing renumbers.
+        visitor.rawVar(&requirement.node_idx);
+        visitor.rawVar(&requirement.scheme_root);
+        visitor.rawVar(&requirement.receiver_var);
+        visitor.constraintIndex(&requirement.constraint_index);
+    }
+    self.store.visitSealHolders(visitor);
+}
+
 /// Record one exact generated-codec relation owned by a source binding scheme.
 /// Duplicate aliases are harmless but duplicate relations for the same alias
 /// would create redundant imported work, so exact entries are coalesced here.
@@ -5305,8 +5390,13 @@ pub const addStatement = storeAdder("addStatement");
 /// Add a new pattern to the node store.
 pub const addPattern = storeAdder("addPattern");
 
-/// Add a new expression to the node store.
-pub const addExpr = storeAdder("addExpr");
+/// Add an expression, recording whether its subtree is literal-only
+/// (`NodeStore.exprIsLiteralOnly`).
+pub fn addExpr(self: *Self, expr: CIR.Expr, region: Region) std.mem.Allocator.Error!CIR.Expr.Idx {
+    const idx = try storeAdder("addExpr")(self, expr, region);
+    try self.store.recordLiteralOnly(idx, expr);
+    return idx;
+}
 
 /// Reserve one contiguous field-access path plus its enclosing expression.
 pub fn startFieldAccessPath(self: *Self, segment_count: u32) std.mem.Allocator.Error!NodeStore.FieldAccessPathBuilder {
@@ -5570,7 +5660,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
         const all_stmts = self.store.sliceStatements(self.all_statements);
         var has_type_decl = false;
         for (all_stmts) |stmt_idx| {
-            const tag = std.meta.activeTag(self.store.getStatement(stmt_idx));
+            const tag = self.store.statementKind(stmt_idx);
             if (tag == .s_alias_decl or tag == .s_nominal_decl or tag == .s_where_alias_decl) {
                 has_type_decl = true;
                 break;
@@ -5583,9 +5673,9 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
             const type_decls_attrs = tree.beginNode();
 
             for (all_stmts) |stmt_idx| {
-                const stmt = self.store.getStatement(stmt_idx);
-                switch (stmt) {
-                    .s_alias_decl => |alias| {
+                switch (self.store.statementKind(stmt_idx)) {
+                    .s_alias_decl => {
+                        const alias = self.store.statementView(stmt_idx).s_alias_decl.decode();
                         const stmt_begin = try tree.beginNamedNode("alias");
 
                         // Add region info for the statement
@@ -5609,7 +5699,8 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
 
                         try tree.endNode(stmt_begin, stmt_attrs);
                     },
-                    .s_where_alias_decl => |where_alias| {
+                    .s_where_alias_decl => {
+                        const where_alias = self.store.statementView(stmt_idx).s_where_alias_decl.decode();
                         const stmt_begin = try tree.beginNamedNode("where-alias");
 
                         const stmt_region = self.store.getStatementRegion(stmt_idx);
@@ -5623,7 +5714,8 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                         try header.pushToSExprTree(self, tree, where_alias.header);
                         try tree.endNode(stmt_begin, stmt_attrs);
                     },
-                    .s_nominal_decl => |nominal| {
+                    .s_nominal_decl => {
+                        const nominal = self.store.statementView(stmt_idx).s_nominal_decl.decode();
                         const stmt_begin = try tree.beginNamedNode("nominal");
 
                         // Add region info for the statement

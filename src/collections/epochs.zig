@@ -474,6 +474,465 @@ pub fn EpochColumn(comptime Key: type, comptime T: type, comptime source: EpochS
     };
 }
 
+/// Whether an `EpochBitSet` also lists its members.
+pub const MemberOrder = enum {
+    /// Membership and a member count only; the set cannot be iterated.
+    unlisted,
+    /// Members are also listed in insertion order for iteration.
+    insertion,
+};
+
+/// A set of `Key`s that empties in constant time, at about one and a half
+/// bits per key of its domain.
+///
+/// Keys are bits packed 64 to a word, and each word carries a `u32` stamp. A
+/// word holds members only while its stamp equals the current epoch; a word
+/// with any other stamp reads as empty and is rewritten whole by its first
+/// insertion of the epoch, so emptying the set is one epoch advance. Lookup
+/// and insertion are branchless within the column: the stamp comparison
+/// becomes a mask over the word.
+///
+/// Nothing is allocated before the first insertion, and the column grows to
+/// the words the inserted keys reach, so a set that only ever holds low keys
+/// spans only those words. Keys past the column's end are absent.
+///
+/// A set serves one traversal at a time when it is held through
+/// `beginTraversal` and `endTraversal`; safety builds assert that no
+/// traversal begins while another holds it.
+pub fn EpochBitSet(comptime Key: type, comptime order: MemberOrder) type {
+    return struct {
+        const Self = @This();
+
+        /// Sixty-four keys and their stamp. The halves of the bits are
+        /// stored apart so a word takes 12 bytes rather than 16.
+        const Word = extern struct { stamp: u32, lo: u32, hi: u32 };
+
+        allocator: Allocator,
+        words: []Word = &.{},
+        /// The members of the current epoch, in insertion order.
+        keys: if (order == .insertion) std.ArrayList(Key) else void = if (order == .insertion) .empty else {},
+        /// The number of members of the current epoch.
+        member_count: if (order == .unlisted) usize else void = if (order == .unlisted) 0 else {},
+        epoch: Epoch = .{},
+        /// Whether a traversal holds the set; tracked only in safety builds.
+        traversal_active: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) false else {},
+
+        pub fn init(allocator: Allocator) Self {
+            return .{ .allocator = allocator };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.allocator.free(self.words);
+            if (order == .insertion) self.keys.deinit(self.allocator);
+            self.* = undefined;
+        }
+
+        /// The number of members.
+        pub fn count(self: *const Self) usize {
+            return if (order == .insertion) self.keys.items.len else self.member_count;
+        }
+
+        /// Whether `k` is a member.
+        pub inline fn contains(self: *const Self, k: Key) bool {
+            const i = keyIndex(Key, k);
+            const w = i >> 6;
+            if (w >= self.words.len) return false;
+            const word = self.words[w];
+            const bits = wordBits(word) & self.liveMask(word);
+            return ((bits >> @as(u6, @truncate(i))) & 1) != 0;
+        }
+
+        /// Add `k`, returning whether it was already a member.
+        pub inline fn testAndInsert(self: *Self, k: Key) Allocator.Error!bool {
+            const i = keyIndex(Key, k);
+            const w = i >> 6;
+            if (w >= self.words.len) try self.growWords(w + 1);
+            if (order == .insertion) try self.keys.ensureUnusedCapacity(self.allocator, 1);
+            const word = &self.words[w];
+            const bits = wordBits(word.*) & self.liveMask(word.*);
+            const bit = @as(u64, 1) << @as(u6, @truncate(i));
+            const present = (bits & bit) != 0;
+            const updated = bits | bit;
+            word.* = .{ .stamp = self.epoch.current, .lo = @truncate(updated), .hi = @truncate(updated >> 32) };
+            if (!present) {
+                if (order == .insertion) self.keys.appendAssumeCapacity(k) else self.member_count += 1;
+            }
+            return present;
+        }
+
+        /// Add `k`.
+        pub inline fn insert(self: *Self, k: Key) Allocator.Error!void {
+            _ = try self.testAndInsert(k);
+        }
+
+        /// Remove every member.
+        pub fn clearRetainingCapacity(self: *Self) void {
+            if (order == .insertion) self.keys.clearRetainingCapacity() else self.member_count = 0;
+            if (self.epoch.advance()) {
+                for (self.words) |*word| word.stamp = 0;
+                storage_work.add(.bytes_filled, self.words.len * @sizeOf(u32));
+            }
+        }
+
+        /// Empty the set and hold it for one traversal. Beginning another
+        /// traversal before `endTraversal` is a compiler invariant violation.
+        pub fn beginTraversal(self: *Self) void {
+            if (std.debug.runtime_safety) {
+                std.debug.assert(!self.traversal_active);
+                self.traversal_active = true;
+            }
+            self.clearRetainingCapacity();
+        }
+
+        /// Release the set held by `beginTraversal`.
+        pub fn endTraversal(self: *Self) void {
+            if (std.debug.runtime_safety) {
+                std.debug.assert(self.traversal_active);
+                self.traversal_active = false;
+            }
+        }
+
+        /// Iterates the members in insertion order. Like `DenseMap`'s
+        /// iterators, it copies each key, so a key pointer stays valid while
+        /// the set grows, and members inserted during iteration are visited
+        /// too.
+        pub fn keyIterator(self: *const Self) KeyIterator {
+            if (order != .insertion) @compileError("an unlisted set cannot be iterated");
+            return .{ .set = self };
+        }
+
+        /// Iterates the members in insertion order, by value.
+        pub fn constKeyIterator(self: *const Self) ConstKeyIterator {
+            if (order != .insertion) @compileError("an unlisted set cannot be iterated");
+            return .{ .set = self };
+        }
+
+        /// Iterates the members in insertion order as entries holding a key
+        /// pointer, the shape map iterators have.
+        pub fn iterator(self: *const Self) Iterator {
+            if (order != .insertion) @compileError("an unlisted set cannot be iterated");
+            return .{ .inner = .{ .set = self } };
+        }
+
+        pub const KeyIterator = struct {
+            set: *const Self,
+            position: usize = 0,
+            key: Key = undefined,
+
+            pub fn next(self: *KeyIterator) ?*const Key {
+                if (self.position >= self.set.keys.items.len) return null;
+                self.key = self.set.keys.items[self.position];
+                self.position += 1;
+                return &self.key;
+            }
+        };
+
+        pub const ConstKeyIterator = struct {
+            set: *const Self,
+            position: usize = 0,
+
+            pub fn next(self: *ConstKeyIterator) ?Key {
+                if (self.position >= self.set.keys.items.len) return null;
+                const key = self.set.keys.items[self.position];
+                self.position += 1;
+                return key;
+            }
+        };
+
+        /// An iterated member.
+        pub const Entry = struct { key_ptr: *const Key };
+
+        pub const Iterator = struct {
+            inner: KeyIterator,
+
+            pub fn next(self: *Iterator) ?Entry {
+                return .{ .key_ptr = self.inner.next() orelse return null };
+            }
+        };
+
+        inline fn wordBits(word: Word) u64 {
+            return (@as(u64, word.hi) << 32) | word.lo;
+        }
+
+        /// All ones when `word` belongs to the current epoch, else zero.
+        inline fn liveMask(self: *const Self, word: Word) u64 {
+            return @as(u64, 0) -% @intFromBool(word.stamp == self.epoch.current);
+        }
+
+        fn growWords(self: *Self, min_len: usize) Allocator.Error!void {
+            const old_len = self.words.len;
+            const new_len = @max(min_len, old_len +| old_len / 2 +| 4);
+            self.words = try self.allocator.realloc(self.words, new_len);
+            for (self.words[old_len..]) |*word| word.* = .{ .stamp = 0, .lo = 0, .hi = 0 };
+            storage_work.add(.bytes_filled, (new_len - old_len) * @sizeOf(Word));
+        }
+    };
+}
+
+/// A pool of reusable `EpochBitSet`s for passes that repeatedly need
+/// short-lived sets over one domain. A pooled set keeps its words, so
+/// acquiring one costs an epoch advance. The pool hands out sets by value, so
+/// nested scopes may acquire further sets while an outer one is still in use,
+/// and each nesting depth keeps words of its own.
+pub fn EpochBitSetPool(comptime Key: type, comptime order: MemberOrder) type {
+    return struct {
+        const Self = @This();
+
+        pub const Set = EpochBitSet(Key, order);
+
+        /// Sets kept beyond this many are freed on release instead of pooled.
+        const max_pooled = 8;
+
+        allocator: Allocator,
+        sets: [max_pooled]Set = undefined,
+        len: usize = 0,
+
+        pub fn init(allocator: Allocator) Self {
+            return .{ .allocator = allocator };
+        }
+
+        pub fn deinit(self: *Self) void {
+            for (self.sets[0..self.len]) |*set| set.deinit();
+            self.* = undefined;
+        }
+
+        /// An empty set, reusing a pooled set's storage when one is available.
+        pub fn acquire(self: *Self) Set {
+            if (self.len > 0) {
+                self.len -= 1;
+                return self.sets[self.len];
+            }
+            return Set.init(self.allocator);
+        }
+
+        /// Return an acquired set to the pool. The caller's set is consumed.
+        pub fn release(self: *Self, set: *Set) void {
+            if (self.len == max_pooled) {
+                set.deinit();
+                return;
+            }
+            set.clearRetainingCapacity();
+            self.sets[self.len] = set.*;
+            self.len += 1;
+            set.* = undefined;
+        }
+    };
+}
+
+/// A map from `Key` to `V` that empties in constant time and iterates in
+/// insertion order, with the observable behavior of a `DenseMap` that is
+/// never removed from: the same lookups, the same entries, and the same
+/// iteration order after any sequence of insertions and clears.
+///
+/// Each key owns a slot holding a stamp and the value side by side. A slot
+/// holds an entry only when its stamp equals the current epoch, so emptying
+/// the map is one epoch advance. Slots live in pages of 64 consecutive keys,
+/// found through a directory indexed by the key's page; a page is allocated,
+/// with its stamps cleared, the first time one of its keys is inserted, so
+/// the map's storage follows the keys it has held rather than the size of
+/// their domain. Keys whose page does not exist hold nothing. The keys of the
+/// current epoch are also listed in insertion order for iteration.
+///
+/// This suits maps that are cleared and refilled many times over one domain
+/// that outlives them, such as a type store's variables.
+pub fn EpochMap(comptime Key: type, comptime V: type) type {
+    return struct {
+        const Self = @This();
+
+        const Slot = struct { stamp: u32, value: V };
+        const page_shift = 6;
+        const page_len = 1 << page_shift;
+        const Page = [page_len]Slot;
+
+        pub const Entry = struct {
+            key_ptr: *const Key,
+            value_ptr: *V,
+        };
+
+        pub const GetOrPutResult = struct {
+            value_ptr: *V,
+            found_existing: bool,
+        };
+
+        allocator: Allocator,
+        /// The page of each run of 64 keys, null until one of them is
+        /// inserted. It spans the pages up to the highest one inserted into.
+        pages: std.ArrayList(?*Page) = .empty,
+        /// The number of pages allocated.
+        allocated_pages: usize = 0,
+        /// The keys holding entries in the current epoch, in insertion order.
+        keys: std.ArrayList(Key) = .empty,
+        epoch: Epoch = .{},
+
+        pub fn init(allocator: Allocator) Self {
+            return .{ .allocator = allocator };
+        }
+
+        pub fn deinit(self: *Self) void {
+            for (self.pages.items) |page| if (page) |allocated| self.allocator.destroy(allocated);
+            self.pages.deinit(self.allocator);
+            self.keys.deinit(self.allocator);
+            self.* = undefined;
+        }
+
+        pub fn count(self: *const Self) usize {
+            return self.keys.items.len;
+        }
+
+        pub inline fn contains(self: *const Self, key: Key) bool {
+            return self.liveSlot(keyIndex(Key, key)) != null;
+        }
+
+        pub inline fn get(self: *const Self, key: Key) ?V {
+            const slot = self.liveSlot(keyIndex(Key, key)) orelse return null;
+            return slot.value;
+        }
+
+        pub inline fn getPtr(self: *Self, key: Key) ?*V {
+            return &(self.liveSlot(keyIndex(Key, key)) orelse return null).value;
+        }
+
+        pub fn put(self: *Self, key: Key, value: V) Allocator.Error!void {
+            const result = try self.getOrPut(key);
+            result.value_ptr.* = value;
+        }
+
+        pub fn putNoClobber(self: *Self, key: Key, value: V) Allocator.Error!void {
+            const result = try self.getOrPut(key);
+            std.debug.assert(!result.found_existing);
+            result.value_ptr.* = value;
+        }
+
+        pub fn getOrPut(self: *Self, key: Key) Allocator.Error!GetOrPutResult {
+            const i = keyIndex(Key, key);
+            const page = try self.ensurePage(i >> page_shift);
+            const slot = &page[i & (page_len - 1)];
+            if (slot.stamp == self.epoch.current) return .{ .value_ptr = &slot.value, .found_existing = true };
+            try self.keys.append(self.allocator, key);
+            slot.stamp = self.epoch.current;
+            return .{ .value_ptr = &slot.value, .found_existing = false };
+        }
+
+        pub fn getOrPutValue(self: *Self, key: Key, value: V) Allocator.Error!GetOrPutResult {
+            const result = try self.getOrPut(key);
+            if (!result.found_existing) result.value_ptr.* = value;
+            return result;
+        }
+
+        /// Reserve room for `additional_count` more entries in the key list.
+        pub fn ensureUnusedCapacity(self: *Self, additional_count: usize) Allocator.Error!void {
+            try self.keys.ensureUnusedCapacity(self.allocator, additional_count);
+        }
+
+        /// Forget every entry, retaining capacity.
+        pub fn clearRetainingCapacity(self: *Self) void {
+            self.keys.clearRetainingCapacity();
+            if (self.epoch.advance()) {
+                for (self.pages.items) |page| {
+                    const allocated = page orelse continue;
+                    for (allocated) |*slot| slot.stamp = 0;
+                }
+                storage_work.add(.bytes_filled, self.allocated_pages * page_len * @sizeOf(u32));
+            }
+        }
+
+        pub fn iterator(self: *Self) Iterator {
+            return .{ .map = self };
+        }
+
+        pub fn keyIterator(self: *Self) KeyIterator {
+            return .{ .map = self };
+        }
+
+        pub fn valueIterator(self: *Self) ValueIterator {
+            return .{ .map = self };
+        }
+
+        pub fn constKeyIterator(self: *const Self) ConstKeyIterator {
+            return .{ .map = self };
+        }
+
+        /// Iterates the keys of a map it cannot change.
+        pub const ConstKeyIterator = struct {
+            map: *const Self,
+            position: usize = 0,
+
+            pub fn next(self: *ConstKeyIterator) ?Key {
+                if (self.position >= self.map.keys.items.len) return null;
+                const key = self.map.keys.items[self.position];
+                self.position += 1;
+                return key;
+            }
+        };
+
+        /// Like `DenseMap`'s iterators, these copy each key, so a key pointer
+        /// stays valid while the map grows, and entries inserted during
+        /// iteration are visited too.
+        pub const Iterator = struct {
+            map: *Self,
+            position: usize = 0,
+            key: Key = undefined,
+
+            pub fn next(self: *Iterator) ?Entry {
+                if (self.position >= self.map.keys.items.len) return null;
+                self.key = self.map.keys.items[self.position];
+                self.position += 1;
+                return .{ .key_ptr = &self.key, .value_ptr = &self.map.liveSlot(keyIndex(Key, self.key)).?.value };
+            }
+        };
+
+        pub const KeyIterator = struct {
+            map: *Self,
+            position: usize = 0,
+            key: Key = undefined,
+
+            pub fn next(self: *KeyIterator) ?*const Key {
+                if (self.position >= self.map.keys.items.len) return null;
+                self.key = self.map.keys.items[self.position];
+                self.position += 1;
+                return &self.key;
+            }
+        };
+
+        pub const ValueIterator = struct {
+            map: *Self,
+            position: usize = 0,
+
+            pub fn next(self: *ValueIterator) ?*V {
+                if (self.position >= self.map.keys.items.len) return null;
+                const key = self.map.keys.items[self.position];
+                self.position += 1;
+                return &self.map.liveSlot(keyIndex(Key, key)).?.value;
+            }
+        };
+
+        inline fn liveSlot(self: *const Self, i: usize) ?*Slot {
+            const page_index = i >> page_shift;
+            if (page_index >= self.pages.items.len) return null;
+            const page = self.pages.items[page_index] orelse return null;
+            const slot = &page[i & (page_len - 1)];
+            return if (slot.stamp == self.epoch.current) slot else null;
+        }
+
+        /// The page holding the keys of `page_index`, allocated with its
+        /// stamps cleared if none of them was inserted before.
+        fn ensurePage(self: *Self, page_index: usize) Allocator.Error!*Page {
+            if (page_index >= self.pages.items.len) {
+                const old_len = self.pages.items.len;
+                try self.pages.resize(self.allocator, page_index + 1);
+                @memset(self.pages.items[old_len..], null);
+            }
+            if (self.pages.items[page_index]) |page| return page;
+            const page = try self.allocator.create(Page);
+            for (page) |*slot| slot.* = .{ .stamp = 0, .value = undefined };
+            storage_work.add(.bytes_filled, page_len * @sizeOf(u32));
+            self.pages.items[page_index] = page;
+            self.allocated_pages += 1;
+            return page;
+        }
+    };
+}
+
 const testing = std.testing;
 const TestKey = enum(u32) { _ };
 
@@ -691,4 +1150,275 @@ test "borrowed epoch cursors never free their owner's stamps" {
     set.reset();
     try testing.expect(!set.contains(2));
     try testing.expectEqualSlices(u32, &.{ 0, 0, 0, 0 }, &stamps);
+}
+
+test "an epoch map matches a dense map's entries and iteration order" {
+    const DenseMap = @import("DenseMap.zig").DenseMap;
+    var dense = DenseMap(TestKey, u32).init(testing.allocator);
+    defer dense.deinit();
+    var stamped = EpochMap(TestKey, u32).init(testing.allocator);
+    defer stamped.deinit();
+
+    var prng = std.Random.DefaultPrng.init(0x5eed);
+    const random = prng.random();
+    for (0..4000) |step| {
+        const key = testKey(random.uintLessThan(u32, 300));
+        switch (random.uintLessThan(u8, 10)) {
+            0 => {
+                dense.clearRetainingCapacity();
+                stamped.clearRetainingCapacity();
+            },
+            1, 2, 3 => {
+                try dense.put(key, @intCast(step));
+                try stamped.put(key, @intCast(step));
+            },
+            4, 5 => {
+                const a = try dense.getOrPut(key);
+                const b = try stamped.getOrPut(key);
+                try testing.expectEqual(a.found_existing, b.found_existing);
+                if (!a.found_existing) {
+                    a.value_ptr.* = 7;
+                    b.value_ptr.* = 7;
+                }
+            },
+            else => {
+                try testing.expectEqual(dense.get(key), stamped.get(key));
+                try testing.expectEqual(dense.contains(key), stamped.contains(key));
+            },
+        }
+        try testing.expectEqual(dense.count(), stamped.count());
+    }
+
+    var dense_entries = dense.iterator();
+    var stamped_entries = stamped.iterator();
+    while (dense_entries.next()) |expected| {
+        const actual = stamped_entries.next().?;
+        try testing.expectEqual(expected.key_ptr.*, actual.key_ptr.*);
+        try testing.expectEqual(expected.value_ptr.*, actual.value_ptr.*);
+    }
+    try testing.expect(stamped_entries.next() == null);
+}
+
+test "an epoch map grows mid-epoch and keeps earlier entries" {
+    var map = EpochMap(u32, u32).init(testing.allocator);
+    defer map.deinit();
+    try map.put(2, 20);
+    try testing.expectEqual(@as(?u32, null), map.get(5000));
+    try map.put(5000, 50);
+    try testing.expectEqual(@as(?u32, 20), map.get(2));
+    try testing.expectEqual(@as(?u32, 50), map.get(5000));
+    try testing.expectEqual(@as(?u32, null), map.get(4999));
+    var keys = map.keyIterator();
+    try testing.expectEqual(@as(u32, 2), keys.next().?.*);
+    try testing.expectEqual(@as(u32, 5000), keys.next().?.*);
+    try testing.expect(keys.next() == null);
+    var values = map.valueIterator();
+    try testing.expectEqual(@as(u32, 20), values.next().?.*);
+    try testing.expectEqual(@as(u32, 50), values.next().?.*);
+    try testing.expect(values.next() == null);
+}
+
+test "an epoch map wrap clears every stamp" {
+    var map = EpochMap(u32, void).init(testing.allocator);
+    defer map.deinit();
+    try map.put(1, {});
+    map.epoch.current = std.math.maxInt(u32) - 1;
+    try map.put(2, {});
+    map.clearRetainingCapacity();
+    try testing.expectEqual(std.math.maxInt(u32), map.epoch.current);
+    try testing.expect(!map.contains(2));
+    try map.put(3, {});
+    map.clearRetainingCapacity();
+    try testing.expectEqual(@as(u32, 1), map.epoch.current);
+    // Key 1 was stamped with epoch 1 long ago; the wrap cleared it.
+    for (0..4) |i| try testing.expect(!map.contains(@intCast(i)));
+    try testing.expectEqual(@as(usize, 0), map.count());
+}
+
+test "an epoch map key beyond its column after a clear is absent" {
+    var map = EpochMap(u32, u32).init(testing.allocator);
+    defer map.deinit();
+    try map.put(9, 1);
+    map.clearRetainingCapacity();
+    try testing.expect(!map.contains(9));
+    const result = try map.getOrPut(9);
+    try testing.expect(!result.found_existing);
+    result.value_ptr.* = 4;
+    try testing.expectEqual(@as(?u32, 4), map.get(9));
+}
+
+test "an epoch bitset matches a dense set's membership, count and insertion order" {
+    const DenseMap = @import("DenseMap.zig").DenseMap;
+    var dense = DenseMap(TestKey, void).init(testing.allocator);
+    defer dense.deinit();
+    var listed = EpochBitSet(TestKey, .insertion).init(testing.allocator);
+    defer listed.deinit();
+    var unlisted = EpochBitSet(TestKey, .unlisted).init(testing.allocator);
+    defer unlisted.deinit();
+
+    var prng = std.Random.DefaultPrng.init(0xb175);
+    const random = prng.random();
+    for (0..6000) |_| {
+        const key = testKey(random.uintLessThan(u32, 700));
+        switch (random.uintLessThan(u8, 12)) {
+            0 => {
+                dense.clearRetainingCapacity();
+                listed.clearRetainingCapacity();
+                unlisted.clearRetainingCapacity();
+            },
+            1, 2, 3, 4 => {
+                const expected = (try dense.getOrPut(key)).found_existing;
+                try testing.expectEqual(expected, try listed.testAndInsert(key));
+                try testing.expectEqual(expected, try unlisted.testAndInsert(key));
+            },
+            else => {
+                try testing.expectEqual(dense.contains(key), listed.contains(key));
+                try testing.expectEqual(dense.contains(key), unlisted.contains(key));
+            },
+        }
+        try testing.expectEqual(dense.count(), listed.count());
+        try testing.expectEqual(dense.count(), unlisted.count());
+    }
+
+    var expected_keys = dense.constKeyIterator();
+    var actual_keys = listed.constKeyIterator();
+    var entries = listed.iterator();
+    while (expected_keys.next()) |expected| {
+        try testing.expectEqual(expected, actual_keys.next().?);
+        try testing.expectEqual(expected, entries.next().?.key_ptr.*);
+    }
+    try testing.expect(actual_keys.next() == null);
+    try testing.expect(entries.next() == null);
+}
+
+test "an epoch bitset allocates nothing before an insertion and grows to the words it touches" {
+    var set = EpochBitSet(u32, .unlisted).init(testing.allocator);
+    defer set.deinit();
+    try testing.expect(!set.contains(5));
+    set.beginTraversal();
+    try testing.expect(!set.contains(1_000_000));
+    set.endTraversal();
+    try testing.expectEqual(@as(usize, 0), set.words.len);
+    try set.insert(3);
+    try testing.expect(set.words.len < 8);
+    try testing.expect(!set.contains(1_000_000));
+    // Growth in the middle of an epoch keeps earlier members.
+    try set.insert(1000);
+    try testing.expect(set.contains(3));
+    try testing.expect(set.contains(1000));
+    try testing.expect(!set.contains(999));
+    try testing.expect(!set.contains(1001));
+    try testing.expect(!set.contains(@intCast(64 * set.words.len + 5)));
+    try testing.expectEqual(@as(usize, 2), set.count());
+}
+
+test "an epoch bitset word from an earlier epoch reads empty and is reset by its first insertion" {
+    var set = EpochBitSet(u32, .unlisted).init(testing.allocator);
+    defer set.deinit();
+    for ([_]u32{ 0, 1, 63, 64, 130 }) |key| try set.insert(key);
+    set.clearRetainingCapacity();
+    for ([_]u32{ 0, 1, 63, 64, 130 }) |key| try testing.expect(!set.contains(key));
+    try testing.expectEqual(@as(usize, 0), set.count());
+    // Inserting one key of a stale word drops the word's old members.
+    try testing.expect(!try set.testAndInsert(1));
+    try testing.expect(set.contains(1));
+    try testing.expect(!set.contains(0));
+    try testing.expect(!set.contains(63));
+    try testing.expect(try set.testAndInsert(1));
+    try testing.expect(!set.contains(64));
+    try testing.expect(!set.contains(130));
+}
+
+test "an epoch bitset wrap clears every stamp and restarts at one" {
+    var set = EpochBitSet(u32, .insertion).init(testing.allocator);
+    defer set.deinit();
+    try set.insert(2);
+    set.epoch.current = std.math.maxInt(u32) - 1;
+    try set.insert(70);
+    set.clearRetainingCapacity();
+    try testing.expectEqual(std.math.maxInt(u32), set.epoch.current);
+    try testing.expect(!set.contains(70));
+    try set.insert(100);
+    set.clearRetainingCapacity();
+    try testing.expectEqual(@as(u32, 1), set.epoch.current);
+    // Key 2 was stamped with epoch 1 long ago; the wrap cleared it.
+    for (0..200) |i| try testing.expect(!set.contains(@intCast(i)));
+    for (set.words) |word| try testing.expectEqual(@as(u32, 0), word.stamp);
+    try testing.expectEqual(@as(usize, 0), set.count());
+}
+
+test "an epoch bitset traversal empties the set each time it begins" {
+    var set = EpochBitSet(TestKey, .unlisted).init(testing.allocator);
+    defer set.deinit();
+    set.beginTraversal();
+    try set.insert(testKey(9));
+    if (std.debug.runtime_safety) try testing.expect(set.traversal_active);
+    set.endTraversal();
+    set.beginTraversal();
+    try testing.expect(!set.contains(testKey(9)));
+    set.endTraversal();
+    if (std.debug.runtime_safety) try testing.expect(!set.traversal_active);
+}
+
+test "an epoch bitset pool hands out empty sets that keep their words, nested or not" {
+    var pool = EpochBitSetPool(u32, .insertion).init(testing.allocator);
+    defer pool.deinit();
+    var outer = pool.acquire();
+    try outer.insert(400);
+    var inner = pool.acquire();
+    try testing.expect(!inner.contains(400));
+    try inner.insert(7);
+    pool.release(&inner);
+    try testing.expect(outer.contains(400));
+    pool.release(&outer);
+    var again = pool.acquire();
+    defer pool.release(&again);
+    try testing.expect(again.words.len > 400 / 64);
+    try testing.expect(!again.contains(400));
+    try testing.expect(!again.contains(7));
+    try testing.expectEqual(@as(usize, 0), again.count());
+}
+
+fn exerciseBitSetAllocationFailures(gpa: Allocator) (Allocator.Error || error{TestUnexpectedResult})!void {
+    var set = EpochBitSet(u32, .insertion).init(gpa);
+    defer set.deinit();
+    for ([_]u32{ 5, 900, 6, 5000, 900 }) |key| _ = try set.testAndInsert(key);
+    try testing.expect(set.contains(5000));
+    try testing.expect(set.count() == 4);
+}
+
+test "an epoch bitset stays consistent when an allocation fails" {
+    try testing.checkAllAllocationFailures(testing.allocator, exerciseBitSetAllocationFailures, .{});
+}
+
+test "an epoch map allocates only the pages its keys touch" {
+    var map = EpochMap(u32, u32).init(testing.allocator);
+    defer map.deinit();
+    try testing.expectEqual(@as(?u32, null), map.get(100_000));
+    try testing.expectEqual(@as(usize, 0), map.allocated_pages);
+    try map.put(100_000, 1);
+    try map.put(100_001, 2);
+    try testing.expectEqual(@as(usize, 1), map.allocated_pages);
+    try map.put(3, 3);
+    try testing.expectEqual(@as(usize, 2), map.allocated_pages);
+    try testing.expectEqual(@as(?u32, null), map.get(4));
+    try testing.expectEqual(@as(?u32, null), map.get(50_000));
+    map.clearRetainingCapacity();
+    try testing.expectEqual(@as(?u32, null), map.get(100_000));
+    try map.put(100_002, 4);
+    try testing.expectEqual(@as(usize, 2), map.allocated_pages);
+    try testing.expectEqual(@as(?u32, 4), map.get(100_002));
+    try testing.expectEqual(@as(?u32, null), map.get(100_001));
+}
+
+fn exerciseEpochMapAllocationFailures(gpa: Allocator) (Allocator.Error || error{TestUnexpectedResult})!void {
+    var map = EpochMap(u32, u32).init(gpa);
+    defer map.deinit();
+    for ([_]u32{ 5, 900, 6, 5000, 900 }) |key| try map.put(key, key + 1);
+    try testing.expect(map.get(5000) == 5001);
+    try testing.expect(map.count() == 4);
+}
+
+test "an epoch map stays consistent when an allocation fails" {
+    try testing.checkAllAllocationFailures(testing.allocator, exerciseEpochMapAllocationFailures, .{});
 }

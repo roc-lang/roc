@@ -17,8 +17,11 @@
 //! An entry whose relocations reach a function pointer names its own image's
 //! code, so no other image can reuse it. Its image records that its static data
 //! references code, and the host shim never releases such an image. An entry
-//! on an address cycle (recursive type descriptors point at one another) has
-//! no content independent of where it is placed, so it is never pooled either.
+//! on an address cycle through other entries (recursive type descriptors point
+//! at one another) has no content independent of where it is placed, so it is
+//! never pooled either. A relocation into the entry itself, as a stored
+//! image's pointer words are (design.md "Stored Images"), is placement
+//! independent: it is compared as a pointer into the candidate itself.
 
 const std = @import("std");
 const base = @import("base");
@@ -104,7 +107,7 @@ pub const Plan = struct {
     /// `pooling`.
     hashes: []u64,
     /// Whether each export can be pooled: its relocations reach no code and
-    /// no address cycle.
+    /// no address cycle through another export.
     poolable: []bool,
     /// Address relocation target export of each relocation, flattened in
     /// export order; absent for a function pointer.
@@ -211,8 +214,10 @@ pub const Plan = struct {
         defer allocator.free(ordered.cyclic);
         plan.order = ordered.order;
 
-        // An export on an address cycle has no content hash independent of
-        // its own placement, so it and everything reaching it stay local.
+        // An export on an address cycle through other exports has no content
+        // hash independent of its own placement, so it and everything
+        // reaching it stay local. A relocation into the export itself is
+        // hashed and compared as such.
         for (plan.order) |i| {
             var poolable = !ordered.cyclic[i];
             for (plan.targets[plan.target_starts[i]..plan.target_starts[i + 1]]) |target| {
@@ -220,6 +225,7 @@ pub const Plan = struct {
                     poolable = false;
                     continue;
                 };
+                if (address_target == i) continue;
                 if (!plan.poolable[address_target]) poolable = false;
             }
             plan.poolable[i] = poolable;
@@ -313,7 +319,8 @@ pub const Plan = struct {
             const relocation = data_export.relocations[r];
             hashInt(&hasher, relocation.offset);
             hashInt(&hasher, @as(u64, @bitCast(relocation.addend)));
-            hashInt(&hasher, self.hashes[self.relocationTarget(i, r)]);
+            const target = self.relocationTarget(i, r);
+            hashInt(&hasher, if (target == i) self_relocation_hash else self.hashes[target]);
             const slot: usize = @intCast(relocation.offset);
             hasher.update(data_export.bytes[cursor..slot]);
             cursor = slot + @sizeOf(usize);
@@ -322,6 +329,10 @@ pub const Plan = struct {
         return hasher.final();
     }
 };
+
+/// What a relocation into its own export contributes to the export's content
+/// hash in place of its target's hash.
+const self_relocation_hash: u64 = 0x53454c46;
 
 /// The alignment an export's bytes are placed at; zero means byte-aligned.
 pub fn exportAlignment(data_export: StaticDataExport) u32 {
@@ -342,14 +353,16 @@ const Order = struct {
     /// Every export, with each strongly connected component of the address
     /// graph complete before any export pointing into it.
     order: []u32,
-    /// Whether each export reaches itself through address relocations.
+    /// Whether each export reaches itself through address relocations into
+    /// other exports.
     cyclic: []bool,
 };
 
 /// Order exports so every address target outside an export's own strongly
 /// connected component precedes it (Tarjan's algorithm, iterative). Recursive
 /// type descriptors point at one another, so the graph is cyclic; the members
-/// of a cycle are placed together and marked `cyclic`.
+/// of a cycle of two or more exports are placed together and marked `cyclic`.
+/// An export pointing only into itself is on no such cycle.
 fn componentOrder(allocator: Allocator, count: usize, targets: []const collections.OptionalU32, target_starts: []const u32) Allocator.Error!Order {
     const order = try allocator.alloc(u32, count);
     errdefer allocator.free(order);
@@ -405,9 +418,7 @@ fn componentOrder(allocator: Allocator, count: usize, targets: []const collectio
                     if (member == node) break;
                 }
                 const members = order[first..emitted];
-                var self_loop = false;
-                for (targets[target_starts[node]..target_starts[node + 1]]) |target| self_loop = self_loop or target == collections.OptionalU32.some(node);
-                if (members.len > 1 or self_loop) for (members) |member| {
+                if (members.len > 1) for (members) |member| {
                     cyclic[member] = true;
                 };
                 continue;
@@ -498,7 +509,8 @@ const PoolIndex = struct {
         const data_export = exports[i];
         const relocations = data_export.relocations;
         for (plan.sortedRelocations(i)) |r| {
-            if (plan.placements[plan.relocationTarget(i, r)] != .pooled) return null;
+            const target = plan.relocationTarget(i, r);
+            if (target != i and plan.placements[target] != .pooled) return null;
         }
 
         var next_candidate: collections.OptionalU32 = .some(self.heads.get(plan.hashes[i]) orelse return null);
@@ -523,7 +535,10 @@ const PoolIndex = struct {
             var equal = true;
             for (plan.sortedRelocations(i), candidate.relocations) |r, pooled_relocation| {
                 const relocation = relocations[r];
-                const target_offset = plan.placements[plan.relocationTarget(i, r)].pooled;
+                // A relocation into the export itself matches one into the
+                // candidate itself.
+                const target = plan.relocationTarget(i, r);
+                const target_offset = if (target == i) data_offset else plan.placements[target].pooled;
                 if (pooled_relocation.offset != relocation.offset or
                     pooled_relocation.addend != relocation.addend or
                     pooled_relocation.target_data_offset != target_offset)

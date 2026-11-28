@@ -15,23 +15,9 @@ bag = { run: FooBar.myfunc }
 main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 ~~~
 # EXPECTED
-TYPE MISMATCH - generalize_alias_assoc_fn_record.md:8:42:8:45
+NIL
 # PROBLEMS
-~~~clojure
-(reports
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 8 42) (end 8 45))
-		(headline
-			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
-		(document
-			(source-region (file "generalize_alias_assoc_fn_record.md") (start 8 42) (end 8 45) (annotation error) (line-text "main = ((bag.run)([1, 2, 3]), (bag.run)([\"a\", \"b\"]))"))
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be."))))
-~~~
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenCurly,CloseCurly,Dot,OpenCurly,
@@ -137,7 +123,7 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 277)
+				(e-call (constraint-fn-var 269)
 					(e-field-access
 						(receiver
 							(e-lookup-local
@@ -146,10 +132,10 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 							(segment (name "run") (mode "required"))))
 					(e-list
 						(elems
-							(e-runtime-error (tag "erroneous_value_expr"))
-							(e-runtime-error (tag "erroneous_value_expr"))
-							(e-runtime-error (tag "erroneous_value_expr")))))
-				(e-call (constraint-fn-var 285)
+							(e-num (value "1"))
+							(e-num (value "2"))
+							(e-num (value "3")))))
+				(e-call (constraint-fn-var 274)
 					(e-field-access
 						(receiver
 							(e-lookup-local
@@ -158,8 +144,10 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 							(segment (name "run") (mode "required"))))
 					(e-list
 						(elems
-							(e-runtime-error (tag "erroneous_value_expr"))
-							(e-runtime-error (tag "erroneous_value_expr"))))))))
+							(e-string
+								(e-literal (string "a")))
+							(e-string
+								(e-literal (string "b")))))))))
 	(s-nominal-decl
 		(ty-header (name "FooBar"))
 		(ty-record)))
@@ -169,13 +157,13 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 (inferred-types
 	(defs
 		(patt (type "List(a) -> U64"))
-		(patt (type "{ run: List(Dec) -> U64 }"))
+		(patt (type "{ run: List(_a) -> U64 }"))
 		(patt (type "(U64, U64)")))
 	(type_decls
 		(nominal (type "FooBar")
 			(ty-header (name "FooBar"))))
 	(expressions
 		(expr (type "List(a) -> U64"))
-		(expr (type "{ run: List(Dec) -> U64 }"))
+		(expr (type "{ run: List(_a) -> U64 }"))
 		(expr (type "(U64, U64)"))))
 ~~~

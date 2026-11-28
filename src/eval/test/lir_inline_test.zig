@@ -10377,14 +10377,14 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
 
     const raw_direct_call = direct_call_index orelse return error.TestUnexpectedResult;
     const saved_direct_target = templates.specialization_interface_relations.items()[raw_direct_call].data.call.direct_target;
-    templates.specialization_interface_relations.items()[raw_direct_call].data.call.direct_target = @fromBackingInt(@intCast(artifact.resolved_value_refs.records.items().len));
+    templates.specialization_interface_relations.items()[raw_direct_call].data.call.direct_target = @fromBackingInt(@intCast(artifact.resolved_value_refs.len()));
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_value_ref_out_of_bounds, failure.kind);
     templates.specialization_interface_relations.items()[raw_direct_call].data.call.direct_target = saved_direct_target;
 
     var non_procedure_ref: ?check.CheckedArtifact.ResolvedValueRefId = null;
-    for (artifact.resolved_value_refs.records.items(), 0..) |record, i| {
-        const ref_tag = std.meta.activeTag(record.ref);
+    for (0..artifact.resolved_value_refs.len()) |i| {
+        const ref_tag = std.meta.activeTag(artifact.resolved_value_refs.ref(@fromBackingInt(@intCast(i))));
         if (ref_tag != .local_proc and
             ref_tag != .top_level_proc and
             ref_tag != .imported_proc and
@@ -10409,7 +10409,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
     templates.specialization_interface_relations.items()[raw_local_use].data.local_proc_use = saved_local_ref;
 
-    const local_record = artifact.resolved_value_refs.records.items()[@backingInt(saved_local_ref)].ref.local_proc;
+    const local_record = artifact.resolved_value_refs.ref(saved_local_ref).local_proc;
     const local_scope = local_record.dispatch_scope orelse return error.TestUnexpectedResult;
     const raw_local_scope = @backingInt(local_scope);
     const saved_scope_expr = templates.dispatch_scopes.items()[raw_local_scope].checked_expr;
@@ -14592,8 +14592,9 @@ test "stored encoder_for restore lowers a shape with an optional field" {
     try std.testing.expectEqual(@as(usize, 16), stats.definitions);
     // Each of the two restored Values keeps its source static-data candidate,
     // active-binding reservation, and deferred-use reservation. These six
-    // graph slots do not add helper workers; the counts above and below pin sharing.
-    try std.testing.expectEqual(@as(usize, 214), stats.expressions);
+    // graph slots do not add helper workers; the counts above and below pin
+    // sharing. A restored Value is its stored image, one static datum.
+    try std.testing.expectEqual(@as(usize, 206), stats.expressions);
     try std.testing.expectEqual(@as(usize, 6), stats.static_candidates);
     try std.testing.expectEqual(@as(usize, 71), stats.locals);
     try std.testing.expectEqual(@as(u64, 18), stats.template_misses);

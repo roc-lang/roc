@@ -38,12 +38,12 @@ pub const ModuleView = struct {
     /// What `Modules.linkName` returns.
     link_name: [32]u8,
 
-    pub fn types(self: *const ModuleView) checked.CheckedTypeStoreView {
-        return self.view.checked_types;
+    pub fn types(self: *const ModuleView) *const checked.CheckedTypeStoreView {
+        return &self.view.checked_types;
     }
 
-    pub fn bodies(self: *const ModuleView) checked.CheckedBodies {
-        return self.view.checked_bodies;
+    pub fn bodies(self: *const ModuleView) *const checked.CheckedBodies {
+        return &self.view.checked_bodies;
     }
 
     pub fn nameStore(self: *const ModuleView) *const names.CanonicalNameStore {
@@ -149,7 +149,7 @@ pub const ModuleNames = struct {
         self.content_named.deinit(allocator);
     }
 
-    pub fn of(self: *const ModuleNames, view: checked.ImportedModuleView) [32]u8 {
+    pub fn of(self: *const ModuleNames, view: *const checked.ImportedModuleView) [32]u8 {
         if (self.content_named.contains(view.key.bytes)) return view.module_identity.stable_hash;
         return stableName(view);
     }
@@ -158,7 +158,7 @@ pub const ModuleNames = struct {
     pub fn fromViews(allocator: Allocator, views: []const checked.ImportedModuleView) Allocator.Error!ModuleNames {
         var owners: std.AutoHashMapUnmanaged([32]u8, ?[32]u8) = .empty;
         defer owners.deinit(allocator);
-        for (views) |view| {
+        for (views) |*view| {
             const entry = try owners.getOrPut(allocator, stableName(view));
             if (!entry.found_existing) {
                 entry.value_ptr.* = view.module_identity.stable_hash;
@@ -168,14 +168,14 @@ pub const ModuleNames = struct {
         }
         var result: ModuleNames = .{};
         errdefer result.deinit(allocator);
-        for (views) |view| {
+        for (views) |*view| {
             if (owners.get(stableName(view)).? == null) try result.content_named.put(allocator, view.key.bytes, {});
         }
         return result;
     }
 
     /// The name a body edit leaves alone (`fromViews`).
-    pub fn stableName(view: checked.ImportedModuleView) [32]u8 {
+    pub fn stableName(view: *const checked.ImportedModuleView) [32]u8 {
         var hasher = base.Sha256.init(.{});
         hasher.update("roc.boxy.module_name.v1");
         hasher.update(view.module_env.module_name);
@@ -212,13 +212,13 @@ pub const Modules = struct {
     }
 
     /// Add a module unless one with the same key is present.
-    pub fn add(self: *Modules, view: checked.ImportedModuleView) Allocator.Error!ModuleIndex {
+    pub fn add(self: *Modules, view: *const checked.ImportedModuleView) Allocator.Error!ModuleIndex {
         const entry = try self.by_key.getOrPut(self.allocator, view.key.bytes);
         if (entry.found_existing) return entry.value_ptr.*;
         const index: ModuleIndex = @fromBackingInt(@intCast(self.views.items.len));
         entry.value_ptr.* = index;
         const link_name = if (self.link_names) |link_names| link_names.of(view) else view.module_identity.stable_hash;
-        try self.views.append(self.allocator, .{ .index = index, .key = view.key.digest(), .view = view, .link_name = link_name });
+        try self.views.append(self.allocator, .{ .index = index, .key = view.key.digest(), .view = view.*, .link_name = link_name });
         try self.by_identity.put(self.allocator, view.module_identity.stable_hash, index);
         const named = try self.by_link_name.getOrPut(self.allocator, link_name);
         if (!named.found_existing) named.value_ptr.* = index;
@@ -587,7 +587,7 @@ pub const LazySubstitution = struct {
                 try bindings.append(allocator, .{ .variable = ty, .source = resolved.source });
                 if (!resolved.descend) continue;
             }
-            switch (store.payload(ty)) {
+            switch (store.payloadTag(ty)) {
                 // Use precisely the converter's row flattening and alias
                 // traversal, with the field-kind reads finish performs too.
                 .alias, .record, .tag_union, .tuple, .function, .nominal => {
@@ -760,6 +760,10 @@ pub const Store = struct {
     /// over the module's whole id range; this one keeps its storage across
     /// walks, so a walk pays only for the entries it adds.
     checked_walk: CheckedTypeMap(void) = .empty,
+    /// The work lists of finished `Converter.convert` calls, kept with their
+    /// capacity for later ones. Each conversion takes its own, so one that a
+    /// conversion's step starts never moves the outer one's lists.
+    convert_pool: std.ArrayList(ConvertScratch) = .empty,
     /// The node `intern` gave each primitive, the variable of each low index,
     /// the empty record and the empty tag union, once one was asked for:
     /// these leaves are asked for far more often than they are new, and
@@ -891,7 +895,44 @@ pub const Store = struct {
         self.decl_keys_indexed.deinit(self.allocator);
         self.decl_by_source.deinit(self.allocator);
         self.decl_sources_indexed.deinit(self.allocator);
+        for (self.convert_pool.items) |*scratch| scratch.deinit(self.allocator);
+        self.convert_pool.deinit(self.allocator);
     }
+
+    /// The work lists of one `Converter.convert`.
+    const ConvertScratch = struct {
+        frames: std.ArrayList(Converter.Frame) = .empty,
+        results: std.ArrayList(TypeId) = .empty,
+        pending: std.ArrayList(Converter.Child) = .empty,
+        reaches: std.ArrayList(bool) = .empty,
+        /// The row a `Converter.finish` of a record or tag union builds.
+        fields: std.ArrayList(Field) = .empty,
+        tags: std.ArrayList(TagInput) = .empty,
+
+        fn isEmpty(self: *const ConvertScratch) bool {
+            return self.frames.items.len == 0 and self.results.items.len == 0 and
+                self.pending.items.len == 0 and self.reaches.items.len == 0 and
+                self.fields.items.len == 0 and self.tags.items.len == 0;
+        }
+
+        fn clear(self: *ConvertScratch) void {
+            self.frames.clearRetainingCapacity();
+            self.results.clearRetainingCapacity();
+            self.pending.clearRetainingCapacity();
+            self.reaches.clearRetainingCapacity();
+            self.fields.clearRetainingCapacity();
+            self.tags.clearRetainingCapacity();
+        }
+
+        fn deinit(self: *ConvertScratch, allocator: Allocator) void {
+            self.frames.deinit(allocator);
+            self.results.deinit(allocator);
+            self.pending.deinit(allocator);
+            self.reaches.deinit(allocator);
+            self.fields.deinit(allocator);
+            self.tags.deinit(allocator);
+        }
+    };
 
     /// The declaration with nominal key `key` in `view`'s type store.
     /// The nominal declaration of `view` declared at source statement
@@ -1494,17 +1535,18 @@ pub const Converter = struct {
     pub fn convert(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env) Allocator.Error!TypeId {
         if (env.lazy_substitution != null) return LazySubstitution.convert(self, module, ty, env);
         const allocator = self.store.allocator;
-        var frames: std.ArrayList(Frame) = .empty;
-        defer frames.deinit(allocator);
-        var results: std.ArrayList(TypeId) = .empty;
-        defer results.deinit(allocator);
-        var pending: std.ArrayList(Child) = .empty;
-        defer pending.deinit(allocator);
-
+        var scratch = self.store.convert_pool.pop() orelse Store.ConvertScratch{};
+        std.debug.assert(scratch.isEmpty());
+        defer {
+            scratch.clear();
+            self.store.convert_pool.append(allocator, scratch) catch scratch.deinit(allocator);
+        }
+        const frames = &scratch.frames;
+        const results = &scratch.results;
+        const pending = &scratch.pending;
         // Whether each converted child reaches a record or tag union a scope
         // can name as a closed row node, parallel to `results`.
-        var reaches: std.ArrayList(bool) = .empty;
-        defer reaches.deinit(allocator);
+        const reaches = &scratch.reaches;
 
         // A scope that names closed row nodes converts a type holding one to
         // the node's marked type or to the use's whole value, so a type
@@ -1513,7 +1555,7 @@ pub const Converter = struct {
         var root_reaches = false;
         switch (try self.leaf(module, ty, env, &shared, &root_reaches)) {
             .done => |done| return done,
-            .composite => |composite| try self.pushFrame(&frames, &pending, results.items.len, module, ty, composite),
+            .composite => |composite| try self.pushFrame(frames, pending, results.items.len, module, ty, composite),
         }
         while (frames.items.len > 0) {
             const top = &frames.items[frames.items.len - 1];
@@ -1528,14 +1570,14 @@ pub const Converter = struct {
                     },
                     .composite => |composite| {
                         if (frames.items.len > 1_000_000) invariant("checked type conversion nested past every finite type");
-                        try self.pushFrame(&frames, &pending, results.items.len, child.module, child.ty, composite);
+                        try self.pushFrame(frames, pending, results.items.len, child.module, child.ty, composite);
                     },
                 }
                 continue;
             }
             const frame = frames.pop().?;
             const children = results.items[frame.results_start..];
-            const built = try self.finish(frame.module, frame.ty, frame.payload, children, env);
+            const built = try self.finish(&scratch, frame.module, frame.ty, frame.payload, children, env);
             const built_reaches = frame.ends_in_uncommitted_tail or std.mem.findScalar(bool, reaches.items[frame.results_start..], true) != null;
             results.shrinkRetainingCapacity(frame.results_start);
             reaches.shrinkRetainingCapacity(frame.results_start);
@@ -1829,7 +1871,7 @@ pub const Converter = struct {
                         .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => break,
                     }
                 }
-                switch (types.payload(current)) {
+                switch (types.payloadTag(current)) {
                     .empty_tag_union => ends_in_uncommitted_tail = types.uncommittedTagTail(current),
                     .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union => try pending.append(allocator, .{ .module = module, .ty = current }),
                 }
@@ -1844,7 +1886,9 @@ pub const Converter = struct {
         return ends_in_uncommitted_tail;
     }
 
-    fn finish(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, payload: checked.CheckedTypePayload, children: []const TypeId, env: Env) Allocator.Error!TypeId {
+    /// Build `ty` from its converted `children`, its row in the lists of
+    /// `scratch`, the calling conversion's own.
+    fn finish(self: Converter, scratch: *Store.ConvertScratch, module: ModuleIndex, ty: checked.CheckedTypeId, payload: checked.CheckedTypePayload, children: []const TypeId, env: Env) Allocator.Error!TypeId {
         const allocator = self.store.allocator;
         const view = self.modules.get(module);
         const types = view.types();
@@ -1858,8 +1902,8 @@ pub const Converter = struct {
                 .effectful = checked.finalizedFunctionKind(function.kind) == .effectful,
             } }),
             .record => |record| {
-                var fields: std.ArrayList(Field) = .empty;
-                defer fields.deinit(allocator);
+                const fields = &scratch.fields;
+                fields.clearRetainingCapacity();
                 var child_index: usize = 0;
                 var current_fields = record.fields;
                 var current = record.ext;
@@ -1880,7 +1924,7 @@ pub const Converter = struct {
                         .pending, .field_kind, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => break,
                     }
                 }
-                var ext: ?TypeId = switch (types.payload(current)) {
+                var ext: ?TypeId = switch (types.payloadTag(current)) {
                     .empty_record => null,
                     .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .tag_union, .empty_tag_union => children[child_index],
                 };
@@ -1905,8 +1949,8 @@ pub const Converter = struct {
                 return try self.store.intern(.{ .record = .{ .fields = fields.items, .ext = ext, .tail_node = tail_node } });
             },
             .tag_union => |tag_union| {
-                var tags: std.ArrayList(TagInput) = .empty;
-                defer tags.deinit(allocator);
+                const tags = &scratch.tags;
+                tags.clearRetainingCapacity();
                 var child_index: usize = 0;
                 var current_tags = tag_union.tags;
                 var current = tag_union.ext;
@@ -1930,7 +1974,7 @@ pub const Converter = struct {
                         .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => break,
                     }
                 }
-                var ext: ?TypeId = switch (types.payload(current)) {
+                var ext: ?TypeId = switch (types.payloadTag(current)) {
                     .empty_tag_union => null,
                     .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union => children[child_index],
                 };
@@ -2362,10 +2406,10 @@ test "record interning preserves immutable field default identities" {
     var view = empty_modules.view();
     view.key = .{ .bytes = @splat(1) };
     view.module_identity.stable_hash = view.key.bytes;
-    const first_module = try modules.add(view);
+    const first_module = try modules.add(&view);
     view.key.bytes = @splat(2);
     view.module_identity.stable_hash = view.key.bytes;
-    const second_module = try modules.add(view);
+    const second_module = try modules.add(&view);
     const count = try store.internName("count");
     const u8_ty = try store.primitive(.u8);
     var fields = [_]Field{.{ .name = count, .ty = u8_ty, .kind = .inline_slot }};
@@ -2597,7 +2641,7 @@ fn addErrorTestModule(empty: *const Common.EmptyCheckedModulesForTest, modules: 
     view.key = .{ .bytes = identity };
     view.module_identity.stable_hash = identity;
     view.checked_types = store.view();
-    return try modules.add(view);
+    return try modules.add(&view);
 }
 
 fn errorTestStore(allocator: Allocator) Allocator.Error!checked.CheckedTypeStore {

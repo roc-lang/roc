@@ -447,8 +447,13 @@ pub const Constants = struct {
     /// 208: remaining absences in backend, runtime and module data are explicit.
     /// 209: each module records its numeral-node index.
     /// 210: a default app records its `echo!` among its hosted definitions.
-    /// 211: Whole-file literal nodes refer to their import's source digest.
-    pub const CACHE_VERSION = 211;
+    /// 211: each module's node store records which expressions are
+    /// literal-only.
+    /// 212: a type store keeps each slot's kind in its payload word, and a
+    /// sealed store keeps only the descriptors and pool entries its classes
+    /// reach.
+    /// 213: whole-file literal nodes name their file dependency.
+    pub const CACHE_VERSION = 213;
 };
 
 /// Configuration for the Roc cache system.

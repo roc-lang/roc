@@ -268,9 +268,9 @@ const CliBuildEnvOptions = struct {
     source_dir_override: ?[]const u8 = null,
     post_check_publication_mode: compile.build.PostCheckPublicationMode = .executable_artifacts,
     runtime_lowering: ?compile.build.RuntimeLoweringConfig = null,
-    /// The strategy the command's runtime program lowers under
-    /// (`Coordinator.specialization_strategy`), which every command names: a
-    /// command with no runtime consumer names `.boxy`, as `roc check` does.
+    /// The command's compile-time and runtime strategy
+    /// (`Coordinator.specialization_strategy`). Commands without a runtime
+    /// consumer default to `.boxy` but may explicitly select `.lss`.
     specialization_strategy: base.SpecializationStrategy,
     /// The bundle URL a URL/installed root came from; becomes the root's
     /// package identity in place of the extracted path.
@@ -1044,6 +1044,9 @@ var debug_allocator: std.heap.DebugAllocator(.{ .stack_trace_frames = build_opti
     .backing_allocator = std.heap.page_allocator,
 };
 
+/// In a Debug build, the wrapper over `debug_allocator` that makes stale borrows fail.
+var stale_borrow_allocator: if (base.StaleBorrowAllocator.available) base.StaleBorrowAllocator else void = undefined;
+
 fn renderValidationError(
     ctx: *CliCtx,
     result: platform_validation.ValidationResult,
@@ -1082,8 +1085,9 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
     var gpa, const is_safe = gpa: {
         // Debug builds use the leak-checking debug allocator; -Ddebug-gpa forces it
-        // in release builds too (e.g. to leak-check a ReleaseSafe binary). Everything
-        // else uses the fast target allocator—see base.defaultGpa.
+        // in release builds too (e.g. to leak-check a ReleaseSafe binary). A Debug
+        // build also wraps it in base.StaleBorrowAllocator. Everything else uses
+        // the fast target allocator—see base.defaultGpa.
         const use_debug_allocator = builtin.os.tag != .freestanding and
             (builtin.mode == .debug or build_options.debug_gpa);
         if (use_debug_allocator) {
@@ -1094,12 +1098,17 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
             if (builtin.link_libc and std.valgrind.runningOnValgrind() != 0) {
                 break :gpa .{ std.heap.c_allocator, false };
             }
+            if (base.StaleBorrowAllocator.available) {
+                stale_borrow_allocator = .init(debug_allocator.allocator(), .{});
+                break :gpa .{ stale_borrow_allocator.allocator(), true };
+            }
             break :gpa .{ debug_allocator.allocator(), true };
         }
         break :gpa .{ base.defaultGpa(), false };
     };
     defer restoreWindowsConsoleCodePage();
     defer if (is_safe) {
+        if (base.StaleBorrowAllocator.available) stale_borrow_allocator.flush();
         std.debug.assert(build_options.debugGpaOk(debug_allocator.deinit()));
     };
 
@@ -1858,7 +1867,7 @@ fn checkedInterpreterHostIdentity(
     updateHashBytes(&hasher, "roc-run-checked-host-interface-v3");
     updateHashU32(&hasher, @backingInt(target_usize));
 
-    const declarations_hash = try root_artifact.platform_required_declarations.identityHash(&root_artifact.canonical_names, root_artifact.typesView());
+    const declarations_hash = try root_artifact.platform_required_declarations.identityHash(&root_artifact.canonical_names, &root_artifact.typesView());
     hasher.update(&declarations_hash);
     updatePlatformAppRelationIdentity(&hasher, root_artifact);
     updateHostBoundaryIdentity(&hasher, root_metadata);
@@ -6078,7 +6087,7 @@ fn writeDevRunImageToSharedMemory(
         );
         return error.UnsupportedTarget;
     } else {
-        const native_target = backend.HostLirCodeGen.roc_target;
+        const native_target = backend.LirCodeGenMod.host_lir_codegen_target;
         if (!devShimTargetCompatible(selected_target, native_target)) {
             return rejectRunTargetNotExecutable(ctx, selected_target);
         }
@@ -6799,6 +6808,9 @@ const RunUnits = struct {
     root_image: ?[]align(backend.dev.UnitImage.alignment.toByteUnits()) u8,
     /// The root program's LIR, when this run lowered it.
     root: ?lir.CheckedPipeline.LoweredProgram,
+    /// The images the units' pool imports name, in the run's build
+    /// environment's constant stores.
+    pool_source: BuildPoolSource,
 
     /// Release the images, once the run image holds their code.
     fn releaseCode(self: *RunUnits, gpa: Allocator) void {
@@ -6810,6 +6822,7 @@ const RunUnits = struct {
 
     fn deinit(self: *RunUnits, gpa: Allocator) void {
         self.releaseCode(gpa);
+        self.pool_source.deinit();
         if (self.root) |*program| program.deinit();
         self.root = null;
         compile.watch_inputs.deinit(gpa, self.watch_inputs);
@@ -6940,9 +6953,12 @@ fn lowerRunUnits(
     updateHashBytes(&identity, "roc-run-unit-images-v1");
     identity.update(&interface_identity);
 
+    var pool_source = try BuildPoolSource.init(ctx.gpa, build_env);
+    errdefer pool_source.deinit();
     const owned_library = library.?;
     library = null;
     return .{
+        .pool_source = pool_source,
         .target = target,
         .hot_reload = hot_reload,
         .root_artifact = root_artifact,
@@ -7063,7 +7079,7 @@ fn writeComposedRunImage(
     if (comptime !backend.host_lir_codegen_available) {
         unreachable; // `unitImageRunApplies` selects composed runs only on hosts whose units carry images
     } else {
-        if (!devShimTargetCompatible(units.target, backend.HostLirCodeGen.roc_target)) {
+        if (!devShimTargetCompatible(units.target, backend.LirCodeGenMod.host_lir_codegen_target)) {
             return rejectRunTargetNotExecutable(ctx, units.target);
         }
         reporter.begin("Run Image");
@@ -7099,6 +7115,7 @@ fn writeComposedRunImage(
             .host_symbols = try fast_dev_link.sortedUnion(ctx.arena, &.{ units.hosted_symbols, &host_symbols.runtime_symbols, sorted_shim_builtins, support_imports }),
             .shim_builtins = sorted_shim_builtins,
             .function_table_entry_size = if (target_arch == .aarch64) 8 else 12,
+            .pool = units.pool_source.source(),
         };
         var plan = run_image_link.plan(ctx.gpa, ctx.io.std_io, link_inputs) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
@@ -7191,6 +7208,9 @@ fn writeComposedRunImage(
             .{ .name = "Sites filled", .count = timing.sites_patched },
             .{ .name = "Host sites", .count = timing.host_sites },
             .{ .name = "Rebased words", .count = timing.rebases },
+            .{ .name = "Stored images named", .count = timing.pool_named },
+            .{ .name = "Stored images placed", .count = timing.pool_placed },
+            .{ .name = "Stored image bytes", .count = timing.pool_bytes },
         });
         return .{ .descriptor = descriptor, .descriptor_offset = descriptor_offset };
     }
@@ -10454,6 +10474,34 @@ fn finishBuildCommand(
 /// The objects of every module of a `.boxy` build other than the root
 /// program's, materialized for linking, and the hosted symbols they
 /// reference.
+/// The constant pool's source for this build's unit images: the images
+/// every checked module of the build stores, by digest (design.md
+/// "Constant Pool").
+const BuildPoolSource = struct {
+    index: check.ConstStore.ImageIndex,
+
+    fn init(gpa: Allocator, build_env: *BuildEnv) Allocator.Error!BuildPoolSource {
+        var self: BuildPoolSource = .{ .index = .init(gpa) };
+        errdefer self.index.deinit();
+        try build_env.registerConstStores(&self.index);
+        return self;
+    }
+
+    fn deinit(self: *BuildPoolSource) void {
+        self.index.deinit();
+    }
+
+    fn source(self: *BuildPoolSource) backend.dev.UnitImage.PoolSource {
+        return .{ .context = self, .find = find };
+    }
+
+    fn find(context: *anyopaque, digest: [32]u8) error{OutOfMemory}!?backend.dev.UnitImage.PoolImage {
+        const self: *BuildPoolSource = @ptrCast(@alignCast(context));
+        const image = try self.index.find(digest) orelse return null;
+        return .{ .bytes = image.bytes, .pointers = image.pointers, .alignment = image.alignment };
+    }
+};
+
 const BoxyLibraryObjects = struct {
     /// Every library unit's pieces, in unit order; empty for a fast dev
     /// link, which reads `images` instead.
@@ -12260,6 +12308,8 @@ const FastDevLink = struct {
             },
         };
 
+        var pool_source = try BuildPoolSource.init(ctx.gpa, build_env);
+        defer pool_source.deinit();
         var timing: patch_link.Timing = .{};
         var outcome: patch_link.Outcome = .{};
         const linked: patch_link.LinkError!void = switch (self.spec.format) {
@@ -12269,6 +12319,7 @@ const FastDevLink = struct {
                 .units = units,
                 .root = library.images.len,
                 .host_required = self.spec.host_required,
+                .pool = pool_source.source(),
             }, &self.output, build_env.postCheckExecutor(), &timing, &outcome),
             .macho => macho_patch_link.link(ctx.gpa, ctx.arena, ctx.io.std_io, .{
                 .host = macho_host_prelink.View.init(record_bytes) catch unreachable, // the job or the prelink admitted the record
@@ -12276,6 +12327,7 @@ const FastDevLink = struct {
                 .units = units,
                 .root = library.images.len,
                 .host_required = self.spec.host_required,
+                .pool = pool_source.source(),
             }, &self.output, build_env.postCheckExecutor(), &timing, &outcome),
             .coff => coff_patch_link.link(ctx.gpa, ctx.arena, ctx.io.std_io, .{
                 .host = coff_host_prelink.View.init(record_bytes) catch unreachable, // the job or the prelink admitted the record
@@ -12283,6 +12335,7 @@ const FastDevLink = struct {
                 .units = units,
                 .root = library.images.len,
                 .host_required = self.spec.host_required,
+                .pool = pool_source.source(),
             }, &self.output, build_env.postCheckExecutor(), &timing, &outcome),
         };
         linked catch |err| {
@@ -12329,6 +12382,9 @@ const FastDevLink = struct {
             .{ .name = "Patch sites", .count = timing.sites_patched },
             .{ .name = "References fixed", .count = timing.refs_fixed },
             .{ .name = "Hole bytes dropped", .count = timing.hole_bytes },
+            .{ .name = "Stored images named", .count = timing.pool_named },
+            .{ .name = "Stored images placed", .count = timing.pool_placed },
+            .{ .name = "Stored image bytes", .count = timing.pool_bytes },
         });
     }
 };
@@ -13428,7 +13484,6 @@ fn buildCliTestPlan(
         defer checking_results.deinit(ctx.gpa);
         for (artifact.compile_time_roots.roots.items()) |root| {
             if (root.kind != .expect or root.request_eligibility != .ineligible) continue;
-            if (std.debug.runtime_safety) std.debug.assert(try artifact.bodies().exprContainsDiagnosticError(root.rootExpr()));
             try checking_results.append(ctx.gpa, .{
                 .result = .compiler_error,
                 .order = @backingInt(root.id),
@@ -13792,47 +13847,51 @@ fn collectExpectBindingPatterns(
         .statement => |statement| statement,
         .def, .expr, .required_binding, .hoisted, .literal, .literal_argument => return allocator.alloc(CIR.Pattern.Idx, 0),
     };
-    const statement = env.store.getStatement(statement_idx);
-    if (statement != .s_expect) return allocator.alloc(CIR.Pattern.Idx, 0);
+    const statement = env.store.statementAs(statement_idx, .s_expect) orelse return allocator.alloc(CIR.Pattern.Idx, 0);
 
     var stack = std.ArrayList(CIR.Expr.Idx).empty;
     defer stack.deinit(allocator);
-    try stack.append(allocator, statement.s_expect.body);
+    try stack.append(allocator, statement.body);
 
     var patterns = std.ArrayList(CIR.Pattern.Idx).empty;
     errdefer patterns.deinit(allocator);
 
     while (stack.pop()) |expr_idx| {
-        switch (env.store.getExpr(expr_idx)) {
-            .e_lookup_local => |lookup| {
+        switch (env.store.exprKind(expr_idx)) {
+            .e_lookup_local => {
+                const lookup = env.store.exprView(expr_idx).e_lookup_local.decode();
                 if (std.mem.findScalar(CIR.Pattern.Idx, patterns.items, lookup.pattern_idx) == null) {
                     try patterns.append(allocator, lookup.pattern_idx);
                 }
             },
-            .e_list => |list| try appendExprSpanForExpectBindings(env, allocator, &stack, list.elems),
-            .e_tuple => |tuple| try appendExprSpanForExpectBindings(env, allocator, &stack, tuple.elems),
-            .e_str => |str| try appendExprSpanForExpectBindings(env, allocator, &stack, str.span),
-            .e_tag => |tag| try appendExprSpanForExpectBindings(env, allocator, &stack, tag.args),
-            .e_call => |call| {
+            .e_list => try appendExprSpanForExpectBindings(env, allocator, &stack, env.store.exprView(expr_idx).e_list.get(.elems)),
+            .e_tuple => try appendExprSpanForExpectBindings(env, allocator, &stack, env.store.exprView(expr_idx).e_tuple.get(.elems)),
+            .e_str => try appendExprSpanForExpectBindings(env, allocator, &stack, env.store.exprView(expr_idx).e_str.get(.span)),
+            .e_tag => try appendExprSpanForExpectBindings(env, allocator, &stack, env.store.exprView(expr_idx).e_tag.get(.args)),
+            .e_call => {
+                const call = env.store.exprView(expr_idx).e_call.decode();
                 try stack.append(allocator, call.func);
                 try appendExprSpanForExpectBindings(env, allocator, &stack, call.args);
             },
-            .e_record => |record| {
+            .e_record => {
+                const record = env.store.exprView(expr_idx).e_record.decode();
                 if (record.ext) |ext| try stack.append(allocator, ext);
                 for (env.store.sliceRecordFields(record.fields)) |field_idx| {
                     try stack.append(allocator, env.store.getRecordField(field_idx).value);
                 }
             },
-            .e_block => |block| {
+            .e_block => {
+                const block = env.store.exprView(expr_idx).e_block.decode();
                 try stack.append(allocator, block.final_expr);
                 for (0..block.stmts.span.len) |stmt_offset| {
                     const stmt_idx = env.store.statementAt(block.stmts, stmt_offset);
-                    switch (env.store.getStatement(stmt_idx)) {
-                        inline .s_decl, .s_var, .s_reassign, .s_expr => |decl| try stack.append(allocator, decl.expr),
-                        .s_expect => |stmt| try stack.append(allocator, stmt.body),
-                        .s_dbg => |stmt| try stack.append(allocator, stmt.expr),
-                        .s_return => |stmt| try stack.append(allocator, stmt.expr),
-                        .s_for => |stmt| {
+                    switch (env.store.statementKind(stmt_idx)) {
+                        inline .s_decl, .s_var, .s_reassign, .s_expr => |kind| try stack.append(allocator, @field(env.store.statementView(stmt_idx), @tagName(kind)).get(.expr)),
+                        .s_expect => try stack.append(allocator, env.store.statementView(stmt_idx).s_expect.get(.body)),
+                        .s_dbg => try stack.append(allocator, env.store.statementView(stmt_idx).s_dbg.get(.expr)),
+                        .s_return => try stack.append(allocator, env.store.statementView(stmt_idx).s_return.get(.expr)),
+                        .s_for => {
+                            const stmt = env.store.statementView(stmt_idx).s_for.decode();
                             try stack.append(allocator, stmt.expr);
                             try stack.append(allocator, stmt.body);
                         },
@@ -13853,7 +13912,8 @@ fn collectExpectBindingPatterns(
                     }
                 }
             },
-            .e_if => |if_expr| {
+            .e_if => {
+                const if_expr = env.store.exprView(expr_idx).e_if.decode();
                 try stack.append(allocator, if_expr.final_else);
                 for (env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                     const branch = env.store.getIfBranch(branch_idx);
@@ -13861,7 +13921,8 @@ fn collectExpectBindingPatterns(
                     try stack.append(allocator, branch.body);
                 }
             },
-            .e_match => |match_expr| {
+            .e_match => {
+                const match_expr = env.store.exprView(expr_idx).e_match.decode();
                 try stack.append(allocator, match_expr.cond);
                 for (env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
                     const branch = env.store.getMatchBranch(branch_idx);
@@ -13869,48 +13930,55 @@ fn collectExpectBindingPatterns(
                     if (branch.guard) |guard| try stack.append(allocator, guard);
                 }
             },
-            .e_lambda => |lambda| try stack.append(allocator, lambda.body),
-            .e_closure => |closure| try stack.append(allocator, closure.lambda_idx),
-            .e_nominal => |nominal| try stack.append(allocator, nominal.backing_expr),
-            .e_nominal_external => |nominal| try stack.append(allocator, nominal.backing_expr),
-            .e_binop => |binop| {
+            .e_lambda => try stack.append(allocator, env.store.exprView(expr_idx).e_lambda.get(.body)),
+            .e_closure => try stack.append(allocator, env.store.exprView(expr_idx).e_closure.get(.lambda_idx)),
+            .e_nominal => try stack.append(allocator, env.store.exprView(expr_idx).e_nominal.get(.backing_expr)),
+            .e_nominal_external => try stack.append(allocator, env.store.exprView(expr_idx).e_nominal_external.get(.backing_expr)),
+            .e_binop => {
+                const binop = env.store.exprView(expr_idx).e_binop.decode();
                 try stack.append(allocator, binop.lhs);
                 try stack.append(allocator, binop.rhs);
             },
-            .e_unary_minus => |unary| try stack.append(allocator, unary.expr),
-            .e_field_access => |field| try stack.append(allocator, field.receiver),
-            inline .e_method_call, .e_dispatch_call => |call| {
+            .e_unary_minus => try stack.append(allocator, env.store.exprView(expr_idx).e_unary_minus.get(.expr)),
+            .e_field_access => try stack.append(allocator, env.store.exprView(expr_idx).e_field_access.get(.receiver)),
+            inline .e_method_call, .e_dispatch_call => |kind| {
+                const call = @field(env.store.exprView(expr_idx), @tagName(kind)).decode();
                 try stack.append(allocator, call.receiver);
                 try appendExprSpanForExpectBindings(env, allocator, &stack, call.args);
             },
-            .e_interpolation => |interpolation| {
+            .e_interpolation => {
+                const interpolation = env.store.exprView(expr_idx).e_interpolation.decode();
                 try stack.append(allocator, interpolation.first);
                 try appendExprSpanForExpectBindings(env, allocator, &stack, interpolation.parts);
             },
-            .e_structural_eq => |eq| {
+            .e_structural_eq => {
+                const eq = env.store.exprView(expr_idx).e_structural_eq.decode();
                 try stack.append(allocator, eq.lhs);
                 try stack.append(allocator, eq.rhs);
             },
-            .e_structural_hash => |hash| {
+            .e_structural_hash => {
+                const hash = env.store.exprView(expr_idx).e_structural_hash.decode();
                 try stack.append(allocator, hash.value);
                 try stack.append(allocator, hash.hasher);
             },
-            .e_method_eq => |eq| {
+            .e_method_eq => {
+                const eq = env.store.exprView(expr_idx).e_method_eq.decode();
                 try stack.append(allocator, eq.lhs);
                 try stack.append(allocator, eq.rhs);
             },
-            .e_type_method_call => |call| try appendExprSpanForExpectBindings(env, allocator, &stack, call.args),
-            .e_type_dispatch_call => |call| try appendExprSpanForExpectBindings(env, allocator, &stack, call.args),
-            .e_tuple_access => |access| try stack.append(allocator, access.tuple),
-            .e_dbg => |dbg| try stack.append(allocator, dbg.expr),
-            .e_expect_err => |expect_err| try stack.append(allocator, expect_err.expr),
-            .e_expect => |expect_expr| try stack.append(allocator, expect_expr.body),
-            .e_return => |ret| try stack.append(allocator, ret.expr),
-            .e_for => |for_expr| {
+            .e_type_method_call => try appendExprSpanForExpectBindings(env, allocator, &stack, env.store.exprView(expr_idx).e_type_method_call.get(.args)),
+            .e_type_dispatch_call => try appendExprSpanForExpectBindings(env, allocator, &stack, env.store.exprView(expr_idx).e_type_dispatch_call.get(.args)),
+            .e_tuple_access => try stack.append(allocator, env.store.exprView(expr_idx).e_tuple_access.get(.tuple)),
+            .e_dbg => try stack.append(allocator, env.store.exprView(expr_idx).e_dbg.get(.expr)),
+            .e_expect_err => try stack.append(allocator, env.store.exprView(expr_idx).e_expect_err.get(.expr)),
+            .e_expect => try stack.append(allocator, env.store.exprView(expr_idx).e_expect.get(.body)),
+            .e_return => try stack.append(allocator, env.store.exprView(expr_idx).e_return.get(.expr)),
+            .e_for => {
+                const for_expr = env.store.exprView(expr_idx).e_for.decode();
                 try stack.append(allocator, for_expr.expr);
                 try stack.append(allocator, for_expr.body);
             },
-            .e_run_low_level => |run| try appendExprSpanForExpectBindings(env, allocator, &stack, run.args),
+            .e_run_low_level => try appendExprSpanForExpectBindings(env, allocator, &stack, env.store.exprView(expr_idx).e_run_low_level.get(.args)),
             .e_num,
             .e_frac_f32,
             .e_frac_f64,
@@ -13951,7 +14019,7 @@ fn sourceBindingForPattern(env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) 
         const def = env.store.getDef(def_idx);
         if (def.pattern != pattern_idx) continue;
 
-        const expr_tag = std.meta.activeTag(env.store.getExpr(def.expr));
+        const expr_tag = env.store.exprKind(def.expr);
         if (expr_tag == .e_lambda or expr_tag == .e_closure or expr_tag == .e_hosted_lambda) return null;
 
         const pattern_region = env.store.getPatternRegion(def.pattern);
@@ -15672,9 +15740,19 @@ const LoadedUnitImages = struct {
     hosted_stubs: ?backend.dev.ExecutableMemory = null,
     /// What the images' code is run for, which a hosted stub's crash names.
     hosted_unavailable_while: []const u8 = "evaluating at compile time",
+    /// The stored images the loaded images' pool imports name, placed once
+    /// each (design.md "Constant Pool"), and the build's constant stores
+    /// they are found in when this owns them.
+    pool: ?backend.dev.UnitImageLoader.Pool = null,
+    owned_pool_source: ?*BuildPoolSource = null,
 
     fn deinit(self: *LoadedUnitImages) void {
         for (self.loaded.items) |*image| image.unload();
+        if (self.pool) |*pool| pool.deinit();
+        if (self.owned_pool_source) |source| {
+            source.deinit();
+            self.gpa.destroy(source);
+        }
         self.loaded.deinit(self.gpa);
         self.exports.deinit(self.gpa);
         self.hosted.deinit(self.gpa);
@@ -15699,6 +15777,22 @@ const LoadedUnitImages = struct {
         }
     };
 
+    /// Bind the loaded images' pool imports to the images `source` finds.
+    fn attachPool(self: *LoadedUnitImages, source: backend.dev.UnitImage.PoolSource) void {
+        std.debug.assert(self.pool == null);
+        self.pool = .{ .gpa = self.gpa, .source = source };
+    }
+
+    /// Bind the loaded images' pool imports to the images the constant
+    /// stores of `build_env`'s checked modules hold.
+    fn attachBuildPool(self: *LoadedUnitImages, build_env: *BuildEnv) Allocator.Error!void {
+        const source = try self.gpa.create(BuildPoolSource);
+        errdefer self.gpa.destroy(source);
+        source.* = try BuildPoolSource.init(self.gpa, build_env);
+        self.owned_pool_source = source;
+        self.attachPool(source.source());
+    }
+
     /// Load the image in `bytes`, which outlives it, binding its expect-site
     /// base to `site_base`, and record what it exports. `code_locations` is
     /// the image's `CodeLocations`, or empty. The returned image is valid
@@ -15713,7 +15807,7 @@ const LoadedUnitImages = struct {
         var context: LoadContext = .{ .images = self, .site_base = site_base };
         var diagnostic: backend.dev.UnitImageLoader.Diagnostic = .{};
         try self.loaded.ensureUnusedCapacity(self.gpa, 1);
-        var loaded = backend.dev.UnitImageLoader.load(self.gpa, view, .{ .context = &context, .resolve = LoadContext.resolve }, &diagnostic) catch |err| switch (err) {
+        var loaded = backend.dev.UnitImageLoader.load(self.gpa, view, .{ .context = &context, .resolve = LoadContext.resolve, .pool = if (self.pool) |*pool| pool else null }, &diagnostic) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.FlushInstructionCacheFailed => return error.FlushInstructionCacheFailed,
             error.UndefinedImport => base.invariant("unit image invariant violated: a unit's image imports {s}, which nothing loaded defines", .{diagnostic.name}),
@@ -15839,6 +15933,7 @@ fn prepareUnitImageTests(
     const target = inProcessUnitTarget();
     var program: UnitImageTestProgram = .{ .gpa = ctx.gpa, .tables = RunUnitTables.init(ctx), .images = .{ .gpa = ctx.gpa } };
     errdefer program.deinit();
+    try program.images.attachBuildPool(build_env);
     program.tables.digests = try build_env.boxyLinkDigests();
     const cache_manager = build_env.cache_manager orelse base.invariant("roc test invariant violated: a test run from unit images has no cache manager", .{});
     const root_artifact = build_env.rootModuleCheckedArtifact() orelse base.invariant("roc test invariant violated: a planned test program has no root module", .{});
@@ -17081,6 +17176,7 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
     switch (command) {
         .check => |args| {
             try argv.append(ctx.gpa, "check");
+            if (args.specialization_strategy) |strategy| try argv.append(ctx.gpa, if (strategy == .lss) "--specialize=yes" else "--specialize=no");
             if (args.main) |main_path| try appendOwnedArg(ctx.gpa, &argv, &owned, "--main={s}", .{main_path});
             if (args.time) try argv.append(ctx.gpa, "--time");
             if (args.timings) try argv.append(ctx.gpa, "--timings");
@@ -17127,6 +17223,21 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
         .argv = try argv.toOwnedSlice(ctx.gpa),
         .owned = try owned.toOwnedSlice(ctx.gpa),
     };
+}
+
+test "watch check child argv preserves the compile-time strategy" {
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, std.testing.allocator, &io, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    for ([_]?base.SpecializationStrategy{ null, .boxy, .lss }) |strategy| {
+        var child_argv = try buildWatchChildArgv(&ctx, "roc", .{ .check = .{ .specialization_strategy = strategy } }, "watch-inputs");
+        defer child_argv.deinit(std.testing.allocator);
+        const parsed = try cli_args.parse(std.testing.allocator, std.testing.io, child_argv.argv[1..]);
+        defer parsed.deinit(std.testing.allocator);
+        try std.testing.expectEqual(strategy, parsed.check.specialization_strategy);
+    }
 }
 
 test "watch child argv forwards every dependency replacement" {
@@ -17436,7 +17547,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
             base.invariant("compiled module plan contains duplicate source module {s}", .{qualified_name});
         }
         const identity = artifact.module_identity.stable_hash;
-        const link_identity = lir.CheckedPipeline.BoxyModuleNames.stableName(check.CheckedArtifact.importedView(artifact));
+        const link_identity = lir.CheckedPipeline.BoxyModuleNames.stableName(&check.CheckedArtifact.importedView(artifact));
         entry.value_ptr.* = .{ .env = module.semantic.env, .common = &module.semantic.env.common, .path = module.path, .name = qualified_name, .identity = identity };
         try source_modules.bind(ctx.gpa, identity, workspace);
         try source_modules.bind(ctx.gpa, link_identity, workspace);
@@ -18985,6 +19096,7 @@ const UnitImageGlueGenerator = struct {
         // the rest after everything they depend on, then the root unit.
         const order = try unitLoadOrder(ctx.gpa, build_env, library.artifacts);
         defer ctx.gpa.free(order);
+        self.images.attachPool(units.pool_source.source());
         for (order) |index| _ = try self.images.load(library.images[index], 0, &.{});
         _ = try self.images.load(units.root_image.?, 0, &.{});
         reporter.end();
@@ -19137,17 +19249,17 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
 
         elapsed = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - timer_start_ns));
         if (unformatted_files.items.len > 0) {
-            try stdout.print("The following file(s) failed `roc fmt --check`:", .{});
+            try stdout.print("The following file(s) failed `roc fmt --check`:\n", .{});
             for (unformatted_files.items) |file_name| {
                 try stdout.print("    {f}\n", .{base.bidi.Display{ .bytes = try ctx.displayPath(file_name) }});
             }
-            try stdout.print("You can fix this with `roc fmt FILENAME.roc`.", .{});
+            try stdout.print("You can fix this with `roc fmt FILENAME.roc`.\n", .{});
             had_errors = true;
         } else if (failure_count == 0) {
             try stdout.print("All formatting valid.\n", .{});
         }
         if (failure_count > 0) {
-            try stdout.print("Failed to check {} files.", .{failure_count});
+            try stdout.print("Failed to check {} files.\n", .{failure_count});
             had_errors = true;
         }
     } else {
@@ -21043,6 +21155,7 @@ fn checkFileWithBuildEnvPreserved(
     main_source_url: ?[]const u8,
     timings: bool,
     cache_config: CacheConfig,
+    specialization_strategy: base.SpecializationStrategy,
     max_threads: ?usize,
     resolution_config: compile.package_resolution.Config,
     source_dir_override: ?[]const u8,
@@ -21062,8 +21175,7 @@ fn checkFileWithBuildEnvPreserved(
         .timings = timings,
         .resolution_config = resolution_config,
         .track_watch_inputs = track_watch_inputs,
-        // A check has no runtime consumer.
-        .specialization_strategy = .boxy,
+        .specialization_strategy = specialization_strategy,
         .source_dir_override = source_dir_override,
         .root_source_url = root_source_url,
         .main_source_url = main_source_url,
@@ -21095,6 +21207,7 @@ fn checkFileWithBuildEnv(
     main_source_url: ?[]const u8,
     timings: bool,
     cache_config: CacheConfig,
+    specialization_strategy: base.SpecializationStrategy,
     max_threads: ?usize,
     resolution_config: compile.package_resolution.Config,
     source_dir_override: ?[]const u8,
@@ -21110,8 +21223,7 @@ fn checkFileWithBuildEnv(
         .verbose_cache = cache_config.verbose,
         .timings = timings,
         .resolution_config = resolution_config,
-        // A check has no runtime consumer.
-        .specialization_strategy = .boxy,
+        .specialization_strategy = specialization_strategy,
         .source_dir_override = source_dir_override,
         .root_source_url = root_source_url,
         .main_source_url = main_source_url,
@@ -21277,6 +21389,7 @@ fn rocCheckDefaultApp(
         null,
         args.timings,
         cache_config,
+        args.specialization_strategy orelse .boxy,
         args.max_threads,
         resolutionConfigFromLimits(args.resolve_limits),
         original_source_dir,
@@ -21323,6 +21436,7 @@ fn rocCheckDefaultAppPreserved(
         null,
         args.timings,
         cache_config,
+        args.specialization_strategy orelse .boxy,
         args.max_threads,
         resolutionConfigFromLimits(args.resolve_limits),
         original_source_dir,
@@ -21423,6 +21537,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             args.main_source_url,
             args.timings,
             cache_config,
+            args.specialization_strategy orelse .boxy,
             args.max_threads,
             resolutionConfigFromLimits(args.resolve_limits),
             null,
@@ -21463,6 +21578,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             args.main_source_url,
             args.timings,
             cache_config,
+            args.specialization_strategy orelse .boxy,
             args.max_threads,
             resolutionConfigFromLimits(args.resolve_limits),
             null,
@@ -21862,6 +21978,7 @@ fn bumpCheckSide(
         null,
         false,
         cache_config,
+        .boxy,
         null,
         resolutionConfigFromLimits(args.resolve_limits),
         null,
@@ -22414,6 +22531,7 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
         args.main_source_url,
         false,
         cache_config,
+        .boxy,
         null, // max_threads: use default (single-threaded for now)
         resolutionConfigFromLimits(args.resolve_limits),
         null,

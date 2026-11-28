@@ -367,7 +367,7 @@ const Builder = struct {
             const result = try self.graph.reserveAllocation(.{ .source = src, .plan = job.plan, .layout_idx = job.layout_idx, .count = 1, .kind = .erased }, allocation_size, builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
             try self.graph.relocate(job.dest, result.dest);
             if (!result.fresh) return;
-            try self.graph.node(result.dest).relocations.append(self.graph.allocator, .{ .offset = result.dest.offset, .target_symbol_name = try static_data.procSymbolName(self.graph.allocator, self.graph.program.store.getProcSpec(entry.entry).identity), .kind = .function_pointer, .callable_capture_offset = .some(@intCast(capture_offset)), .procedure = .some(entry.entry) });
+            try self.graph.node(result.dest).relocations.append(self.graph.allocator, .{ .offset = result.dest.offset, .target_symbol_name = try static_data.procSymbolName(self.graph.allocator, self.graph.program.store.getProcSpecImmediate(entry.entry).identity), .kind = .function_pointer, .callable_capture_offset = .some(@intCast(capture_offset)), .procedure = .some(entry.entry) });
             switch (entry.on_drop) {
                 .none => {},
                 .rc_helper => |helper| {

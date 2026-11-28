@@ -15,7 +15,8 @@ const std = @import("std");
 const invariant = @import("base").invariant;
 const dev_diagnostics = @import("base").dev_diagnostics;
 const builtin = @import("builtin");
-const isaOfOrNull = @import("isa.zig").isaOfOrNull;
+const abiOf = @import("isa.zig").abiOf;
+const abiOfOrNull = @import("isa.zig").abiOfOrNull;
 const Allocator = std.mem.Allocator;
 
 const layout = @import("layout");
@@ -113,6 +114,10 @@ const PatchedRefs = struct {
     /// Where each datum starts in the object's read-only data
     /// (`UnitImage.SymbolAtoms.data_starts`).
     data_starts: std.ArrayList(u64) = .empty,
+    /// The stored images the kept code names, which the image leaves to the
+    /// constant pool and imports (`UnitImage.BuildOptions.pool_names`), in
+    /// name order.
+    pool_names: std.ArrayList([]const u8) = .empty,
     /// Whether some excerpt also has symbolic references, which the
     /// assembly resolves without reporting them here.
     incomplete: bool = false,
@@ -120,6 +125,7 @@ const PatchedRefs = struct {
     pub fn deinit(self: *PatchedRefs, allocator: Allocator) void {
         self.edges.deinit(allocator);
         self.data_starts.deinit(allocator);
+        self.pool_names.deinit(allocator);
     }
 };
 
@@ -341,35 +347,24 @@ pub const ObjectFileCompiler = struct {
     ) CompilationError!UnitPieces.Pieces {
         const exports = try UnitExports.keep(self.allocator, lir_store, target, static_data_exports);
         defer exports.keeper.release();
-        const enum_info = @typeInfo(RocTarget).@"enum";
-        const default_target = target.defaultCpuTarget();
-        inline for (enum_info.field_values) |field_value| {
-            const comptime_target: RocTarget = @fromBackingInt(@intCast(field_value));
-            if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
-            if (default_target == comptime_target) {
-                if (comptime isaOfOrNull(comptime_target) != null) {
-                    return compilePiecesWithCodeGen(
-                        LirCodeGenMod.LirCodeGen(comptime_target),
-                        self.allocator,
-                        lir_store,
-                        layout_store,
-                        entrypoints,
-                        exports,
-                        proc_specs,
-                        target,
-                        self.enable_default_platform_runtime,
-                        self.erased_capture_prefix,
-                        self.timing,
-                        self.post_check_executor,
-                        self.internal_entrypoints,
-                        self.relocatable_expect_sites,
-                    );
-                } else {
-                    return CompilationError.UnsupportedTarget;
-                }
-            }
+        switch (abiOfOrNull(target) orelse return CompilationError.UnsupportedTarget) {
+            inline .x86_64_sysv, .x86_64_windows, .aarch64_aapcs, .aarch64_apple, .aarch64_windows => |abi| return compilePiecesWithCodeGen(
+                LirCodeGenMod.LirCodeGen(abi),
+                self.allocator,
+                lir_store,
+                layout_store,
+                entrypoints,
+                exports,
+                proc_specs,
+                target,
+                self.enable_default_platform_runtime,
+                self.erased_capture_prefix,
+                self.timing,
+                self.post_check_executor,
+                self.internal_entrypoints,
+                self.relocatable_expect_sites,
+            ),
         }
-        return CompilationError.UnsupportedTarget;
     }
 
     /// Compose the pieces of a program's units into one relocatable object
@@ -381,20 +376,9 @@ pub const ObjectFileCompiler = struct {
         target: RocTarget,
         options: ComposeOptions,
     ) CompilationError!CompilationResult {
-        const enum_info = @typeInfo(RocTarget).@"enum";
-        const default_target = target.defaultCpuTarget();
-        inline for (enum_info.field_values) |field_value| {
-            const comptime_target: RocTarget = @fromBackingInt(@intCast(field_value));
-            if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
-            if (default_target == comptime_target) {
-                if (comptime isaOfOrNull(comptime_target) != null) {
-                    return composeWithCodeGen(LirCodeGenMod.LirCodeGen(comptime_target), self.allocator, inputs, target, options, self.timing, self.post_check_executor);
-                } else {
-                    return CompilationError.UnsupportedTarget;
-                }
-            }
+        switch (abiOfOrNull(target) orelse return CompilationError.UnsupportedTarget) {
+            inline .x86_64_sysv, .x86_64_windows, .aarch64_aapcs, .aarch64_apple, .aarch64_windows => |abi| return composeWithCodeGen(LirCodeGenMod.LirCodeGen(abi), self.allocator, inputs, target, options, self.timing, self.post_check_executor),
         }
-        return CompilationError.UnsupportedTarget;
     }
 
     /// Which pieces of a unit its image keeps.
@@ -1140,6 +1124,7 @@ fn buildCompositionImage(
         // Code reached only through references the image cannot see keeps
         // the whole image together.
         .atoms = if (patched.incomplete) .whole else .{ .symbols = .{ .edges = patched.edges.items, .data_starts = patched.data_starts.items } },
+        .pool_names = patched.pool_names.items,
     }) catch |err| switch (err) {
         error.OutOfMemory => return CompilationError.OutOfMemory,
         error.InvalidObject,
@@ -1731,15 +1716,23 @@ fn composeWithCodeGen(
     var dwarf_procs = std.ArrayList(Dwarf.ProcEntry).empty;
     defer dwarf_procs.deinit(allocator);
     {
-        const data_exports = allocator.alloc(static_data_export.StaticDataExport, canonical.data.len) catch return CompilationError.OutOfMemory;
-        defer allocator.free(data_exports);
+        // A unit image leaves the stored images its code names to the
+        // constant pool: it defines none of them and imports each by name
+        // (design.md "Constant Pool").
+        var data_exports = std.ArrayList(static_data_export.StaticDataExport).initCapacity(allocator, canonical.data.len) catch return CompilationError.OutOfMemory;
+        defer data_exports.deinit(allocator);
         var data_relocations = std.ArrayList([]static_data_export.StaticDataRelocation).empty;
         defer {
             for (data_relocations.items) |relocations| allocator.free(relocations);
             data_relocations.deinit(allocator);
         }
-        for (canonical.data, data_exports) |datum, *out| {
+        for (canonical.data) |datum| {
             const item = datum.item;
+            if (options.unit_image and item.pool_image) {
+                patched_refs.pool_names.append(allocator, item.name) catch return CompilationError.OutOfMemory;
+                continue;
+            }
+            const out = data_exports.addOneAssumeCapacity();
             const relocations = allocator.alloc(static_data_export.StaticDataRelocation, item.relocations.len) catch return CompilationError.OutOfMemory;
             data_relocations.append(allocator, relocations) catch {
                 allocator.free(relocations);
@@ -1763,7 +1756,7 @@ fn composeWithCodeGen(
                 .relocations = relocations,
             };
         }
-        try appendStaticDataExports(allocator, &final.codegen.symbols, data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols, if (options.unit_image) &patched_refs.data_starts else null);
+        try appendStaticDataExports(allocator, &final.codegen.symbols, data_exports.items, &rodata, &zero_fill_size, &rodata_relocations, &symbols, if (options.unit_image) &patched_refs.data_starts else null);
     }
     for (canonical.set.excerpts, starts) |excerpt, start| switch (excerpt.kind) {
         .proc => |identity| {
@@ -1863,6 +1856,7 @@ fn composeWithCodeGen(
             const read_back = UnitImage.build(allocator, &.{object_bytes}, .{
                 .keep_debug = true,
                 .atoms = if (patched_refs.incomplete) .whole else .{ .symbols = .{ .edges = patched_refs.edges.items, .data_starts = patched_refs.data_starts.items } },
+                .pool_names = patched_refs.pool_names.items,
             }) catch |err| switch (err) {
                 error.OutOfMemory => return CompilationError.OutOfMemory,
                 error.InvalidObject,
@@ -1912,39 +1906,28 @@ fn crossCompileDispatch(
     executor: ?Executor,
     reuse_same_program: ?*const NativeProcCompiler.Retained,
 ) CompilationError!CompilationResult {
-    const enum_info = @typeInfo(RocTarget).@"enum";
-    const default_target = target.defaultCpuTarget();
-    inline for (enum_info.field_values) |field_value| {
-        const comptime_target: RocTarget = @fromBackingInt(@intCast(field_value));
-        if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
-        if (default_target == comptime_target) {
-            if (comptime isaOfOrNull(comptime_target) != null) {
-                return compileWithCodeGen(
-                    LirCodeGenMod.LirCodeGen(comptime_target),
-                    allocator,
-                    lir_store,
-                    layout_store,
-                    entrypoints,
-                    static_data_exports,
-                    proc_specs,
-                    target,
-                    enable_default_platform_runtime,
-                    erased_capture_prefix,
-                    timing,
-                    capture_all_procedures,
-                    link_unit,
-                    capture_excerpts,
-                    capture_code_locations,
-                    emit_object,
-                    executor,
-                    reuse_same_program,
-                );
-            } else {
-                return CompilationError.UnsupportedTarget;
-            }
-        }
+    switch (abiOfOrNull(target) orelse return CompilationError.UnsupportedTarget) {
+        inline .x86_64_sysv, .x86_64_windows, .aarch64_aapcs, .aarch64_apple, .aarch64_windows => |abi| return compileWithCodeGen(
+            LirCodeGenMod.LirCodeGen(abi),
+            allocator,
+            lir_store,
+            layout_store,
+            entrypoints,
+            static_data_exports,
+            proc_specs,
+            target,
+            enable_default_platform_runtime,
+            erased_capture_prefix,
+            timing,
+            capture_all_procedures,
+            link_unit,
+            capture_excerpts,
+            capture_code_locations,
+            emit_object,
+            executor,
+            reuse_same_program,
+        ),
     }
-    return CompilationError.UnsupportedTarget;
 }
 
 // Tests
@@ -2176,7 +2159,7 @@ test "ObjectFileCompiler runtime static-root excerpts own only reachable canonic
         try store.setSourceFiles(files);
         var layouts = try layout.Store.init(allocator, .u64);
         defer layouts.deinit();
-        const CG = LirCodeGenMod.LirCodeGen(target);
+        const CG = LirCodeGenMod.LirCodeGen(abiOf(target));
         var receiver = try CG.init(allocator, &store, &layouts, .{}, .default);
         defer receiver.deinit();
         var procs = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
