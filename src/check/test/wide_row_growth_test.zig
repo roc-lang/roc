@@ -140,7 +140,7 @@ fn requirementWork(uses: Uses, count: usize) TestEnv.TestEnvError!usize {
     return env.checker.unify_scratch.test_constraint_reads + env.checker.test_ambiguity_candidate_visits;
 }
 
-fn expectLinearRequirementWork(uses: Uses) !void {
+fn expectLinearRequirementWork(uses: Uses) TestEnv.TestEnvError!void {
     const small = try requirementWork(uses, 64);
     const large = try requirementWork(uses, 256);
     if (large > 8 * small) std.debug.print("{t}: 64 uses: {d}; 256 uses: {d}\n", .{ uses, small, large });
