@@ -3472,23 +3472,19 @@ const Inserter = struct {
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign_stmt.target) else null;
                     for (transfer.args.retain_args) |arg| try self.appendStepRetain(step, .{ .local = arg, .reason = .owned_param_demand });
                     self.death_scratch.clearRetainingCapacity();
+                    const owner = LIR.erasedCallOwner(assign);
+                    if (self.ownsUnit(&segment.owned, owner) and !try self.groupUsedInPath(assign_stmt.next, owner)) {
+                        _ = try self.takeUnit(&segment.owned, owner);
+                        step.transfer_closure = true;
+                    }
                     if (self.erasedCallIsDeferred(assign_stmt)) {
-                        // The call is left pending and made after this frame
-                        // returns. It keeps a retained closure reference;
-                        // everything else the frame owns ends first.
-                        try self.appendStepRetain(step, .{ .local = assign.closure, .reason = .closure_call_capture });
+                        // The pending record needs one unit even for a borrow.
+                        if (!step.transfer_closure) try self.appendStepRetain(step, .{ .local = assign.closure, .reason = .closure_call_capture });
                         try self.releaseTailCallerFrame(&segment.owned, assign_stmt.target, self.death_scratch);
                         try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
                         step.pre_release_extra_reason = .some(.tail_call_frame);
                         step.replaces_frame = true;
                     } else {
-                        // The closure's unit moves into the callee exactly
-                        // when it dies here; otherwise the call borrows it.
-                        const owner = LIR.erasedCallOwner(assign);
-                        if (self.ownsUnit(&segment.owned, owner) and !try self.groupUsedInPath(assign_stmt.next, owner)) {
-                            _ = try self.takeUnit(&segment.owned, owner);
-                            step.transfer_closure = true;
-                        }
                         try self.noteCallResultDeathIfUnused(&segment.owned, assign_stmt.target, .owned, assign_stmt.next, self.death_scratch);
                         const singles = [_]LIR.LocalId{ assign.closure, owner };
                         try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign_stmt.next, self.death_scratch);
@@ -3510,14 +3506,19 @@ const Inserter = struct {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const borrowed_variant = assign.op.arcBorrowedResultVariant();
                     var use_borrowed = borrowed_variant != null and self.isBindingBorrowed(assign.target);
-                    if (assign.op.deadLenderArg()) |lender_position| {
+                    // Child ownership need not wait for the final use of the
+                    // hidden owner. The worker reads its capture record once;
+                    // the remaining owner can only be dropped or repacked.
+                    const take_capture = assign.op == .erased_capture_load and self.localContainsRefcounted(assign.target) and
+                        !self.isBindingBorrowed(assign.target) and self.store.getProcSpecImmediate(self.current_source_proc).erased_capture_arg != .none;
+                    if (!take_capture) if (assign.op.deadLenderArg()) |lender_position| {
                         const args = self.store.getLocalSpan(assign.args);
                         const lender = GuardedList.at(args, lender_position);
                         use_borrowed = !self.options.consume_dead_boxes or
                             !self.ownsUnit(&segment.owned, lender) or
                             try self.groupUsedInPathExcept(assign.next, lender, assign.target);
-                    }
-                    const selected_op = if (use_borrowed) borrowed_variant.? else assign.op;
+                    };
+                    const selected_op = if (take_capture) LIR.LowLevel.erased_capture_take else if (use_borrowed) borrowed_variant.? else assign.op;
                     const selected_effect = if (borrowed_variant != null) selected_op.rcEffect() else self.store.stmtRow(assign.rc_effect);
                     const transfer = try self.transferForLowLevel(
                         &segment.owned,

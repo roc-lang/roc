@@ -639,6 +639,7 @@ pub fn lowLevelAccess(op: LowLevel) OpAccess {
         .box_prepare_update,
         .erased_capture_load,
         .erased_capture_load_borrowed,
+        .erased_capture_take,
         .ptr_alloca,
         .box_alloc_zeroed,
         .ptr_store,

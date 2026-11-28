@@ -27756,26 +27756,17 @@ generates constraints per statement:
   (`LowLevel.deadLenderArg`). An erased procedure reads its capture record
   from the capture pointer once, at entry, and names its reuse argument as
   the load's owner: the allocation holding the capture bytes whenever the
-  caller transferred it. The neutral load consumes the owner, emission
-  selects `erased_capture_load_borrowed` while the owner stays live (a
-  repack of the allocation as the procedure's result), and an owned
-  selection is normalized into the borrowing copy, a capture-record `incref`
-  and a reuse-argument `decref`. A transferred unique closure therefore hands
-  its captures to the body with their counts unchanged; a borrowed call
-  passes a null reuse argument, whose `decref` does nothing, and the
-  `incref` gives the captures the body's own unit. Either way the record is
-  an owned container that the body reads, takes fields out of, and hands to
-  restituting calls exactly like a finite procedure's capture parameter, so
-  a captured list the body updates is updated in place even when the body
-  reads it again on a failure path. The owner operand keeps the allocation
-  live across the read of its capture bytes, so no release of the reuse
-  argument can precede it. Post-ARC LIR contains only the borrowing load.
-  Where the selection is off and every dead-lender read borrows, the load
-  is solved as a non-consuming read whose record takes its own unit
-  (`LowLevel.arcLiveLenderRcEffect`): the borrowing copy and a capture-record
-  `incref`, with the reuse argument left live. The record is still an owned
-  container rather than a borrow of the reuse argument, so a repack of that
-  allocation as the result never has to preserve it for later capture reads.
+  caller transferred it. When a worker needs ownership of a closed-layout,
+  refcounted record, ARC's `erased_capture_take` acquires the captures
+  independently of the allocation's lifetime. Reading just the descriptor
+  of a dynamic capture does not acquire the record it describes.
+  If the transfer is a unique heap allocation, its child units move directly
+  to the body; only a reusable shell remains. The shell still owns any
+  interpreter or hot-reload generation reference and must be repacked or
+  released even when the chosen return variant holds no callable. A null,
+  shared, static or frame owner cannot surrender children: the record's
+  layout retain acquires a separate unit without altering the original.
+  Borrowing loads remain appropriate where the record needs no unit.
 - `join` / `jump`: each join parameter's resources get modes and lifetime
   relations like an intra-proc signature. `set_local` with
   `initialize_join_param` followed by `jump` is a flow edge from the
@@ -28067,10 +28058,10 @@ representation conversions. A deferred call is not made. Everything else the
 frame owns is released first, the call is recorded as pending together with
 its packed arguments, one owned reference to its closure, and the layout and
 result descriptor the statement calls with, and the procedure returns. Its
-target holds no value. The reference is retained through the closure local, so
-when the call's reuse source is an outer wrapper of the closure, the wrapper's
-unit is one of the units released first; Debug LIR certification requires a
-deferred call's reuse source to be live only when the call transfers it.
+target holds no value. A dying unit moves from the reuse source to the
+pending record. Otherwise ARC retains through the closure local and may
+release its outer wrapper before recording the call. Debug LIR certification
+requires a deferred call's reuse source to be live only for a transfer.
 
 Whoever awaits that procedure's result makes the pending call and repeats
 while the call it made leaves another pending. The pending record owns one
@@ -30784,9 +30775,9 @@ passes null, with no refcount statement. Lowering records the call's
 ownership source on every erased call, which ARC solves as demanding the
 closure's unit, so a closure parameter is owned and can die at its call,
 and marks a call whose result holds exactly one erased-callable slot
-(`result_reuse`), which consumes the unit there. A deferred `.lss` call keeps a retained
-closure reference for whoever drives it and never transfers; a deferred
-`.boxy` call transfers when the closure dies there.
+(`result_reuse`), which consumes the unit there. Deferral does not change
+the transfer decision: the pending record moves that unit to the callee or
+holds a separate retain for the duration of a borrowed call.
 
 The packed arguments are one fixed-arity struct whose fields remain in source
 parameter order and use each runtime representation's natural alignment. The

@@ -4144,6 +4144,21 @@ const Certifier = struct {
         var successors = std.ArrayList(LIR.CFStmtId).empty;
         defer successors.deinit(self.allocator);
 
+        // A take must be the only observation of the hidden capture address:
+        // on the unique path its bytes no longer own the values they encode.
+        const CaptureReads = struct {
+            arg: LIR.LocalId,
+            count: usize = 0,
+
+            fn note(reads: *@This(), local: LIR.LocalId) void {
+                if (local == reads.arg) reads.count += 1;
+            }
+        };
+        var capture_reads: ?CaptureReads = if (proc.erased_capture_arg != .none)
+            .{ .arg = proc.erased_capture_arg.get().? }
+        else
+            null;
+        var capture_take: ?LIR.CFStmtId = null;
         while (stack.pop()) |entry| {
             const current = entry.stmt;
             const region = entry.region;
@@ -4155,6 +4170,9 @@ const Certifier = struct {
 
             const current_stmt = self.store.getCFStmtImmediate(current);
             if (first_visit) try self.erased_owners.noteStmt(self.store, self.layouts, current_stmt.*);
+            if (first_visit) if (capture_reads) |*reads| {
+                body_clone.forEachStmtRead(self.store, current_stmt.*, reads, CaptureReads.note);
+            };
             switch (current_stmt.*) {
                 .assign_ref => |assign| {
                     try self.noteProcLocal(assign.target);
@@ -4163,6 +4181,13 @@ const Certifier = struct {
                 .assign_literal => |assign| try self.noteProcLocal(assign.target),
                 .init_uninitialized => |init| try self.noteProcLocal(init.target),
                 inline .assign_call, .assign_low_level => |assign| {
+                    if (current_stmt.* == .assign_low_level and current_stmt.assign_low_level.op == .erased_capture_take) {
+                        if (region != 0 or (capture_take != null and capture_take != current)) {
+                            self.current_stmt = current;
+                            return self.fail("erased captures may only be taken once, outside repeatable joins", .{});
+                        }
+                        capture_take = current;
+                    }
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocalSpan(assign.args);
                 },
@@ -4330,6 +4355,12 @@ const Certifier = struct {
             for (successors.items) |successor| try stack.append(self.allocator, .{ .stmt = successor, .region = region });
         }
 
+        if (capture_take) |stmt| {
+            if (capture_reads == null or capture_reads.?.count != 1) {
+                self.current_stmt = stmt;
+                return self.fail("erased capture take requires exclusive use of the capture pointer", .{});
+            }
+        }
         try self.indexRegionsAndMentions();
         try self.certifyErasedCallOwnerUses();
     }
@@ -5929,19 +5960,13 @@ const Certifier = struct {
                 },
                 .assign_call_erased => |assign_stmt| {
                     const assign = self.store.stmtRow(assign_stmt.data);
-                    if (assign.reuse_closure and assign.deferred) {
-                        return self.fail("deferred erased call transferred its closure", .{});
-                    }
                     const closure_value = try self.requireLive(&state, assign.closure);
                     const owner = LIR.erasedCallOwner(assign);
-                    // A deferred call is recorded after everything else the
-                    // frame owns is released, its reuse source's unit
-                    // included, and reads its closure alone. Every other
-                    // call reads its reuse source.
-                    const owner_value = if (assign.deferred) no_value else try self.requireLive(&state, owner);
-                    // A deferred call keeps one reference to its closure
-                    // until whoever makes the call releases it.
-                    if (assign.deferred) try self.consumeUnit(&state, closure_value, assign.closure);
+                    // Only a pending borrow owns a separate retain. Its
+                    // original owner may already have left the frame.
+                    const pending_borrow = assign.deferred and !assign.reuse_closure;
+                    const owner_value = if (pending_borrow) no_value else try self.requireLive(&state, owner);
+                    if (pending_borrow) try self.consumeUnit(&state, closure_value, assign.closure);
                     // A transferring call moves one unit of its closure's
                     // allocation into the callee; any other call borrows it.
                     try self.applyCall(&state, assign_stmt.target, arc_sig.RcSig.all_owned, assign.args, assign_stmt.next);
@@ -6875,6 +6900,14 @@ const Certifier = struct {
         }
         const arg_locals = self.store.getLocalSpan(assign.args);
 
+        if (assign.op == .erased_capture_take) {
+            const proc = self.store.getProcSpecImmediate(self.current_proc);
+            if ((proc.abi != .erased_callable and proc.abi != .erased_record) or GuardedList.borrowLen(arg_locals) != 2 or
+                proc.erased_capture_arg.get() != GuardedList.at(arg_locals, 0) or
+                proc.erased_reuse_arg.get() != GuardedList.at(arg_locals, 1) or !self.isRc(assign.target))
+                return self.fail("erased capture take must acquire the executing worker's refcounted captures", .{});
+        }
+
         // The masks in an `RcEffect` row name argument positions, but the row
         // is written next to the op's name, not its signature. A bit above the
         // real argument count names nothing: the ownership it describes is
@@ -7684,7 +7717,7 @@ test "certify accepts owned binding released once" {
     try f.certify();
 }
 
-test "certify rejects a deferred erased call that transfers its closure" {
+test "certify accepts a deferred erased call that transfers its closure" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
     const erased_callable = try f.layouts.insertErasedCallable();
@@ -7704,8 +7737,62 @@ test "certify rejects a deferred erased call that transfers its closure" {
         .next = ret,
     } }, .test_fixture);
     _ = try f.addProc(&.{closure}, body, erased_callable);
+    try f.certify();
+}
+
+test "certify rejects a second acquisition from an empty erased shell" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const owner = try f.local(try f.layouts.insertErasedCallable());
+    const capture = try f.local(.opaque_ptr);
+    const args = try f.store.addLocalSpan(&.{ capture, owner });
+    const record = try f.local(.str);
+    const op = LIR.LowLevel.erased_capture_take;
+    const effect = try f.store.addRcEffect(op.rcEffect());
+    const take = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = record,
+        .op = op,
+        .args = args,
+        .rc_effect = effect,
+        .next = try f.decrefStmt(owner, f.store.getLocal(owner).layout_idx, try f.ret(record)),
+    } }, .test_fixture);
+    const body = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = record,
+        .op = op,
+        .args = args,
+        .rc_effect = effect,
+        .next = try f.decrefStmt(record, .str, take),
+    } }, .test_fixture);
+    const plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
+    const proc = f.store.getProcSpecPtr(try f.addProc(&.{ capture, owner }, body, .str));
+    proc.abi = .erased_callable;
+    proc.erased_capture_arg = .of(capture);
+    proc.erased_reuse_arg = .of(owner);
+    proc.erased_call_args = .of(plan);
     try testing.expectError(error.Certification, f.certify());
-    try testing.expect(std.mem.find(u8, f.diag.message(), "deferred erased call transferred its closure") != null);
+    try testing.expect(std.mem.find(u8, f.diag.message(), "only be taken once") != null);
+}
+
+test "certify rejects releasing a transferred deferred call's owner again" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const layout_idx = try f.layouts.insertErasedCallable();
+    const closure = try f.local(layout_idx);
+    const result = try f.local(layout_idx);
+    const release = try f.decrefStmt(closure, layout_idx, try f.ret(result));
+    const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = result,
+        .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
+            .closure = closure,
+            .args = .empty(),
+            .arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{}),
+            .reuse_closure = true,
+            .deferred = true,
+        }),
+        .next = release,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{closure}, call, layout_idx);
+    try testing.expectError(error.Certification, f.certify());
 }
 
 test "certify accepts a deferred erased call recorded after its tag wrapper reuse source is released" {

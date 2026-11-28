@@ -2627,6 +2627,7 @@ pub const Interpreter = struct {
                             .arg_layouts = arg_layouts,
                             .arg_plan = assign.arg_plan,
                             .site_layout = target_layout,
+                            .transfer = assign.reuse_closure,
                         });
                         if (!drivesHere(frame, assign.drive)) {
                             frame.setLocal(assign_stmt.target, try self.poisonUninitializedValue(target_layout));
@@ -3089,6 +3090,7 @@ pub const Interpreter = struct {
         arg_plan: LIR.ErasedCallArgsPlanId,
         /// The layout the deferring statement calls with.
         site_layout: layout_mod.Idx,
+        transfer: bool,
     };
 
     /// Whether calls pending after a statement are made in this frame.
@@ -3164,15 +3166,12 @@ pub const Interpreter = struct {
             // copy, so this one is read from scratch.
             const call = try self.copyPendingErasedCall(self.pending_erased.?, self.evalAllocator());
             self.pending_erased = null;
-            const raw = try self.evalErasedCallOnce(call.closure, null, call.args, call.arg_layouts, call.arg_plan, call.site_layout, false);
+            const raw = try self.evalErasedCallOnce(call.closure, null, call.args, call.arg_layouts, call.arg_plan, call.site_layout, call.transfer);
             if (!self.hasPendingCall()) {
                 try self.checkCallResultLayout(raw.layout, call.site_layout);
                 if (ret_size != 0) @memcpy(ret.?[0..ret_size], raw.value.ptr[0..ret_size]);
             }
-            const closure_ptr = self.readBoxedDataPointer(call.closure) orelse
-                return self.invariantFailedError("LIR/interpreter invariant violated: pending erased call had a null closure", .{});
-            // ARC explicitly transferred this reference to the pending call.
-            builtins.erased_callable.decref(closure_ptr, &self.roc_ops);
+            if (!call.transfer) builtins.erased_callable.decref(self.readBoxedDataPointer(call.closure), &self.roc_ops);
         }
     }
 
@@ -6532,6 +6531,29 @@ pub const Interpreter = struct {
             .box_unbox, .box_unbox_borrowed => try self.evalBoxUnbox(args[0], ll.ret_layout),
             .box_prepare_update => try self.evalBoxPrepareUpdate(args[0], ll.ret_layout, ll.unique_args),
             .erased_capture_load, .erased_capture_load_borrowed => try self.evalErasedCaptureLoad(args[0], ll.ret_layout),
+            .erased_capture_take => blk: {
+                const value = try self.evalErasedCaptureLoad(args[0], ll.ret_layout);
+                if (self.readBoxedDataPointer(args[1])) |owner| {
+                    if (builtins.utils.isUnique(owner, &self.roc_ops)) {
+                        // Only the child units moved. The final drop of the
+                        // context still releases its retained interpreter.
+                        const payload = builtins.erased_callable.payloadPtr(owner);
+                        if (@intFromPtr(payload.callable_fn_ptr) == staticErasedCallableTrampolineAddress()) {
+                            // A host can copy a frozen step into a heap
+                            // allocation. Its owner trailer is not a context.
+                            payload.on_drop = null;
+                            payload.on_copy = null;
+                        } else {
+                            std.debug.assert(payload.callable_fn_ptr == &interpreterErasedCallableTrampoline);
+                            const context = erasedCallableInterpreterContextFromPayload(owner);
+                            context.drop_kind = @backingInt(ErasedCallableCaptureDrop.none);
+                        }
+                        break :blk value;
+                    }
+                }
+                self.performRcHelperRequired(.{ .op = .incref, .layout_idx = ll.ret_layout }, value, 1, .atomic);
+                break :blk value;
+            },
             .ptr_alloca => try self.evalPtrAlloca(ll.ret_layout),
             .box_alloc_zeroed => try self.evalBoxAllocZeroed(ll.ret_layout),
             .ptr_store => try self.evalPtrStore(args[0], args[1], ll.arg_layouts[1]),

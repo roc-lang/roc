@@ -221,12 +221,12 @@ fn builtRecord(store: *const LirStore, stmt: LIR.CFStmt) ?struct { record: Local
 }
 
 /// The capture container `stmt` reads out of `capture`, an erased-callable
-/// procedure's capture argument: a borrowed load of the capture record, or a
-/// view over it.
+/// procedure's capture argument: a load of the capture record, or a view
+/// over it. A frame call passes null, so a take acquires a separate record.
 fn captureContainer(store: *const LirStore, stmt: LIR.CFStmt, capture: LocalId) ?LocalId {
     if (stmt == .assign_low_level) {
         const s = stmt.assign_low_level;
-        if (s.op != .erased_capture_load_borrowed) return null;
+        if (s.op != .erased_capture_load_borrowed and s.op != .erased_capture_take) return null;
         const args = store.getLocalSpan(s.args);
         if (GuardedList.borrowLen(args) == 0 or GuardedList.at(args, 0) != capture) return null;
         return s.target;

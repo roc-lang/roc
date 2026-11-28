@@ -208,6 +208,30 @@ pub fn capturePtr(data_ptr: [*]u8) [*]u8 {
     return data_ptr + capture_offset;
 }
 
+/// Acquire the capture record for an erased worker, without consuming its
+/// reuse argument. Clearing only the capture drop leaves an ordinary owned
+/// allocation: either a later repack or its final release consumes it.
+pub fn takeCapture(capture: [*]u8, owner: ?[*]u8, retain: rc_callback_abi.RcIncrefFn, hot_reload: bool, ops: *RocOps) [*]u8 {
+    if (owner) |ptr| {
+        if (utils.isUnique(ptr, ops)) {
+            if (hot_reload) {
+                // The generation reference is independent of Roc's captures.
+                const header = hotReloadCaptureHeader(capturePtr(ptr)).?;
+                header.original_on_drop = null;
+                header.original_on_copy = null;
+                if (header.code_ref != null) return capture;
+            }
+            // No generation to keep. This includes independently copied
+            // frozen captures, whose drop uses the complete prefixed layout.
+            payloadPtr(ptr).on_drop = null;
+            payloadPtr(ptr).on_copy = null;
+            return capture;
+        }
+    }
+    retain(capture, 1);
+    return capture;
+}
+
 /// Interpret a shim-execution erased-callable capture pointer as the hot-reload
 /// prefix header. Only call this for payloads whose on_drop was set to the
 /// shim hot-reload drop helper.
@@ -388,4 +412,60 @@ test "erased callable repack copies shared allocation and preserves old capture"
     free(result, ops);
     try std.testing.expectEqual(@as(usize, 1), RepackTestState.new_drop_count);
     try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
+}
+
+test "erased capture take distinguishes a transfer from a unique shell" {
+    const Counts = struct {
+        var copies: usize = 0;
+        var generations: usize = 0;
+
+        fn copy(_: ?[*]u8, amount: isize) callconv(.c) void {
+            copies += @intCast(amount);
+        }
+
+        fn releaseGeneration(capture: ?[*]u8, ops: *RocOps) callconv(.c) void {
+            generations += 1;
+            if (hotReloadCaptureHeader(capture).?.original_on_drop) |drop| drop(hotReloadAdjustedCapturePtr(capture), ops);
+        }
+    };
+    Counts.copies = 0;
+    Counts.generations = 0;
+    RepackTestState.reset();
+    var env = utils.TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const ops = env.getOps();
+    var storage: [payload_alignment + capture_offset + 1]u8 align(payload_alignment) = undefined;
+    const non_heap: [*]u8 = @as([*]u8, &storage) + payload_alignment;
+    payloadPtr(non_heap).* = .{ .callable_fn_ptr = &RepackTestState.callable, .on_drop = &RepackTestState.oldDrop };
+    const rc: *isize = @ptrCast(@alignCast(non_heap - @sizeOf(isize)));
+    for ([_]isize{ utils.REFCOUNT_FRAME, utils.REFCOUNT_STATIC_DATA }) |marker| {
+        rc.* = marker;
+        _ = takeCapture(capturePtr(non_heap), non_heap, &Counts.copy, false, ops);
+        try std.testing.expect(payloadPtr(non_heap).on_drop != null);
+    }
+    try std.testing.expectEqual(@as(usize, 2), Counts.copies);
+    Counts.copies = 0;
+
+    const owner = allocate(&RepackTestState.callable, &Counts.releaseGeneration, hot_reload_capture_prefix_size + 1, ops);
+    const prefix = capturePtr(owner);
+    hotReloadCaptureHeader(prefix).?.* = .{ .code_ref = @ptrCast(&Counts.generations), .original_on_drop = &RepackTestState.oldDrop };
+    const value = hotReloadAdjustedCapturePtr(prefix).?;
+    value[0] = 42;
+
+    _ = takeCapture(value, null, &Counts.copy, true, ops);
+    incref(owner, 1, ops);
+    _ = takeCapture(value, owner, &Counts.copy, true, ops);
+    try std.testing.expectEqual(@as(usize, 2), Counts.copies);
+    try std.testing.expect(hotReloadCaptureHeader(prefix).?.original_on_drop != null);
+    decref(owner, ops);
+
+    const moved = takeCapture(value, owner, &Counts.copy, true, ops);
+    try std.testing.expectEqual(@as(u8, 42), moved[0]);
+    try std.testing.expectEqual(@as(usize, 2), Counts.copies);
+    // A worker that returns no callable releases the shell. Its remaining
+    // drop is the generation reference, never the record the worker now owns.
+    decref(owner, ops);
+    try std.testing.expectEqual(@as(usize, 0), RepackTestState.old_drop_count);
+    try std.testing.expectEqual(@as(usize, 1), Counts.generations);
+    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
 }

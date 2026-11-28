@@ -1428,9 +1428,9 @@ pub const ErasedCallData = struct {
     result_reuse: bool = false,
     /// Set by ARC emission on an erased call whose value the procedure
     /// returns: the call is left pending instead of made. The pending call owns the
-    /// reference to `closure` this statement was given, and whoever runs
-    /// it releases that reference afterwards. `target` holds no value
-    /// until a `drive` replaces it.
+    /// reference to `closure` this statement was given. The driver transfers
+    /// it for `reuse_closure`, otherwise releases it after the call.
+    /// `target` holds no value until a `drive` replaces it.
     deferred: bool = false,
     /// Set by the tail-drive pass: where calls pending after this
     /// statement are run.

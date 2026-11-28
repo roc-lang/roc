@@ -1396,6 +1396,11 @@ pub fn roc_builtins_erased_callable_repack(reuse: ?[*]u8, callable_fn_ptr: erase
     );
 }
 
+/// Acquire the worker's record while leaving the nullable reuse unit alive.
+pub fn roc_builtins_erased_capture_take(capture: [*]u8, owner: ?[*]u8, retain: RcIncFn, hot_reload: u8) callconv(.c) [*]u8 {
+    return erased_callable.takeCapture(capture, owner, retain, hot_reload != 0, in_process_host.ops());
+}
+
 /// Free a boxed erased callable payload pointer, running the payload's
 /// `on_drop` callback unconditionally first.
 pub fn roc_builtins_erased_callable_free(payload_ptr: ?[*]u8) callconv(.c) void {
