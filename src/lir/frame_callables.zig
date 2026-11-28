@@ -221,12 +221,12 @@ fn builtRecord(store: *const LirStore, stmt: LIR.CFStmt) ?struct { record: Local
 }
 
 /// The capture container `stmt` reads out of `capture`, an erased-callable
-/// procedure's capture argument: a borrowed load of the capture record, or a
-/// view over it.
+/// procedure's capture argument: a load of the capture record, or a view
+/// over it. A frame call passes null, so a take acquires a separate record.
 fn captureContainer(store: *const LirStore, stmt: LIR.CFStmt, capture: LocalId) ?LocalId {
     if (stmt == .assign_low_level) {
         const s = stmt.assign_low_level;
-        if (s.op != .erased_capture_load_borrowed) return null;
+        if (s.op != .erased_capture_load_borrowed and s.op != .erased_capture_take) return null;
         const args = store.getLocalSpan(s.args);
         if (GuardedList.borrowLen(args) == 0 or GuardedList.at(args, 0) != capture) return null;
         return s.target;
@@ -400,7 +400,7 @@ pub fn classifyUse(store: *const LirStore, stmt_id: CFStmtId, local: LocalId) Us
             break :blk .{ .direct_arg = .{
                 .callee = s.proc,
                 .positions = positions,
-                .replaces_frame = store.stmtRowOrDefault(s.extra).replaces_frame,
+                .replaces_frame = store.stmtRowOrDefault(s.extra).frame_call != .ordinary,
             } };
         },
         .assign_call_erased => |s| blk: {
@@ -2076,7 +2076,7 @@ test "a callable that escapes, or is passed to a frame-replacing call, stays on 
                 .target = result,
                 .proc = p.keeps,
                 .args = try p.f.store.addLocalSpan(&.{p.callable}),
-                .extra = try p.f.store.addOptionalStmtRow(LIR.CallExtra, .{ .replaces_frame = true }),
+                .extra = try p.f.store.addOptionalStmtRow(LIR.CallExtra, .{ .frame_call = .forward }),
                 .next = try p.f.ret(result),
             } }),
             .deferred_call => try p.f.erasedCall(p.callable, &.{}, result, true, try p.f.ret(result)),

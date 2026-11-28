@@ -5073,14 +5073,12 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     }
 
     if (input.timing) |timing| step_started = timing.lap(step_started, .requests);
-    // A program's worker of a kind a module unit exports publishes its
-    // outcome variant as that unit's export does, so a call from another
-    // module may demand it here exactly as it may of the module's object
-    // (design.md "Outcome-Conditioned Argument Restitution").
+    // The worker's cross-unit ownership contract is independent of whether
+    // this lowering produces separate objects or one program.
     if (program.moduleUnit() == null) {
         for (program.workers.items) |worker| {
             if (!Program.exportableKind(worker.key)) continue;
-            program.result.store.getProcSpecPtr(worker.proc).outcome_publisher = true;
+            program.result.store.getProcSpecPtr(worker.proc).module_worker = true;
         }
     }
     if (program.moduleUnit() != null and !input.compile_time) {
@@ -5209,7 +5207,7 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
         if (worker.imported or !worker.lowered or !Program.exportableKind(worker.key)) continue;
         const spec = program.result.store.getProcSpecPtr(worker.proc);
         spec.exported = true;
-        spec.outcome_publisher = true;
+        spec.module_worker = true;
         try program.result.exported_procs.append(program.allocator, worker.proc);
     }
     try recordExports(program, stored_value_workers.items);

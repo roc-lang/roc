@@ -123,7 +123,7 @@ pub fn run(
         var extra = store.stmtRowOrDefault(updated.extra);
         extra.drive = drive;
         // A call that runs pending calls afterwards keeps its frame to do so.
-        if (drive.canDriveHere()) extra.replaces_frame = false;
+        if (drive.canDriveHere()) extra.frame_call = .ordinary;
         updated.extra = try store.addOptionalStmtRow(LIR.CallExtra, extra);
         const caller = store.getProcSpecPtr(@fromBackingInt(call.caller));
         caller.uses_pending_cell = true;

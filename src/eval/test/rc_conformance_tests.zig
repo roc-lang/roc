@@ -996,13 +996,17 @@ const cases = [_]Case{
         \\apply : Box((Str -> Str)), Str -> Str
         \\apply = |boxed, text| Box.unbox(boxed)(text)
         \\
+        \\make_length : U64 -> Box((Str -> U64))
+        \\make_length = |extra| Box.box(|text| Str.count_utf8_bytes(text) + extra)
+        \\
         \\main = || {
         \\    prefix = Str.concat("a captured prefix long enough ", "to allocate on the heap")
         \\    holder = [prefix, prefix]
         \\    prepend = Box.box(|text| Str.concat(prefix, text))
         \\    once = apply(prepend, "one")
         \\    twice = apply(prepend, "two")
-        \\    Str.count_utf8_bytes(once) + Str.count_utf8_bytes(twice) + List.len(holder)
+        \\    length = Box.unbox(make_length(List.len(holder)))
+        \\    Str.count_utf8_bytes(once) + length(twice)
         \\}
         ,
     },
@@ -1262,7 +1266,7 @@ const cases = [_]Case{
 /// that removes it from this table.
 const exemptions = [_]Exemption{
     .{ .op = .box_unbox, .reason = "allocation-consuming compiled variant is pinned by focused LIR and runtime-helper tests" },
-    .{ .op = .erased_capture_load, .reason = "ARC normalizes the consuming capture load into erased_capture_load_borrowed plus explicit RC statements, which the erased-call alloc-count tests and the certifier pin" },
+    .{ .op = .erased_capture_load, .reason = "ARC normalizes the neutral capture load into a borrowing read or an owned capture take" },
     .{ .op = .list_prefetched, .reason = "no LIR producer: lowering splits List.prefetched into an alias of its list and list_prefetch" },
     .{ .op = .list_reverse, .reason = "no producer: List.rev is written in Roc over list_get_unsafe" },
 };

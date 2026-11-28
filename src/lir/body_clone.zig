@@ -799,6 +799,20 @@ pub fn writtenLocal(stmt: LIR.CFStmt) ?LocalId {
     };
 }
 
+/// The tag a statement constructs, if its discriminant is independent of the
+/// instantiation. A descriptor-backed constructor may have a known tag even
+/// though it cannot know the representation of its payload.
+pub fn constructedDiscriminant(store: *const LirStore, stmt: LIR.CFStmt) ?u32 {
+    if (stmt == .assign_tag) return stmt.assign_tag.discriminant;
+    if (stmt != .dyn) return null;
+    const op = store.stmtRow(stmt.dyn.data);
+    if (op != .tag) return null;
+    return switch (op.tag.discriminant) {
+        .immediate => |index| index,
+        .local => null,
+    };
+}
+
 /// Call `visit(ctx, successor)` for every statement control can transfer to
 /// directly from `stmt`: a straight-line `next`, switch arms before the
 /// default, both payload-initialization arms, match hits before misses, and

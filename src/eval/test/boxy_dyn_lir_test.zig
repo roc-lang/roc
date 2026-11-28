@@ -467,12 +467,12 @@ const Builder = struct {
     }
 
     /// A call that replaces this procedure's frame with the callee's.
-    fn tailCall(self: *Builder, target: LocalId, proc_id: LirProcSpecId, args: []const LocalId, next: CFStmtId) TestError!CFStmtId {
+    fn tailCall(self: *Builder, plan: LIR.FrameCall, target: LocalId, proc_id: LirProcSpecId, args: []const LocalId, next: CFStmtId) TestError!CFStmtId {
         return self.store.addCFStmt(.{ .assign_call = .{
             .target = target,
             .proc = proc_id,
             .args = try self.store.addLocalSpan(args),
-            .extra = try self.store.addStmtRow(LIR.CallExtra, .{ .replaces_frame = true }),
+            .extra = try self.store.addStmtRow(LIR.CallExtra, .{ .frame_call = plan }),
             .next = next,
         } }, .test_fixture);
     }
@@ -1374,25 +1374,34 @@ test "boxy wasm: a closure over a type table called through the erased record AB
 const TailProgram = struct {
     int_proc: LirProcSpecId,
     str_proc: LirProcSpecId,
+    leaf: LirProcSpecId,
 
-    fn build(b: *Builder) TestError!TailProgram {
+    fn build(b: *Builder, mixed: bool) TestError!TailProgram {
         const group = b.freshTailGroupId();
 
         // `leaf(x) = x`, entered by a frame-replacing call.
         const leaf_desc = try b.local(.opaque_ptr);
         const leaf_x = try b.dynLocal(leaf_desc, .param);
         const leaf_result = try b.dynLocal(leaf_desc, .result);
-        const leaf = try b.proc(&.{ leaf_x, leaf_desc }, try b.ret(leaf_x), b.dynamic, .{ .dyn_result = leaf_result, .tail_group = group, .tail_carry = true });
+        const leaf = try b.proc(&.{ leaf_x, leaf_desc }, try b.ret(leaf_x), b.dynamic, .{ .dyn_result = leaf_result, .tail_group = group, .tail_carry = mixed });
 
-        // `hop(x) = leaf(copy of x)`: the copy lives in `hop`'s own frame, which
-        // the call to `leaf` replaces.
+        // The relay receives either an ordinary caller's address or a live
+        // carry. Reading the heap string at the leaf checks the handoff.
+        const relay_desc = try b.local(.opaque_ptr);
+        const relay_x = try b.dynLocal(relay_desc, .param);
+        const relay_out = try b.dynLocal(relay_desc, .result);
+        const relay_body = try b.tailCall(if (mixed) .transfer else .forward, relay_out, leaf, &.{ relay_x, relay_desc }, try b.ret(relay_out));
+        const relay = try b.proc(&.{ relay_x, relay_desc }, relay_body, b.dynamic, .{ .dyn_result = relay_out, .tail_group = group, .tail_carry = mixed });
+
+        // In the mixed group the first edge must relocate its frame copy.
         const desc = try b.local(.opaque_ptr);
         const x = try b.dynLocal(desc, .param);
         const result = try b.dynLocal(desc, .result);
         const copy = try b.dynLocal(desc, .frame);
         const out = try b.dynLocal(desc, .frame);
-        const hop_body = try b.dyn(null, .frame_alloc, try b.dyn(copy, .{ .copy = .{ .src = x, .desc = desc } }, try b.tailCall(out, leaf, &.{ copy, desc }, try b.ret(out))));
-        const hop = try b.proc(&.{ x, desc }, hop_body, b.dynamic, .{ .dyn_result = result, .tail_group = group, .tail_carry = true });
+        const call = try b.tailCall(if (mixed) .relocate else .forward, out, relay, &.{ if (mixed) copy else x, desc }, try b.ret(out));
+        const hop_body = try b.dyn(null, .frame_alloc, if (mixed) try b.dyn(copy, .{ .copy = .{ .src = x, .desc = desc } }, call) else call);
+        const hop = try b.proc(&.{ x, desc }, hop_body, b.dynamic, .{ .dyn_result = result, .tail_group = group, .tail_carry = mixed });
 
         const str_desc = try b.local(.opaque_ptr);
         const left = try b.local(.str);
@@ -1407,31 +1416,44 @@ const TailProgram = struct {
         const int_out = try b.local(.i64);
         const int_body = try b.static(int_desc, .{ .desc = boxy.desc.scalarDesc(.i64) }, try b.int(int_arg, 77, try b.call(int_out, hop, &.{ int_arg, int_desc }, try b.ret(int_out))));
         const int_proc = try b.proc(&.{}, int_body, .i64, .{});
-        return .{ .int_proc = int_proc, .str_proc = str_proc };
+        return .{ .int_proc = int_proc, .str_proc = str_proc, .leaf = leaf };
     }
 };
 
-test "boxy interpreter: a frame-replacing call moves a dynamic argument out of the replaced frame" {
-    var b = try Builder.init(.native);
-    defer b.deinit();
-    const program = try TailProgram.build(&b);
+test "issue 13364: interpreter, LLVM and dev forward dynamic bytes and transfer their carry" {
+    for ([_]bool{ false, true }) |mixed| {
+        var b = try Builder.init(.native);
+        defer b.deinit();
+        const program = try TailProgram.build(&b, mixed);
+        if (comptime backend.host_lir_codegen_available) {
+            var codegen = try backend.HostLirCodeGen.init(allocator, &b.store, &b.layouts, .{}, .default);
+            defer codegen.deinit();
+            try codegen.emitProcFragment(program.leaf);
+            const frees = for (codegen.getSymbolNames()) |symbol| {
+                if (std.mem.eql(u8, symbol, "roc_desc_carry_free")) break true;
+            } else false;
+            try std.testing.expectEqual(mixed, frees);
+        }
 
-    var run: Run = undefined;
-    try run.init(&b);
-    defer run.deinit();
-    try std.testing.expectEqual(@as(i64, 77), (try run.eval(program.int_proc, .i64)).value.read(i64));
-    const str_result = try run.eval(program.str_proc, .str);
-    try std.testing.expectEqualStrings("a string long enough to live on the heap, moved by a tail call", readStr(str_result.value));
-    run.interpreter.dropValue(str_result.value, .str);
-    try run.env.checkForLeaks();
+        var run: Run = undefined;
+        try run.init(&b);
+        defer run.deinit();
+        try std.testing.expectEqual(@as(i64, 77), (try run.eval(program.int_proc, .i64)).value.read(i64));
+        const str_result = try run.eval(program.str_proc, .str);
+        try std.testing.expectEqualStrings("a string long enough to live on the heap, moved by a tail call", readStr(str_result.value));
+        run.interpreter.dropValue(str_result.value, .str);
+        try run.env.checkForLeaks();
+    }
 }
 
-test "boxy wasm: a frame-replacing call moves a dynamic argument out of the replaced frame" {
-    var b = try Builder.init(.u32);
-    defer b.deinit();
-    const program = try TailProgram.build(&b);
-    try expectWasmInt(&b, program.int_proc, .i64, 77);
-    try expectWasmStr(&b, program.str_proc, "a string long enough to live on the heap, moved by a tail call");
+test "issue 13364: wasm tail driver forwards dynamic bytes and transfers their carry" {
+    for ([_]bool{ false, true }) |mixed| {
+        var b = try Builder.init(.u32);
+        defer b.deinit();
+        const program = try TailProgram.build(&b, mixed);
+        try expectWasmInt(&b, program.int_proc, .i64, 77);
+        try expectWasmStr(&b, program.str_proc, "a string long enough to live on the heap, moved by a tail call");
+    }
 }
 
 /// Return a one-field generic record either directly in the caller's result

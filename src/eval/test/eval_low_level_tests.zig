@@ -7708,6 +7708,36 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"ok\"" },
     },
     .{
+        .name = "boxed lambda round trip: distinct successors from a shared erased capture",
+        .source_kind = .module,
+        .source =
+        \\Machine := [Step(Box((U64 -> (Machine, U64)))), End]
+        \\
+        \\machine : List(U64) -> Machine
+        \\machine = |items| Step(Box.box(|x| {
+        \\    last = items.last() ?? 0
+        \\    if x == 0 (End, last) else (machine(items.append(x)), last)
+        \\}))
+        \\
+        \\step : Machine, U64 -> (Machine, U64)
+        \\step = |m, x| match m {
+        \\    Step(f) => Box.unbox(f)(x)
+        \\    End => crash "machine already closed"
+        \\}
+        \\
+        \\main = {
+        \\    siblings = List.repeat(machine([7]), 2)
+        \\    { list, prev } = siblings.replace(0, End) ?? crash "missing"
+        \\    (a, old_a) = step(prev, 17)
+        \\    (b, old_b) = step(list.get(1) ?? crash "missing", 27)
+        \\    (_, last_a) = step(a, 0)
+        \\    (_, last_b) = step(b, 0)
+        \\    (old_a, old_b, last_a, last_b)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(7, 7, 17, 27)" },
+    },
+    .{
         .name = "boxed lambda round trip: tagged aggregate erased callable result is correct",
         .source_kind = .module,
         .source = erased_callable_tagged_aggregate_reuse_source,

@@ -238,6 +238,7 @@ pub const BuiltinFn = enum {
     u32_mod_by,
     i64_mod_by,
     u64_mod_by,
+    erased_capture_take,
 
     const symbol_names = blk: {
         var result: [@typeInfo(BuiltinFn).@"enum".field_names.len][:0]const u8 = undefined;
@@ -318,6 +319,7 @@ pub const BuiltinFn = enum {
             .erased_callable_incref,
             .erased_callable_incref_single_thread,
             .erased_callable_repack,
+            .erased_capture_take,
             .native_callable_call,
             .native_callable_defer,
             .native_callable_drive,

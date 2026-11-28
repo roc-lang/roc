@@ -112,7 +112,9 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v85: absent optional ids and indices are stored as zero.
 /// v87: dynamic product shapes mark their boxable fields, and field takes
 ///      record the recursion box they release.
-pub const FORMAT_VERSION: u32 = 87;
+/// v88: ARC can acquire erased captures while preserving the allocation.
+/// v89: direct calls state their frame replacement storage plan.
+pub const FORMAT_VERSION: u32 = 89;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.

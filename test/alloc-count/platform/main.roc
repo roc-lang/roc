@@ -5,6 +5,7 @@ platform ""
     provides { "roc_run": run_for_host! }
     hosted {
         "roc_host_alloc_count": Host.alloc_count!,
+        "roc_host_alloc_bytes": Host.alloc_bytes!,
     }
     targets: {
         inputs_dir: "targets/",

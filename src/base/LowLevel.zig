@@ -646,6 +646,10 @@ pub const LowLevel = enum(u16) {
     erased_capture_load,
     /// ARC-only borrowing variant of erased_capture_load.
     erased_capture_load_borrowed,
+    /// Acquire a refcounted capture record independently of its owner's
+    /// storage. A unique transferred owner becomes a drop-safe empty shell;
+    /// otherwise retain the result's layout once. Never consumes the shell.
+    erased_capture_take,
 
     // Compiler-internal pointer operations, introduced by the TRMC pass
     // (src/lir/trmc.zig). Never produced by user code or canonicalization.
@@ -1253,6 +1257,7 @@ pub const LowLevel = enum(u16) {
 
         .erased_capture_load = byType(.{ .may_retain_or_release = true, .consume_args = arg_1, .result_shares_args = arg_1 }),
         .erased_capture_load_borrowed = byType(.retainsResultBorrowingArgs(arg_1)),
+        .erased_capture_take = byType(.{ .may_retain_or_release = true, .result_shares_args = arg_1 }),
 
         .box_alloc_zeroed = byType(.allocates()),
 

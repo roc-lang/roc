@@ -639,6 +639,7 @@ pub fn lowLevelAccess(op: LowLevel) OpAccess {
         .box_prepare_update,
         .erased_capture_load,
         .erased_capture_load_borrowed,
+        .erased_capture_take,
         .ptr_alloca,
         .box_alloc_zeroed,
         .ptr_store,
@@ -1404,7 +1405,7 @@ fn noteAddressedOperands(self: *Self, store: *const LirStore, stmt: lir.LIR.CFSt
             const extra = store.stmtRowOrDefault(call.extra);
             // A pending drive writes the result through its address.
             if (extra.drive.canDriveHere()) self.markAddressed(call.target);
-            if (!extra.replaces_frame) self.noteAccess(call.target, ops.callAccess(call, .result));
+            if (extra.frame_call == .ordinary) self.noteAccess(call.target, ops.callAccess(call, .result));
             const args = store.getLocalSpan(call.args);
             for (0..args.len) |i| self.noteAccess(GuardedList.at(args, i), ops.callAccess(call, .{ .arg = i }));
         },

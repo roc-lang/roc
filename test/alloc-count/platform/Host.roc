@@ -4,4 +4,7 @@ Host := [].{
     ## served for the running app so far. Read it before and after a region of
     ## code and subtract to count that region's allocations.
     alloc_count! : () => U64
+    ## Total bytes requested by allocation calls, including the full new size
+    ## of each reallocation (not net heap growth).
+    alloc_bytes! : () => U64
 }

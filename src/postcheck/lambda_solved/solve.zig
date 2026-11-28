@@ -3516,6 +3516,7 @@ const Solver = struct {
             .box_alloc_zeroed,
             .erased_capture_load,
             .erased_capture_load_borrowed,
+            .erased_capture_take,
             .ptr_alloca,
             .ptr_store,
             .ptr_load,

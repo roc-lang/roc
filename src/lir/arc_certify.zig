@@ -4144,6 +4144,21 @@ const Certifier = struct {
         var successors = std.ArrayList(LIR.CFStmtId).empty;
         defer successors.deinit(self.allocator);
 
+        // A take must be the only observation of the hidden capture address:
+        // on the unique path its bytes no longer own the values they encode.
+        const CaptureReads = struct {
+            arg: LIR.LocalId,
+            count: usize = 0,
+
+            fn note(reads: *@This(), local: LIR.LocalId) void {
+                if (local == reads.arg) reads.count += 1;
+            }
+        };
+        var capture_reads: ?CaptureReads = if (proc.erased_capture_arg != .none)
+            .{ .arg = proc.erased_capture_arg.get().? }
+        else
+            null;
+        var capture_take: ?LIR.CFStmtId = null;
         while (stack.pop()) |entry| {
             const current = entry.stmt;
             const region = entry.region;
@@ -4155,6 +4170,9 @@ const Certifier = struct {
 
             const current_stmt = self.store.getCFStmtImmediate(current);
             if (first_visit) try self.erased_owners.noteStmt(self.store, self.layouts, current_stmt.*);
+            if (first_visit) if (capture_reads) |*reads| {
+                body_clone.forEachStmtRead(self.store, current_stmt.*, reads, CaptureReads.note);
+            };
             switch (current_stmt.*) {
                 .assign_ref => |assign| {
                     try self.noteProcLocal(assign.target);
@@ -4163,6 +4181,13 @@ const Certifier = struct {
                 .assign_literal => |assign| try self.noteProcLocal(assign.target),
                 .init_uninitialized => |init| try self.noteProcLocal(init.target),
                 inline .assign_call, .assign_low_level => |assign| {
+                    if (current_stmt.* == .assign_low_level and current_stmt.assign_low_level.op == .erased_capture_take) {
+                        if (region != 0 or (capture_take != null and capture_take != current)) {
+                            self.current_stmt = current;
+                            return self.fail("erased captures may only be taken once, outside repeatable joins", .{});
+                        }
+                        capture_take = current;
+                    }
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocalSpan(assign.args);
                 },
@@ -4330,6 +4355,12 @@ const Certifier = struct {
             for (successors.items) |successor| try stack.append(self.allocator, .{ .stmt = successor, .region = region });
         }
 
+        if (capture_take) |stmt| {
+            if (capture_reads == null or capture_reads.?.count != 1) {
+                self.current_stmt = stmt;
+                return self.fail("erased capture take requires exclusive use of the capture pointer", .{});
+            }
+        }
         try self.indexRegionsAndMentions();
         try self.certifyErasedCallOwnerUses();
     }
@@ -5380,7 +5411,7 @@ const Certifier = struct {
             self.current_stmt = body;
             const return_local = self.current_return_local orelse
                 return self.fail("outcome-specialized proc did not have one exact return local", .{});
-            if (!self.isRc(return_local) or self.layouts.getLayout(proc.ret_layout).tag != .tag_union) {
+            if (!self.isRc(return_local) or (self.layouts.getLayout(proc.ret_layout).tag != .tag_union and proc.dyn_result.get() != return_local)) {
                 return self.fail("outcome-specialized proc did not return an RC-bearing top-level tag union", .{});
             }
             const params = self.store.getLocalSpan(proc.args);
@@ -5828,14 +5859,11 @@ const Certifier = struct {
                     } else _ = self.segment_scalars.remove(target);
                 }
             }
-            // Any write to the returned local kills its discriminant witness;
-            // `assign_tag` establishes a replacement after this kill.
+            // Check the constructor on the emitted path, never the solver's
+            // witness. Any other write invalidates the previous tag.
             if (self.current_return_local) |return_local| {
-                // Emission rebinding of the returned local kills its witness exactly
-                // as it does in the solver's outcome domain; `assign_tag`
-                // establishes a replacement witness after this generic kill.
                 if (body_clone.writtenLocal(stmt.*)) |target| {
-                    if (target == return_local) state.result_discriminant = .none;
+                    if (target == return_local) state.result_discriminant = .of(body_clone.constructedDiscriminant(self.store, stmt.*));
                 }
             }
             if (state.outcomeDiscriminantCount() != 0) {
@@ -5927,24 +5955,20 @@ const Certifier = struct {
                     cursor = init.next;
                 },
                 .assign_call => |assign| {
+                    const plan = self.store.stmtRowOrDefault(assign.extra).frame_call;
+                    if (plan != .ordinary) try self.checkFrameCall(plan, assign);
                     try self.applyCall(&state, assign.target, self.sigs.get(assign.proc), assign.args, assign.next);
                     cursor = assign.next;
                 },
                 .assign_call_erased => |assign_stmt| {
                     const assign = self.store.stmtRow(assign_stmt.data);
-                    if (assign.reuse_closure and assign.deferred) {
-                        return self.fail("deferred erased call transferred its closure", .{});
-                    }
                     const closure_value = try self.requireLive(&state, assign.closure);
                     const owner = LIR.erasedCallOwner(assign);
-                    // A deferred call is recorded after everything else the
-                    // frame owns is released, its reuse source's unit
-                    // included, and reads its closure alone. Every other
-                    // call reads its reuse source.
-                    const owner_value = if (assign.deferred) no_value else try self.requireLive(&state, owner);
-                    // A deferred call keeps one reference to its closure
-                    // until whoever makes the call releases it.
-                    if (assign.deferred) try self.consumeUnit(&state, closure_value, assign.closure);
+                    // Only a pending borrow owns a separate retain. Its
+                    // original owner may already have left the frame.
+                    const pending_borrow = assign.deferred and !assign.reuse_closure;
+                    const owner_value = if (pending_borrow) no_value else try self.requireLive(&state, owner);
+                    if (pending_borrow) try self.consumeUnit(&state, closure_value, assign.closure);
                     // A transferring call moves one unit of its closure's
                     // allocation into the callee; any other call borrows it.
                     try self.applyCall(&state, assign_stmt.target, arc_sig.RcSig.all_owned, assign.args, assign_stmt.next);
@@ -5998,9 +6022,6 @@ const Certifier = struct {
                     } else {
                         const operands = [_]LIR.LocalId{};
                         try self.applyAggregate(&state, assign.target, &operands);
-                    }
-                    if (self.current_return_local != null and assign.target == self.current_return_local.?) {
-                        state.result_discriminant = .some(assign.discriminant);
                     }
                     // A constructor is as strong a witness as a switch arm.
                     // Track the value (not the local) so copies see the same
@@ -6757,6 +6778,24 @@ const Certifier = struct {
         try state.addBalance(value, -1);
     }
 
+    /// No outgoing address may name bytes in the dead frame or a released carry.
+    fn checkFrameCall(self: *Certifier, plan: LIR.FrameCall, call: anytype) error{Certification}!void {
+        const caller = self.store.getProcSpecImmediate(self.current_proc);
+        const callee = self.store.getProcSpecImmediate(call.proc);
+        if (callee.takesTailCarry() != (plan != .forward) or (plan == .transfer and !caller.takesTailCarry()))
+            return self.fail("frame call {s} disagrees with carry ABI", .{@tagName(plan)});
+        if (plan == .relocate) return;
+        const args = self.store.getLocalSpan(call.args);
+        const params = self.store.getLocalSpan(callee.args);
+        for (0..params.len) |i| {
+            if (self.store.localDyn(GuardedList.at(params, i)) == null) continue;
+            const arg = GuardedList.at(args, i);
+            const dyn = self.store.localDyn(arg);
+            if (dyn == null or dyn.?.storage != .param or (caller.takesTailCarry() and plan != .transfer))
+                return self.fail("frame call forwards local {d} without its storage", .{@backingInt(arg)});
+        }
+    }
+
     fn applyCall(
         self: *Certifier,
         state: *State,
@@ -6867,7 +6906,7 @@ const Certifier = struct {
                 RestitutionReceipt,
                 receipts_buffer[0..receipt_len],
             );
-            const refinement = try arc_solve.findOutcomeRefinement(self.allocator, self.store, target, next, callee_sig.outcomes, .skipped);
+            const refinement = try arc_solve.findOutcomeRefinement(self.allocator, self.store, self.layouts, target, next, callee_sig.outcomes, .skipped);
             const info = &self.values.items[target_value];
             info.call_outcomes = callee_sig.outcomes;
             info.call_restitution = receipts;
@@ -6880,6 +6919,14 @@ const Certifier = struct {
             return self.fail("post-ARC LIR retained a consuming {s} instead of explicit RC statements", .{@tagName(assign.op)});
         }
         const arg_locals = self.store.getLocalSpan(assign.args);
+
+        if (assign.op == .erased_capture_take) {
+            const proc = self.store.getProcSpecImmediate(self.current_proc);
+            if ((proc.abi != .erased_callable and proc.abi != .erased_record) or GuardedList.borrowLen(arg_locals) != 2 or
+                proc.erased_capture_arg.get() != GuardedList.at(arg_locals, 0) or
+                proc.erased_reuse_arg.get() != GuardedList.at(arg_locals, 1) or !self.isRc(assign.target))
+                return self.fail("erased capture take must acquire the executing worker's refcounted captures", .{});
+        }
 
         // The masks in an `RcEffect` row name argument positions, but the row
         // is written next to the op's name, not its signature. A bit above the
@@ -7690,7 +7737,7 @@ test "certify accepts owned binding released once" {
     try f.certify();
 }
 
-test "certify rejects a deferred erased call that transfers its closure" {
+test "certify accepts a deferred erased call that transfers its closure" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
     const erased_callable = try f.layouts.insertErasedCallable();
@@ -7710,8 +7757,62 @@ test "certify rejects a deferred erased call that transfers its closure" {
         .next = ret,
     } }, .test_fixture);
     _ = try f.addProc(&.{closure}, body, erased_callable);
+    try f.certify();
+}
+
+test "certify rejects a second acquisition from an empty erased shell" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const owner = try f.local(try f.layouts.insertErasedCallable());
+    const capture = try f.local(.opaque_ptr);
+    const args = try f.store.addLocalSpan(&.{ capture, owner });
+    const record = try f.local(.str);
+    const op = LIR.LowLevel.erased_capture_take;
+    const effect = try f.store.addRcEffect(op.rcEffect());
+    const take = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = record,
+        .op = op,
+        .args = args,
+        .rc_effect = effect,
+        .next = try f.decrefStmt(owner, f.store.getLocal(owner).layout_idx, try f.ret(record)),
+    } }, .test_fixture);
+    const body = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = record,
+        .op = op,
+        .args = args,
+        .rc_effect = effect,
+        .next = try f.decrefStmt(record, .str, take),
+    } }, .test_fixture);
+    const plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
+    const proc = f.store.getProcSpecPtr(try f.addProc(&.{ capture, owner }, body, .str));
+    proc.abi = .erased_callable;
+    proc.erased_capture_arg = .of(capture);
+    proc.erased_reuse_arg = .of(owner);
+    proc.erased_call_args = .of(plan);
     try testing.expectError(error.Certification, f.certify());
-    try testing.expect(std.mem.find(u8, f.diag.message(), "deferred erased call transferred its closure") != null);
+    try testing.expect(std.mem.find(u8, f.diag.message(), "only be taken once") != null);
+}
+
+test "certify rejects releasing a transferred deferred call's owner again" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const layout_idx = try f.layouts.insertErasedCallable();
+    const closure = try f.local(layout_idx);
+    const result = try f.local(layout_idx);
+    const release = try f.decrefStmt(closure, layout_idx, try f.ret(result));
+    const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = result,
+        .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
+            .closure = closure,
+            .args = .empty(),
+            .arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{}),
+            .reuse_closure = true,
+            .deferred = true,
+        }),
+        .next = release,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{closure}, call, layout_idx);
+    try testing.expectError(error.Certification, f.certify());
 }
 
 test "certify accepts a deferred erased call recorded after its tag wrapper reuse source is released" {

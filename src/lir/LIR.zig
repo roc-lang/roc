@@ -1230,10 +1230,23 @@ pub const CallExtra = struct {
     /// call-graph SCC whose next statement returns `target`: the caller
     /// frame owns nothing afterwards, so every backend must replace that
     /// frame with the callee's instead of growing the stack.
-    replaces_frame: bool = false,
+    frame_call: FrameCall = .ordinary,
     /// Set by the tail-drive pass on a call whose callee can return with
     /// an erased call pending.
     drive: PendingDrive = .none,
+};
+
+/// The lifetime of dynamic argument addresses on a direct call. A carry
+/// owns raw storage, not an extra reference to any Roc value in that storage.
+pub const FrameCall = enum(u2) {
+    ordinary,
+    /// No carry is passed: every dynamic address outlives this frame.
+    forward,
+    /// Forward the addresses and hand the callee the incoming carry.
+    transfer,
+    /// Copy all dynamic arguments before releasing the old carry: even an
+    /// unchanged argument may name bytes owned by that carry.
+    relocate,
 };
 
 /// The fields of `CFStmt.crash` that most crashes leave unset, stored out of
@@ -1428,9 +1441,9 @@ pub const ErasedCallData = struct {
     result_reuse: bool = false,
     /// Set by ARC emission on an erased call whose value the procedure
     /// returns: the call is left pending instead of made. The pending call owns the
-    /// reference to `closure` this statement was given, and whoever runs
-    /// it releases that reference afterwards. `target` holds no value
-    /// until a `drive` replaces it.
+    /// reference to `closure` this statement was given. The driver transfers
+    /// it for `reuse_closure`, otherwise releases it after the call.
+    /// `target` holds no value until a `drive` replaces it.
     deferred: bool = false,
     /// Set by the tail-drive pass: where calls pending after this
     /// statement are run.
@@ -2067,11 +2080,9 @@ pub const LirProcSpec = struct {
     exported: bool = false,
     /// Set by `.boxy` lowering on a worker another module's object may call:
     /// an exported worker of a module unit, or a program's worker of the
-    /// kinds a module unit exports. A call from any emission unit may demand
-    /// its outcome-restitution variant (design.md "Outcome-Conditioned
-    /// Argument Restitution", published outcome variants), and an exported
-    /// one's object always emits and exports that variant.
-    outcome_publisher: bool = false,
+    /// kinds a module unit exports. ARC selects the same cross-unit base and
+    /// outcome conventions whether or not the worker has a linker export.
+    module_worker: bool = false,
     /// Exact self-tail sites produced by LIR construction, consumed by TRMC/TCE.
     tail_calls: OptionalTailCalls = .none,
     /// Set by the tail-drive pass on an erased-callable procedure with an
@@ -2096,8 +2107,8 @@ pub const LirProcSpec = struct {
     /// every member of a group one storage contract for them.
     tail_group: collections.OptionalId(TailGroupId) = .none,
     /// Whether this procedure takes a tail carry (`takesTailCarry`). ARC sets
-    /// it on every Roc-ABI member of a `tail_group` with a dynamic parameter,
-    /// since a frame-replacing call can enter exactly those; a body-less
+    /// it on dynamic-parameter members of a group that relocates storage.
+    /// Wholly forwarding groups need no owner to pass or release. A body-less
     /// `external` proc gets the value its object published, because the
     /// group is a fact of bodies only the defining unit holds.
     tail_carry: bool = false,
@@ -2170,7 +2181,7 @@ pub const LirProcSpec = struct {
     /// its arguments and dynamic result holding the storage a frame-replacing
     /// call moved its dynamic arguments into, because their bytes lived in
     /// the frame it replaced. The procedure releases its carry when it
-    /// returns or replaces its own frame. Every other caller passes none.
+    /// returns, or transfers it on a `transfer` edge. Ordinary callers pass null.
     pub fn takesTailCarry(self: LirProcSpec) bool {
         return self.abi == .roc and self.tail_carry;
     }

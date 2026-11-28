@@ -657,31 +657,6 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         }
         try solution.adoptHeldBindings(store.allocator, held.items);
     }
-    // A borrowed parameter whose owned variant takes every stored unit on
-    // every returning path is owned by the base signature: the borrowed base
-    // would retain each unit where the variant takes it, so borrowing saves
-    // no caller any work and would only emit a second body. A position that
-    // lends the return, or holds a demand hole, keeps its borrowed mode.
-    // Exported workers additionally own positions with a field-take benefit:
-    // their importers cannot demand an owned variant. The producer commits
-    // this convention independently of callers, which retain kept arguments.
-    for (0..store.procSpecCount()) |proc_index| {
-        const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        if (solution.isPinnedProc(proc)) continue;
-        const sig = solution.sigOf(proc);
-        var mask = dismantles.ownedOnlyParamTotals(proc);
-        if (store.getProcSpecImmediate(proc).exported) mask |= dismantles.ownedOnlyParamBenefits(proc);
-        mask &= sig.borrowed_params;
-        if (sig.ret_mode == .borrowed) mask &= ~sig.ret_lenders;
-        if (mask == 0) continue;
-        const params = store.getLocalSpan(store.getProcSpecImmediate(proc).args);
-        for (0..@min(GuardedList.borrowLen(params), arc_sig.tracked_param_count)) |position| {
-            const bit = arc_sig.paramBit(position).?;
-            if ((mask & bit) != 0 and layouts.layoutHoldsHole(store.getLocal(GuardedList.at(params, position)).layout_idx)) mask &= ~bit;
-        }
-        if (mask != 0) solution.ownParams(proc, mask);
-    }
-
     step_started = timingLap(timing, step_started, .signatures);
     const base_proc_count = store.procSpecCount();
     const sources = try store.allocator.alloc(SourceCache, base_proc_count);
@@ -1116,30 +1091,35 @@ fn recordProcedureFacts(store: *LirStore, solution: *const arc_solve.Solution) R
 /// Stamp the procedures joined by same-SCC tail calls with their group. The
 /// group is the connected component of those calls, named by its
 /// lowest-numbered member; ownership variants inherit their source's group.
-/// A Roc-ABI member with a dynamic parameter takes a tail carry
-/// (`LIR.LirProcSpec.takesTailCarry`), which variants inherit too.
+/// Only groups which introduce new dynamic storage need a carry ABI.
 fn recordTailGroups(store: *LirStore, solution: *const arc_solve.Solution) ResourceError!void {
     const proc_count = store.procSpecCount();
     var groups = try collections.DisjointSets.init(store.allocator, proc_count);
     defer groups.deinit(store.allocator);
     var grouped = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, proc_count);
     defer grouped.deinit(store.allocator);
+    var relocates = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, proc_count);
+    defer relocates.deinit(store.allocator);
 
     for (0..proc_count) |proc_index| {
         const caller: LIR.LirProcSpecId = @fromBackingInt(@as(u32, @intCast(proc_index)));
         for (solution.tailCallsOf(caller)) |tail_call| {
             const callee = store.getCFStmtImmediate(tail_call.stmt).assign_call.proc;
+            if (tail_call.frame_call == .relocate) relocates.set(proc_index);
             grouped.set(proc_index);
             grouped.set(@backingInt(callee));
             groups.unite(@intCast(proc_index), @backingInt(callee));
         }
     }
+    var origins = relocates.iterator(.{});
+    while (origins.next()) |i| relocates.set(groups.find(@intCast(i)));
     var members = grouped.iterator(.{});
     while (members.next()) |proc_index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@as(u32, @intCast(proc_index)));
         const spec = store.getProcSpecPtr(proc);
-        spec.tail_group = .some(@fromBackingInt(groups.find(@intCast(proc_index))));
-        spec.tail_carry = spec.abi == .roc and hasDynamicParam(store, spec.args);
+        const group = groups.find(@intCast(proc_index));
+        spec.tail_group = .some(@fromBackingInt(group));
+        spec.tail_carry = relocates.isSet(group) and spec.abi == .roc and hasDynamicParam(store, spec.args);
     }
 }
 
@@ -2215,9 +2195,7 @@ const ArcPlanStep = struct {
     /// effect is that variant's own.
     low_level_selection: ?LIR.LowLevel = null,
     retain_call_result: bool = false,
-    /// The call is a same-SCC tail call whose caller frame owns nothing once
-    /// the call starts.
-    replaces_frame: bool = false,
+    tail: packed struct { direct: LIR.FrameCall = .ordinary, defer_erased: bool = false } = .{},
     call_callee: collections.OptionalId(LIR.LirProcSpecId) = .none,
     call_demanded: arc_sig.RcSig = arc_sig.RcSig.all_owned,
     variant_request: collections.OptionalId(VariantRequestId) = .none,
@@ -2250,7 +2228,7 @@ const ArcPlanStep = struct {
         self.unique_args = 0;
         self.low_level_selection = null;
         self.retain_call_result = false;
-        self.replaces_frame = false;
+        self.tail = .{};
         self.call_callee = .none;
         self.call_demanded = arc_sig.RcSig.all_owned;
         self.variant_request = .none;
@@ -2978,15 +2956,15 @@ const Inserter = struct {
             } }, origin),
             .assign_call => |assign| blk: {
                 if (step.retain_call_result) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .borrowed_call_result }, next);
-                if (step.replaces_frame) {
+                if (step.tail.direct != .ordinary) {
                     const returned = self.store.getCFStmtImmediate(next);
                     if (returned.* != .ret or returned.ret.value != assign.target) {
                         arcInvariant("ARC frame-replacing call was not immediately followed by the return of its result");
                     }
                 }
                 var extra = self.store.stmtRowOrDefault(assign.extra);
-                const extra_row = if (extra.replaces_frame == step.replaces_frame) assign.extra else row: {
-                    extra.replaces_frame = step.replaces_frame;
+                const extra_row = if (extra.frame_call == step.tail.direct) assign.extra else row: {
+                    extra.frame_call = step.tail.direct;
                     break :row try self.store.addOptionalStmtRow(LIR.CallExtra, extra);
                 };
                 break :blk try self.store.addCFStmt(.{ .assign_call = .{
@@ -3003,7 +2981,7 @@ const Inserter = struct {
             .assign_call_erased => |assign_stmt| blk_assign: {
                 const assign = self.store.stmtRow(assign_stmt.data);
                 break :blk_assign blk: {
-                    if (step.replaces_frame) self.deferred_erased_call = true;
+                    if (step.tail.defer_erased) self.deferred_erased_call = true;
                     break :blk try self.store.addCFStmt(.{ .assign_call_erased = .{
                         .target = assign_stmt.target,
                         .data = try self.store.addStmtRow(LIR.ErasedCallData, .{
@@ -3013,7 +2991,7 @@ const Inserter = struct {
                             .reuse_closure = step.transfer_closure,
                             .reuse_source = assign.reuse_source,
                             .result_reuse = assign.result_reuse,
-                            .deferred = step.replaces_frame,
+                            .deferred = step.tail.defer_erased,
                         }),
                         .next = next,
                     } }, origin);
@@ -3114,10 +3092,10 @@ const Inserter = struct {
             .dyn => |dyn_stmt| blk: {
                 const op = self.store.stmtRow(dyn_stmt.data);
                 if (op == .call_erased) {
-                    if (step.replaces_frame) self.deferred_erased_call = true;
+                    if (step.tail.defer_erased) self.deferred_erased_call = true;
                     var call = op;
                     call.call_erased.reuse_closure = step.transfer_closure;
-                    call.call_erased.deferred = step.replaces_frame;
+                    call.call_erased.deferred = step.tail.defer_erased;
                     break :blk try self.store.addCFStmt(.{ .dyn = .{
                         .target = dyn_stmt.target,
                         .data = try self.store.addStmtRow(LIR.DynOp, call),
@@ -3474,7 +3452,7 @@ const Inserter = struct {
                     step.call_callee = .some(assign.proc);
                     step.call_demanded = transfer.args.demanded;
                     self.death_scratch.clearRetainingCapacity();
-                    if (tail_call != null) {
+                    if (tail_call) |fact| {
                         // The recursive frame is replaced at this call. The
                         // call result is not produced until afterwards; every
                         // other unit still in the exact state belongs to the
@@ -3482,7 +3460,10 @@ const Inserter = struct {
                         try self.releaseTailCallerFrame(&segment.owned, assign.target, self.death_scratch);
                         try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
                         step.pre_release_extra_reason = .some(.tail_call_frame);
-                        step.replaces_frame = self.sharesReturnContract(assign);
+                        step.tail.direct = if (fact.frame_call == .forward and self.store.getProcSpecImmediate(assign.proc).takesTailCarry())
+                            .transfer
+                        else
+                            fact.frame_call;
                     } else {
                         try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, transfer.args.demanded.ret_mode, assign.next, self.death_scratch);
                         try self.postStmtDeaths(&segment.owned, &.{}, assign.args, assign.next, self.death_scratch);
@@ -3497,23 +3478,19 @@ const Inserter = struct {
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign_stmt.target) else null;
                     for (transfer.args.retain_args) |arg| try self.appendStepRetain(step, .{ .local = arg, .reason = .owned_param_demand });
                     self.death_scratch.clearRetainingCapacity();
+                    const owner = LIR.erasedCallOwner(assign);
+                    if (self.ownsUnit(&segment.owned, owner) and !try self.groupUsedInPath(assign_stmt.next, owner)) {
+                        _ = try self.takeUnit(&segment.owned, owner);
+                        step.transfer_closure = true;
+                    }
                     if (self.erasedCallIsDeferred(assign_stmt)) {
-                        // The call is left pending and made after this frame
-                        // returns. It keeps a retained closure reference;
-                        // everything else the frame owns ends first.
-                        try self.appendStepRetain(step, .{ .local = assign.closure, .reason = .closure_call_capture });
+                        // The pending record needs one unit even for a borrow.
+                        if (!step.transfer_closure) try self.appendStepRetain(step, .{ .local = assign.closure, .reason = .closure_call_capture });
                         try self.releaseTailCallerFrame(&segment.owned, assign_stmt.target, self.death_scratch);
                         try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
                         step.pre_release_extra_reason = .some(.tail_call_frame);
-                        step.replaces_frame = true;
+                        step.tail.defer_erased = true;
                     } else {
-                        // The closure's unit moves into the callee exactly
-                        // when it dies here; otherwise the call borrows it.
-                        const owner = LIR.erasedCallOwner(assign);
-                        if (self.ownsUnit(&segment.owned, owner) and !try self.groupUsedInPath(assign_stmt.next, owner)) {
-                            _ = try self.takeUnit(&segment.owned, owner);
-                            step.transfer_closure = true;
-                        }
                         try self.noteCallResultDeathIfUnused(&segment.owned, assign_stmt.target, .owned, assign_stmt.next, self.death_scratch);
                         const singles = [_]LIR.LocalId{ assign.closure, owner };
                         try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign_stmt.next, self.death_scratch);
@@ -3535,14 +3512,19 @@ const Inserter = struct {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const borrowed_variant = assign.op.arcBorrowedResultVariant();
                     var use_borrowed = borrowed_variant != null and self.isBindingBorrowed(assign.target);
-                    if (assign.op.deadLenderArg()) |lender_position| {
+                    // Child ownership need not wait for the final use of the
+                    // hidden owner. The worker reads its capture record once;
+                    // the remaining owner can only be dropped or repacked.
+                    const take_capture = assign.op == .erased_capture_load and self.localContainsRefcounted(assign.target) and
+                        !self.isBindingBorrowed(assign.target) and self.store.getProcSpecImmediate(self.current_source_proc).erased_capture_arg != .none;
+                    if (!take_capture) if (assign.op.deadLenderArg()) |lender_position| {
                         const args = self.store.getLocalSpan(assign.args);
                         const lender = GuardedList.at(args, lender_position);
                         use_borrowed = !self.options.consume_dead_boxes or
                             !self.ownsUnit(&segment.owned, lender) or
                             try self.groupUsedInPathExcept(assign.next, lender, assign.target);
-                    }
-                    const selected_op = if (use_borrowed) borrowed_variant.? else assign.op;
+                    };
+                    const selected_op = if (take_capture) LIR.LowLevel.erased_capture_take else if (use_borrowed) borrowed_variant.? else assign.op;
                     const selected_effect = if (borrowed_variant != null) selected_op.rcEffect() else self.store.stmtRow(assign.rc_effect);
                     const transfer = try self.transferForLowLevel(
                         &segment.owned,
@@ -4040,18 +4022,6 @@ const Inserter = struct {
                 if (join.id == stmt.jump.target) break join.body;
             } else return false;
         }
-    }
-
-    /// Whether the callee of a tail call can return on the current
-    /// procedure's behalf: both use the Roc procedure ABI and the callee's
-    /// value is the procedure's whole result.
-    fn sharesReturnContract(self: *const Inserter, call: anytype) bool {
-        const caller = self.store.getProcSpec(self.current_proc);
-        const callee = self.store.getProcSpec(call.proc);
-        return caller.abi == .roc and callee.abi == .roc and
-            callee.hosted.get() == null and
-            self.store.getLocal(call.target).layout_idx == caller.ret_layout and
-            callee.ret_layout == caller.ret_layout;
     }
 
     /// Ends the exact ownership state of a caller frame before a same-SCC
@@ -5725,7 +5695,7 @@ const Inserter = struct {
                     try self.releaseTailCallerFrame(owned, target, self.death_scratch);
                     try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
                     step.pre_release_extra_reason = .some(.tail_call_frame);
-                    step.replaces_frame = true;
+                    step.tail.defer_erased = true;
                     return;
                 }
                 try self.noteCallResultDeathIfUnused(owned, target, .owned, next, self.death_scratch);
@@ -7028,7 +6998,7 @@ const Inserter = struct {
         sig: arc_sig.RcSig,
     ) ResourceError!?OutcomeRestitution {
         const bit = arc_sig.paramBit(position) orelse return null;
-        const refinement = try arc_solve.findOutcomeRefinement(self.emission_allocator, self.store, target, next, sig.outcomes, .absent) orelse return null;
+        const refinement = try arc_solve.findOutcomeRefinement(self.emission_allocator, self.store, self.layouts, target, next, sig.outcomes, .absent) orelse return null;
         const switch_stmt = self.store.getCFStmtImmediate(refinement).switch_stmt;
         const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
         const outcomes = self.solution.sigTable().outcomesOf(sig);
@@ -7092,7 +7062,7 @@ const Inserter = struct {
             self.outcomeArgumentsHaveDistinctPlaces(span, outcome_sig);
         const outcome_mask = self.outcomeRestitutableMask(outcome_sig);
         const outcome_refinement = if (outcome_places_distinct)
-            try arc_solve.findOutcomeRefinement(self.emission_allocator, self.store, target, next, outcome_sig.outcomes, .absent)
+            try arc_solve.findOutcomeRefinement(self.emission_allocator, self.store, self.layouts, target, next, outcome_sig.outcomes, .absent)
         else
             null;
 
@@ -8756,8 +8726,9 @@ test "arc insertion boundary exists" {
     std.testing.refAllDecls(@This());
 }
 
-test "RC exported field-take convention owns conditional partial consumers" {
-    for ([_]bool{ false, true }) |exported| {
+test "RC cross-unit field-take convention owns conditional partial consumers" {
+    const Boundary = enum { private, program_worker, exported };
+    for (std.enums.values(Boundary)) |boundary| {
         var f = try ArcTest.init(testing.allocator);
         defer f.deinit();
         const pair_layout = try f.layouts.putStructFields(&.{
@@ -8777,17 +8748,34 @@ test "RC exported field-take convention owns conditional partial consumers" {
         ));
         const untouched = try f.assignList(empty, &.{}, try f.ret(empty));
         const proc = try f.addProc(&.{ pair, condition }, try f.switchStmt(condition, consuming, untouched, null), f.list_i64);
-        f.store.getProcSpecPtr(proc).exported = exported;
+        f.store.getProcSpecPtr(proc).exported = boundary == .exported;
+        f.store.getProcSpecPtr(proc).module_worker = boundary != .private;
+        // An isolated helper can never request a variant. Its only use of
+        // the argument is this forward, so it should agree with the worker's
+        // actual base convention, including a producer-selected promotion.
+        const incoming = try f.local(pair_layout);
+        const flag = try f.local(.i64);
+        const result = try f.local(f.list_i64);
+        const forward = try f.store.addCFStmt(.{ .assign_call = .{
+            .proc = proc,
+            .target = result,
+            .args = try f.span(&.{ incoming, flag }),
+            .next = try f.ret(result),
+        } }, .test_fixture);
+        const helper = try f.addProc(&.{ incoming, flag }, forward, f.list_i64);
+        f.store.getProcSpecPtr(helper).emission_unit = .isolated;
         _ = try insert(&f.store, &f.layouts, .{ .specialize = false });
 
-        const borrowed: u64 = if (exported) 0 else 1;
+        const borrowed: u64 = @intFromBool(boundary == .private);
         try testing.expectEqual(borrowed, f.store.getProcSpecImmediate(proc).rc_borrowed_params);
-        try testing.expectEqual(@as(usize, if (exported) 0 else 1), f.countRc(field, .incref));
-        try testing.expectEqual(@as(usize, 1), f.store.procSpecCount());
+        try testing.expectEqual(borrowed, f.store.getProcSpecImmediate(helper).rc_borrowed_params);
+        try f.expectRc(incoming, 0, 0, 0);
+        try testing.expectEqual(@as(usize, @intCast(borrowed)), f.countRc(field, .incref));
+        try testing.expectEqual(@as(usize, 2), f.store.procSpecCount());
         // Certification is explicit so the ReleaseFast unit test checks both
         // paths, including the untouched residual field and early return.
         var diag: arc_certify.Diagnostic = .{};
-        const sigs = [_]arc_sig.RcSig{.{ .borrowed_params = @intCast(borrowed) }};
+        const sigs: [2]arc_sig.RcSig = @splat(.{ .borrowed_params = @intCast(borrowed) });
         try arc_certify.certifyStore(testing.allocator, &f.store, &f.layouts, .{ .sigs = &sigs }, &.{}, &diag);
     }
 }
@@ -16460,7 +16448,7 @@ test "RC emission units: a call demands an outcome-restitution variant within it
         _ = try addFailureReadingCaller(&f, .{ .callee = callee, .result_layout = try_list, .input = input, .reads_on_failure = case.reads_on_failure, .unit = case.caller });
         f.store.getProcSpecPtr(callee).emission_unit = case.callee;
         f.store.getProcSpecPtr(callee).exported = case.exported;
-        f.store.getProcSpecPtr(callee).outcome_publisher = case.exported or case.publisher;
+        f.store.getProcSpecPtr(callee).module_worker = case.exported or case.publisher;
 
         const base_proc_count = f.store.procSpecCount();
         _ = try insert(&f.store, &f.layouts, .{ .specialize = case.specialize });
@@ -16619,7 +16607,7 @@ test "RC published outcome variant: a failure join reached after a retained subl
     const worker = try f.addProc(&.{bytes}, body, try_list);
     f.store.getProcSpecPtr(worker).emission_unit = LIR.EmissionUnit.module(0);
     f.store.getProcSpecPtr(worker).exported = true;
-    f.store.getProcSpecPtr(worker).outcome_publisher = true;
+    f.store.getProcSpecPtr(worker).module_worker = true;
 
     const base_proc_count = f.store.procSpecCount();
     _ = try insert(&f.store, &f.layouts, .{ .specialize = false });
@@ -20648,6 +20636,48 @@ const DynFixture = struct {
         }
     }
 };
+
+test "ARC descriptor-backed outcome publishes only instantiation-independent discriminants" {
+    for ([_]bool{ false, true }) |fixed| {
+        var d = try DynFixture.init();
+        defer d.deinit();
+        const desc = try d.desc();
+        const input = try d.f.local(.str);
+        const choice = try d.f.local(.u32);
+        const result = try d.value(desc, .result);
+        const success = try d.op(result, .{ .tag = .{
+            .desc = desc,
+            .discriminant = .{ .immediate = 1 },
+            .payloads = try d.f.span(&.{input}),
+        } }, try d.f.ret(result));
+        const failure = try d.op(result, .{ .tag = .{
+            .desc = desc,
+            .discriminant = if (fixed) .{ .immediate = 0 } else .{ .local = choice },
+            .payloads = try d.f.span(&.{}),
+        } }, try d.f.ret(result));
+        const proc = try d.proc(&.{ input, choice, desc }, try d.f.switchStmt(choice, success, failure, null), d.dynamic, result);
+        const spec = d.f.store.getProcSpecPtr(proc);
+        spec.exported = true;
+        spec.module_worker = true;
+        try d.run(&.{});
+        try expectU32Span(&d.f.store, d.f.store.getProcSpec(proc).rc_outcomes, if (fixed) &.{ 0, 1, 1, 0 } else &.{});
+    }
+}
+
+test "ARC descriptor-backed outcome requires a tracked result at its call site" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    for ([_]layout_mod.Idx{ .u64, f.list_i64 }) |payload| {
+        const result_layout = try f.layouts.putTagUnion(&.{ try f.layouts.ensureZstLayout(), payload });
+        const result = try f.local(result_layout);
+        const disc = try f.local(.u32);
+        const ret = try f.ret(result);
+        const refine = try f.switchStmt(disc, ret, ret, null);
+        const read = try f.assignDiscriminant(disc, result, refine);
+        const actual = try arc_solve.findOutcomeRefinement(testing.allocator, &f.store, &f.layouts, result, read, .{ .start = 0, .len = 2 }, .absent);
+        try testing.expectEqual(if (payload == .u64) null else @as(?LIR.CFStmtId, refine), actual);
+    }
+}
 
 test "ARC dynamic product takes independently stored fields and preserves aliases" {
     for ([_]bool{ false, true }) |keep_record| {
