@@ -764,7 +764,7 @@ test "Boxy scope lookup preserves first positions across sparse checked ids" {
     defer positions.deinit(testing.allocator);
 
     const bound = [_]TypeId{ @fromBackingInt(10), @fromBackingInt(11), @fromBackingInt(12), @fromBackingInt(13), @fromBackingInt(14) };
-    const env: Env = .{ .module = @fromBackingInt(0), .vars = &vars, .bound = &bound, .positions = &positions };
+    const env: Env = .{ .module = @fromBackingInt(2), .vars = &vars, .bound = &bound, .positions = &positions };
     try testing.expectEqual(@as(?TypeId, bound[0]), env.lookup(env.module, synthesized));
     try testing.expectEqual(@as(?TypeId, bound[1]), env.lookup(env.module, distant));
     try testing.expectEqual(@as(?TypeId, bound[2]), env.lookup(env.module, source));

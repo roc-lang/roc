@@ -525,8 +525,7 @@ fn lockSlot(self: *Self) *ThreadSlot {
     }
 }
 
-fn alloc(ctx: *anyopaque, len: usize, alignment: Alignment, ret_addr: usize) ?[*]u8 {
-    _ = ret_addr;
+fn alloc(ctx: *anyopaque, len: usize, alignment: Alignment, _: usize) ?[*]u8 {
     const self: *Self = @ptrCast(@alignCast(ctx));
     const class = classOf(len, alignment) orelse {
         @branchHint(.unlikely);
@@ -554,26 +553,21 @@ fn alloc(ctx: *anyopaque, len: usize, alignment: Alignment, ret_addr: usize) ?[*
 }
 
 /// Growth and shrinkage stay in place while the class is unchanged.
-fn resize(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, ret_addr: usize) bool {
-    _ = ctx;
-    _ = ret_addr;
+fn resize(_: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, _: usize) bool {
     const class = classOf(memory.len, alignment);
     const new_class = classOf(new_len, alignment);
     if (class == null and new_class == null) return PageAllocator.realloc(memory, alignment, new_len, false) != null;
     return class == new_class;
 }
 
-fn remap(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
-    _ = ctx;
-    _ = ret_addr;
+fn remap(_: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, _: usize) ?[*]u8 {
     const class = classOf(memory.len, alignment);
     const new_class = classOf(new_len, alignment);
     if (class == null and new_class == null) return PageAllocator.realloc(memory, alignment, new_len, true);
     return if (class == new_class) memory.ptr else null;
 }
 
-fn free(ctx: *anyopaque, memory: []u8, alignment: Alignment, ret_addr: usize) void {
-    _ = ret_addr;
+fn free(ctx: *anyopaque, memory: []u8, alignment: Alignment, _: usize) void {
     const self: *Self = @ptrCast(@alignCast(ctx));
     const class = classOf(memory.len, alignment) orelse {
         @branchHint(.unlikely);
