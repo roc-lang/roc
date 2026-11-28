@@ -27945,7 +27945,7 @@ and mode constraints because they cannot participate in unbounded recursive
 frame growth.
 
 Emission then states the result explicitly. A same-SCC tail call whose callee
-can return on the caller's behalf is emitted with `replaces_frame` set: both
+can return on the caller's behalf is emitted with a non-ordinary `frame_call`: both
 procedures use the Roc procedure ABI, the callee is not hosted, its result is
 the caller's whole result at the same layout, and neither returns a runtime
 descriptor with it. Emission checks that the statement after such a call is
@@ -27953,9 +27953,8 @@ the return of its target with no ownership statement between them. Every
 procedure that makes or receives a same-SCC tail call also carries a
 `tail_group`: the connected component of those calls, which ownership variants
 inherit from their source procedure. ARC also commits `LirProcSpec.tail_carry`
-on every Roc-ABI member of a group with a dynamic parameter: a frame-replacing
-call can enter exactly those, so each takes a tail carry
-(`LirProcSpec.takesTailCarry`, Frame-Replacing Calls). The carry is a hidden
+on Roc-ABI members with dynamic parameters **only when the group has a
+relocating edge** (Frame-Replacing Calls). The carry is a hidden
 parameter, so it is part of the procedure's calling contract. Variants inherit
 it, a module unit publishes it in each exported worker's export record, and an
 importer binds it onto the worker's body-less procedure, whose group only the
@@ -27963,10 +27962,10 @@ defining unit's bodies show. Backends read the fact and never derive it.
 
 ### Frame-Replacing Calls
 
-A `replaces_frame` call is a guarantee, not an optimization: a cycle of calls
+A frame-replacing call is a guarantee, not an optimization: a cycle of calls
 that are all in tail position runs in constant stack space in every execution
-mode. Backends do not look for tail positions. They follow the flag, and on a
-flagged call the caller's frame ends before the callee's begins, the callee
+mode. Backends do not look for tail positions. They follow the plan, and on a
+frame-replacing call the caller's frame ends before the callee's begins, the callee
 returns directly to the caller's caller, and the statement after the call is
 never emitted. A stack trace taken in the callee therefore does not contain
 the caller, exactly as a loop does not contain its earlier iterations. When
@@ -27975,6 +27974,20 @@ address the caller was given for its own.
 
 What each backend must arrange is where the callee's arguments live once the
 caller's frame is gone.
+
+For `.boxy`, ownership of the **bytes holding a value** is distinct from
+ownership of the value. ARC stamps one storage plan per edge, irrespective
+of arity. A dynamic parameter holds an incoming address; the ordinary caller
+or an incoming carry owns those bytes. When every dynamic argument is such
+a parameter, `forward` passes its address unchanged, or `transfer` passes
+both the addresses and the incoming carry when the callee takes one. A
+closed local, frame local or view passed to a dynamic parameter instead
+requires `relocate`: copy **all** dynamic arguments into one new carry before
+releasing the old one, which may own even the unchanged arguments. This
+never retains or drops the Roc values in those bytes. A wholly forwarding
+group has no carry ABI, so even its base returns have no carry to free.
+Ordinary calls into a carry-taking procedure pass null; its base return
+releases its carry after writing the result.
 
 - The dev backend gives every Roc-ABI procedure ownership of its argument
   block: the words passed on the stack, followed by storage for every
@@ -27986,14 +27999,6 @@ caller's frame is gone.
   the frame has been read, because the two overlap when the callee's block is
   the larger. The part of the teardown that depends on the final callee-saved
   set and frame size is emitted once per procedure, after its body.
-  A `.boxy` procedure's dynamic parameters are addresses whose bytes have
-  sizes only descriptors know, so they cannot sit in the block. A procedure
-  with a dynamic parameter and a `tail_group` takes a hidden carry after its
-  other parameters (`LirProcSpec.takesTailCarry`): a frame-replacing call
-  copies every argument of a dynamic parameter into one fresh carry
-  allocation and passes those addresses, an ordinary call passes none, from
-  another unit included, and the callee releases its carry when it returns or
-  replaces its own frame.
 - The LLVM backend emits `musttail` calls between `tailcc` functions. An
   argument passed in memory cannot point into the caller's frame, so each tail
   group whose members take such arguments shares one block of storage for
@@ -28030,10 +28035,9 @@ returns, and every ordinary call to a tail-group member is followed by a call
 to the group's driver with the address of the call's result.
 
 Both driver schemes carry `.boxy` values the way a frame-replacing call does
-everywhere else. The call moves its dynamic arguments into one fresh carry,
-leaves their addresses and the carry in static storage for the driver to pass
-on, and releases its own carry once it has read its arguments, since they may
-live there. A dynamic result is written to the storage the entry call passed,
+everywhere else. The call leaves the planned addresses and, if the callee
+takes one, their carry in static storage for the driver to pass on.
+A dynamic result is written to the storage the entry call passed,
 so that one address reaches every member of the chain: the LLVM driver already
 has it as the address of the call's result, and the WebAssembly backend's
 frame-replacing call leaves it in the tail area, because that backend's driver

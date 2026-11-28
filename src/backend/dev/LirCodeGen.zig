@@ -14107,16 +14107,14 @@ pub fn LirCodeGen(comptime machine_abi: Abi) type {
                 );
             }
 
-            // Dynamic arguments move into a carry the callee owns, because
-            // their bytes may live in the frame being replaced; then this
-            // procedure's own carry, which they may have lived in, is released.
-            const moved = try self.allocator.alloc(i32, arg_refs.len);
+            const moved = try self.allocator.alloc(i32, if (call.frame_call == .relocate) arg_refs.len else 0);
             defer self.allocator.free(moved);
-            const carry_arg: ?i32 = if (proc_spec.takesTailCarry())
-                try self.emitTailCarry(arg_refs, param_refs, moved)
-            else
-                null;
-            try self.emitFreeCarry();
+            const carry_arg: ?i32 = switch (call.frame_call) {
+                .ordinary => unreachable,
+                .forward => null,
+                .transfer => self.carry_slot.?,
+                .relocate => try self.emitTailCarry(arg_refs, param_refs, moved),
+            };
 
             const arg_infos_start = self.scratch_arg_infos.top();
             defer self.scratch_arg_infos.clearFrom(arg_infos_start);
@@ -14125,7 +14123,8 @@ pub fn LirCodeGen(comptime machine_abi: Abi) type {
                 const param_ref = GuardedList.at(param_refs, i);
                 const expected_layout = self.localLayout(param_ref);
                 if (self.localDyn(param_ref) != null) {
-                    try self.scratch_arg_infos.append(.{ .loc = self.stackLocationForLayout(expected_layout, moved[i]), .layout_idx = expected_layout, .num_regs = 1 });
+                    const address = if (call.frame_call == .relocate) moved[i] else self.localSlot(arg_ref);
+                    try self.scratch_arg_infos.append(.{ .loc = self.stackLocationForLayout(expected_layout, address), .layout_idx = expected_layout, .num_regs = 1 });
                     continue;
                 }
                 const raw_arg_loc = try self.emitValueLocal(arg_ref);
@@ -14178,6 +14177,8 @@ pub fn LirCodeGen(comptime machine_abi: Abi) type {
                 else
                     try self.freezeCallArg(info, pbp_plan.slice[i]);
             }
+
+            if (call.frame_call != .transfer) try self.emitFreeCarry();
 
             // The callee's block is staged in this frame and moved into place
             // only once nothing else in the frame is needed: the two can
@@ -21200,8 +21201,9 @@ pub fn LirCodeGen(comptime machine_abi: Abi) type {
                             try work.append(wa, .{ .node = uninit.next });
                         },
 
-                        .assign_call => |assign| if (self.store.stmtRowOrDefault(assign.extra).replaces_frame) {
+                        .assign_call => |assign| if (self.store.stmtRowOrDefault(assign.extra).frame_call != .ordinary) {
                             try self.generateTailCall(.{
+                                .frame_call = self.store.stmtRowOrDefault(assign.extra).frame_call,
                                 .proc = assign.proc,
                                 .args = assign.args,
                                 .ret_layout = self.localLayout(assign.target),

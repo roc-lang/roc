@@ -716,6 +716,7 @@ pub const Interpreter = struct {
         /// Arguments passed to dynamic parameters as addresses of bytes the
         /// ending frame owns. The bytes move with the call.
         relocations: []const TailCallRelocation = &.{},
+        transfers_carry: bool = false,
     };
 
     const TailCallRelocation = struct {
@@ -1965,14 +1966,15 @@ pub const Interpreter = struct {
         arg_layouts: []const layout_mod.Idx,
     ) Error!EvalProcResult {
         const entry_mark = self.scratch.mark();
+        var carry_end = entry_mark;
         var step = try self.evalProcActivation(proc_id, proc_spec, args, arg_layouts);
         while (true) switch (step) {
             .result => |result| return result,
             .tail_call => |saved| {
-                // Nothing the ended activation left in scratch is live, so a
-                // chain of frame-replacing calls runs in bounded scratch.
-                self.scratch.restore(entry_mark);
-                const call = try self.copyTailCallToScratch(saved);
+                // Only the incoming carry can survive a transfer. Staging
+                // the next call above it never accumulates activation data.
+                self.scratch.restore(if (saved.transfers_carry) carry_end else entry_mark);
+                const call = try self.copyTailCallToScratch(saved, &carry_end);
                 self.pending_dyn_result = call.dyn_result;
                 step = try self.evalProcActivation(call.proc, self.store.getProcSpec(call.proc), call.args, call.arg_layouts);
             },
@@ -2027,21 +2029,24 @@ pub const Interpreter = struct {
             .arg_layouts = layouts[0..call.arg_layouts.len],
             .dyn_result = call.dyn_result,
             .relocations = relocations[0..call.relocations.len],
+            .transfers_carry = call.transfers_carry,
         };
     }
 
     /// Move a saved frame-replacing call into scratch, where it stays until
     /// the activation it starts ends.
-    fn copyTailCallToScratch(self: *LirInterpreter, saved: TailCall) Error!TailCall {
+    fn copyTailCallToScratch(self: *LirInterpreter, saved: TailCall, carry_end: *ValueStack.Mark) Error!TailCall {
+        for (saved.relocations) |relocation| {
+            const moved = try self.allocAlignedByteSliceUninit(relocation.size, .fromByteUnits(@intCast(relocation.alignment)));
+            const cell = saved.args[relocation.arg];
+            @memcpy(moved, readAddress(cell)[0..relocation.size]);
+            cell.write(usize, @intFromPtr(moved.ptr));
+        }
+        carry_end.* = self.scratch.mark();
         const args = try self.evalAllocator().alloc(Value, saved.args.len);
         const arg_layouts = try self.evalAllocator().dupe(layout_mod.Idx, saved.arg_layouts);
         for (saved.args, saved.arg_layouts, args) |arg, arg_layout, *copy| {
             copy.* = if (arg.isZst()) arg else try self.materializeLocalValue(arg, arg_layout);
-        }
-        for (saved.relocations) |relocation| {
-            const moved = try self.allocAlignedByteSliceUninit(relocation.size, .fromByteUnits(@intCast(relocation.alignment)));
-            @memcpy(moved, readAddress(args[relocation.arg])[0..relocation.size]);
-            args[relocation.arg].write(usize, @intFromPtr(moved.ptr));
         }
         return .{ .proc = saved.proc, .args = args, .arg_layouts = arg_layouts, .dyn_result = saved.dyn_result };
     }
@@ -2543,10 +2548,10 @@ pub const Interpreter = struct {
                 .assign_call => |assign| {
                     const extra = self.store.stmtRowOrDefault(assign.extra);
                     const callee = self.store.getProcSpecImmediate(assign.proc);
-                    const call_args = try self.prepareCallArgs(frame, callee, self.store.getLocalSpan(assign.args), extra.replaces_frame);
+                    const call_args = try self.prepareCallArgs(frame, callee, self.store.getLocalSpan(assign.args), extra.frame_call);
                     const arg_values = call_args.values;
                     const arg_layouts = call_args.layouts;
-                    if (extra.replaces_frame) {
+                    if (extra.frame_call != .ordinary) {
                         return .{ .tail_call = .{
                             .proc = assign.proc,
                             .args = arg_values,
@@ -2556,6 +2561,7 @@ pub const Interpreter = struct {
                                 .{@backingInt(frame.proc_id)},
                             ),
                             .relocations = call_args.relocations,
+                            .transfers_carry = extra.frame_call == .transfer,
                         } };
                     }
                     const result_storage: ?[*]u8 = if (callee.dyn_result == .none) null else try self.callResultStorage(frame, assign.target);
@@ -8336,7 +8342,7 @@ pub const Interpreter = struct {
         frame: *const Frame,
         callee: *const LirProcSpec,
         arg_locals: LirStore.StoreSpanBorrow(LocalId, "local_ids"),
-        replaces_frame: bool,
+        plan: LIR.FrameCall,
     ) Error!CallArgs {
         const values = try self.collectLocalValues(frame, arg_locals);
         const layouts = try self.localLayouts(arg_locals);
@@ -8360,6 +8366,7 @@ pub const Interpreter = struct {
             var size: u32 = undefined;
             var alignment: u32 = undefined;
             if (arg.dyn != null) {
+                if (plan != .relocate) continue;
                 const desc = try self.localDesc(frame, arg_local);
                 size = desc.size;
                 alignment = desc.alignment;
@@ -8372,8 +8379,14 @@ pub const Interpreter = struct {
                 values[i] = cell;
                 layouts[i] = param.layout_idx;
             }
-            if (replaces_frame and size != 0) {
-                try relocations.append(self.evalAllocator(), .{ .arg = @intCast(i), .size = size, .alignment = alignment });
+            if (plan == .relocate) {
+                if (size != 0) {
+                    try relocations.append(self.evalAllocator(), .{ .arg = @intCast(i), .size = size, .alignment = alignment });
+                } else {
+                    const cell = try self.alloc(.opaque_ptr);
+                    cell.write(usize, @intFromPtr(boxy.walk.zeroSizedPtr()));
+                    values[i] = cell;
+                }
             }
         }
         return .{ .values = values, .layouts = layouts, .relocations = relocations.items };

@@ -5955,6 +5955,8 @@ const Certifier = struct {
                     cursor = init.next;
                 },
                 .assign_call => |assign| {
+                    const plan = self.store.stmtRowOrDefault(assign.extra).frame_call;
+                    if (plan != .ordinary) try self.checkFrameCall(plan, assign);
                     try self.applyCall(&state, assign.target, self.sigs.get(assign.proc), assign.args, assign.next);
                     cursor = assign.next;
                 },
@@ -6774,6 +6776,24 @@ const Certifier = struct {
             return self.fail("release of local {d} without an ownership unit", .{@backingInt(local)});
         }
         try state.addBalance(value, -1);
+    }
+
+    /// No outgoing address may name bytes in the dead frame or a released carry.
+    fn checkFrameCall(self: *Certifier, plan: LIR.FrameCall, call: anytype) error{Certification}!void {
+        const caller = self.store.getProcSpecImmediate(self.current_proc);
+        const callee = self.store.getProcSpecImmediate(call.proc);
+        if (callee.takesTailCarry() != (plan != .forward) or (plan == .transfer and !caller.takesTailCarry()))
+            return self.fail("frame call {s} disagrees with carry ABI", .{@tagName(plan)});
+        if (plan == .relocate) return;
+        const args = self.store.getLocalSpan(call.args);
+        const params = self.store.getLocalSpan(callee.args);
+        for (0..params.len) |i| {
+            if (self.store.localDyn(GuardedList.at(params, i)) == null) continue;
+            const arg = GuardedList.at(args, i);
+            const dyn = self.store.localDyn(arg);
+            if (dyn == null or dyn.?.storage != .param or (caller.takesTailCarry() and plan != .transfer))
+                return self.fail("frame call forwards local {d} without its storage", .{@backingInt(arg)});
+        }
     }
 
     fn applyCall(

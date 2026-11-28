@@ -400,7 +400,7 @@ pub fn classifyUse(store: *const LirStore, stmt_id: CFStmtId, local: LocalId) Us
             break :blk .{ .direct_arg = .{
                 .callee = s.proc,
                 .positions = positions,
-                .replaces_frame = store.stmtRowOrDefault(s.extra).replaces_frame,
+                .replaces_frame = store.stmtRowOrDefault(s.extra).frame_call != .ordinary,
             } };
         },
         .assign_call_erased => |s| blk: {
@@ -2076,7 +2076,7 @@ test "a callable that escapes, or is passed to a frame-replacing call, stays on 
                 .target = result,
                 .proc = p.keeps,
                 .args = try p.f.store.addLocalSpan(&.{p.callable}),
-                .extra = try p.f.store.addOptionalStmtRow(LIR.CallExtra, .{ .replaces_frame = true }),
+                .extra = try p.f.store.addOptionalStmtRow(LIR.CallExtra, .{ .frame_call = .forward }),
                 .next = try p.f.ret(result),
             } }),
             .deferred_call => try p.f.erasedCall(p.callable, &.{}, result, true, try p.f.ret(result)),

@@ -1230,10 +1230,23 @@ pub const CallExtra = struct {
     /// call-graph SCC whose next statement returns `target`: the caller
     /// frame owns nothing afterwards, so every backend must replace that
     /// frame with the callee's instead of growing the stack.
-    replaces_frame: bool = false,
+    frame_call: FrameCall = .ordinary,
     /// Set by the tail-drive pass on a call whose callee can return with
     /// an erased call pending.
     drive: PendingDrive = .none,
+};
+
+/// The lifetime of dynamic argument addresses on a direct call. A carry
+/// owns raw storage, not an extra reference to any Roc value in that storage.
+pub const FrameCall = enum(u2) {
+    ordinary,
+    /// No carry is passed: every dynamic address outlives this frame.
+    forward,
+    /// Forward the addresses and hand the callee the incoming carry.
+    transfer,
+    /// Copy all dynamic arguments before releasing the old carry: even an
+    /// unchanged argument may name bytes owned by that carry.
+    relocate,
 };
 
 /// The fields of `CFStmt.crash` that most crashes leave unset, stored out of
@@ -2094,8 +2107,8 @@ pub const LirProcSpec = struct {
     /// every member of a group one storage contract for them.
     tail_group: collections.OptionalId(TailGroupId) = .none,
     /// Whether this procedure takes a tail carry (`takesTailCarry`). ARC sets
-    /// it on every Roc-ABI member of a `tail_group` with a dynamic parameter,
-    /// since a frame-replacing call can enter exactly those; a body-less
+    /// it on dynamic-parameter members of a group that relocates storage.
+    /// Wholly forwarding groups need no owner to pass or release. A body-less
     /// `external` proc gets the value its object published, because the
     /// group is a fact of bodies only the defining unit holds.
     tail_carry: bool = false,
@@ -2168,7 +2181,7 @@ pub const LirProcSpec = struct {
     /// its arguments and dynamic result holding the storage a frame-replacing
     /// call moved its dynamic arguments into, because their bytes lived in
     /// the frame it replaced. The procedure releases its carry when it
-    /// returns or replaces its own frame. Every other caller passes none.
+    /// returns, or transfers it on a `transfer` edge. Ordinary callers pass null.
     pub fn takesTailCarry(self: LirProcSpec) bool {
         return self.abi == .roc and self.tail_carry;
     }

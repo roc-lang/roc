@@ -15,6 +15,18 @@ specialized size build already did. For a 4,096-element `List(Str)`, unique
 success goes from 98,320 requested bytes to zero on both Boxy backends.
 Shared success still copies; neither miss copies.
 
+## Frame-replacing calls (#13364)
+
+`test/alloc-count/app_tail_carry.roc` isolates the storage for dynamic
+arguments, not collection copies or closure construction. Across 32 mutual
+tail calls the original Boxy dev and LLVM speed builds allocated 32 times
+both for forwarding a `U64` and for forwarding a 40-byte record. With the
+ReleaseFast compiler on arm64mac, `--opt=dev` and `--opt=speed` under
+`--specialize=no` now both report `forward 0, mixed 16, closed 0, wide 0`.
+In the mixed cycle only the 16 doublings need new storage; the other 16
+calls pass the incoming address and its owner on. The result checks ensure
+the callee can still read those bytes after the caller's frame is gone.
+
 ## Other size fixtures in the issue
 
 The nine existing allocation tests cover *whole regions*, including closure
@@ -40,5 +52,5 @@ comes from running the same region with `Host.alloc_bytes!` in place of
 For example, 80 bytes per call cannot be a per-call copy of a 10,000-element
 U64 list. These results are consistent with the CLI tests' separate closure
 packing/reuse explanation, but do not attribute every request to an allocation
-site. The specialized expectations remain intact. Frame-replacing tail-call
-storage is a separate part of the issue.
+site. The specialized expectations remain intact; these are not budgets for
+tail-call storage.

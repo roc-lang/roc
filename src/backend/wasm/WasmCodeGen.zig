@@ -7037,7 +7037,7 @@ fn emitTailDrive(self: *Self, proc: LirProcSpec) Allocator.Error!void {
 /// record the callee as pending, and return. The value returned is never
 /// read; the driver that made the ordinary call into this group replaces it
 /// with the callee's result.
-fn generateFrameReplacingCall(self: *Self, proc_id: LIR.LirProcSpecId, call_args: ProcLocalSpan) Allocator.Error!void {
+fn generateFrameReplacingCall(self: *Self, proc_id: LIR.LirProcSpecId, call_args: ProcLocalSpan, plan: LIR.FrameCall) Allocator.Error!void {
     const area = self.tail_area orelse wasmInvariantFmt("WASM/codegen invariant violated: frame-replacing call without a tail area", .{});
     const proc = self.store.getProcSpec(proc_id);
     const driver = try self.tailDriverFor(proc) orelse
@@ -7053,12 +7053,9 @@ fn generateFrameReplacingCall(self: *Self, proc_id: LIR.LirProcSpecId, call_args
     defer offsets_alloc.free(offsets);
     _ = try self.tailArgOffsets(proc, offsets);
 
-    // Dynamic arguments move into a carry the callee owns, because their
-    // bytes may live in the frame being replaced. This procedure's own carry,
-    // which they may have lived in, is released as it returns.
-    const moved = try offsets_alloc.alloc(u32, params.len);
+    const moved = try offsets_alloc.alloc(u32, if (plan == .relocate) params.len else 0);
     defer offsets_alloc.free(moved);
-    const carry: ?u32 = if (hidden.carry) try self.emitTailCarry(args, params, moved) else null;
+    const fresh = if (plan == .relocate) try self.emitTailCarry(args, params, moved) else null;
 
     for (0..args.len) |i| {
         const arg = GuardedList.at(args, i);
@@ -7066,9 +7063,8 @@ fn generateFrameReplacingCall(self: *Self, proc_id: LIR.LirProcSpecId, call_args
         const param_layout = self.procLocalLayoutIdx(param);
         const slot_offset: i32 = @intCast(tail_area_args_offset + offsets[i]);
         if (self.localDyn(param) != null) {
-            if (carry == null) wasmInvariantFmt("WASM/codegen invariant violated: frame-replacing call passes a dynamic argument to a procedure without a tail carry", .{});
             try self.emitDataAddressConst(area, slot_offset);
-            try self.emitLocalGet(moved[i]);
+            if (plan == .relocate) try self.emitLocalGet(moved[i]) else try self.emitProcLocal(arg);
             try self.emitStoreOp(.i32, 0);
         } else if (self.localDyn(arg) != null) {
             wasmInvariantFmt("WASM/codegen invariant violated: dynamic local {d} passed to a closed parameter", .{@backingInt(arg)});
@@ -7097,9 +7093,9 @@ fn generateFrameReplacingCall(self: *Self, proc_id: LIR.LirProcSpecId, call_args
         try self.emitStoreOp(.i32, 0);
         hidden_index += 1;
     }
-    if (carry) |carry_local| {
+    if (hidden.carry) {
         try self.emitDataAddressConst(area, @intCast(tail_area_args_offset + offsets[hidden_index]));
-        try self.emitLocalGet(carry_local);
+        if (plan == .transfer) try self.emitBindingGet(self.carry.?) else try self.emitLocalGet(fresh.?);
         try self.emitStoreOp(.i32, 0);
         hidden_index += 1;
     }
@@ -7116,7 +7112,15 @@ fn generateFrameReplacingCall(self: *Self, proc_id: LIR.LirProcSpecId, call_args
 
     try self.emitZeroValue(driver.result);
     try self.emitProcReturnSet();
+    if (plan != .transfer) try self.emitFreeCarry();
     try self.emitExitToDepth(ret_block_depth);
+}
+
+fn emitFreeCarry(self: *Self) Allocator.Error!void {
+    if (self.carry) |carry| {
+        try self.emitBindingGet(carry);
+        try self.emitBoxyRuntimeCall(.carry_free);
+    }
 }
 
 /// Emit the zero value of a wasm value type.
@@ -7452,12 +7456,6 @@ fn emitProcSpecBody(
         // A dynamic result was written to the caller's storage by `ret`.
         if (erased_abi and proc.dyn_result == .none) {
             try self.emitErasedCallableAdapterReturnStore(erased_ret_ptr.?, proc.ret_layout);
-        }
-        // This procedure owns its tail carry, which its dynamic parameters
-        // point into, and releases it when it returns or replaces its frame.
-        if (self.carry) |carry| {
-            try self.emitBindingGet(carry);
-            try self.emitBoxyRuntimeCall(.carry_free);
         }
     }
 
@@ -8429,8 +8427,8 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         .init_uninitialized => |uninit| {
             try work.append(wa, .{ .node = .{ .stmt_id = uninit.next, .stop = stop } });
         },
-        .assign_call => |assign| if (self.store.stmtRowOrDefault(assign.extra).replaces_frame) {
-            try self.generateFrameReplacingCall(assign.proc, assign.args);
+        .assign_call => |assign| if (self.store.stmtRowOrDefault(assign.extra).frame_call != .ordinary) {
+            try self.generateFrameReplacingCall(assign.proc, assign.args, self.store.stmtRowOrDefault(assign.extra).frame_call);
         } else if (self.callIsDynamic(assign.proc, assign.target)) {
             try self.generateDynCall(assign.proc, assign.args, assign.target, self.store.stmtRowOrDefault(assign.extra).drive);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
@@ -8593,6 +8591,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 try self.emitProcLocal(r.value);
                 try self.emitProcReturnSet();
             }
+            try self.emitFreeCarry();
             try self.emitExitToDepth(ret_block_depth);
         },
         .switch_stmt => |sw| {

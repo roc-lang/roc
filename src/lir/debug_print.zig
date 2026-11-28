@@ -132,7 +132,7 @@ const Printer = struct {
                     try writer.writeByte(')');
                     const extra = self.store.stmtRowOrDefault(s.extra);
                     if (extra.is_cold) try writer.writeAll(" cold");
-                    if (extra.replaces_frame) try writer.writeAll(" replaces_frame");
+                    if (extra.frame_call != .ordinary) try writer.print(" replaces_frame({s})", .{@tagName(extra.frame_call)});
                     if (extra.drive != .none) try writer.print(" drive={s}", .{@tagName(extra.drive)});
                     try writer.writeByte('\n');
                     current = s.next;

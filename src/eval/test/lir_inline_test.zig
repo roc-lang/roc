@@ -14127,7 +14127,7 @@ fn expectBoundedCountLoop(strategy: base.SpecializationStrategy, comptime ok_ins
         if (stmt == .assign_call) {
             const call = stmt.assign_call;
             if (call.proc == loop) {
-                if (result.store.stmtRowOrDefault(call.extra).replaces_frame) {
+                if (result.store.stmtRowOrDefault(call.extra).frame_call != .ordinary) {
                     has_tail_transfer = true;
                 } else ordinary_self_calls += 1;
             }
@@ -14137,6 +14137,46 @@ fn expectBoundedCountLoop(strategy: base.SpecializationStrategy, comptime ok_ins
     }
     try std.testing.expectEqual(@as(usize, 0), ordinary_self_calls);
     try std.testing.expect(has_tail_transfer);
+}
+
+test "issue 13364: ARC publishes storage plans for forwarding and mixed tail groups" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\keep : a, U64 -> a
+        \\keep = |x, n| if n == 0 x else back(x, n - 1)
+        \\back : a, U64 -> a
+        \\back = |x, n| if n == 0 x else keep(x, n - 1)
+        \\relay : a, U64 -> a where [a.plus : a, a -> a]
+        \\relay = |x, n| if n == 0 x else double(x, n - 1)
+        \\double : a, U64 -> a where [a.plus : a, a -> a]
+        \\double = |x, n| if n == 0 x else relay(x + x, n - 1)
+        \\main : U64 -> U64
+        \\main = |n| keep(relay(1.U64, n), n)
+    ;
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .specialization_strategy = .boxy });
+    defer lowered.deinit(allocator);
+    const result = &lowered.lowered.lir_result;
+    for ([_][]const u8{ "keep", "back", "relay", "double" }, [_]LIR.FrameCall{ .forward, .forward, .transfer, .relocate }) |name, plan| {
+        const procs = try procsNamed(allocator, result, name);
+        defer allocator.free(procs);
+        try std.testing.expect(procs.len != 0);
+        for (procs) |proc_id| {
+            const proc = result.store.getProcSpec(proc_id);
+            try std.testing.expectEqual(plan != .forward, proc.takesTailCarry());
+            var walk = try lir.BodyClone.ReachableStmts.init(&result.store, proc.body.get().?);
+            defer walk.deinit();
+            var edges: usize = 0;
+            while (try walk.next()) |id| {
+                const stmt = result.store.getCFStmt(id);
+                if (stmt != .assign_call) continue;
+                const actual = result.store.stmtRowOrDefault(stmt.assign_call.extra).frame_call;
+                if (actual == .ordinary) continue;
+                try std.testing.expectEqual(plan, actual);
+                edges += 1;
+            }
+            try std.testing.expectEqual(@as(usize, 1), edges);
+        }
+    }
 }
 
 test "issue 13228: boxy tail calls when the base case returns Ok of a record" {

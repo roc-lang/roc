@@ -1091,30 +1091,35 @@ fn recordProcedureFacts(store: *LirStore, solution: *const arc_solve.Solution) R
 /// Stamp the procedures joined by same-SCC tail calls with their group. The
 /// group is the connected component of those calls, named by its
 /// lowest-numbered member; ownership variants inherit their source's group.
-/// A Roc-ABI member with a dynamic parameter takes a tail carry
-/// (`LIR.LirProcSpec.takesTailCarry`), which variants inherit too.
+/// Only groups which introduce new dynamic storage need a carry ABI.
 fn recordTailGroups(store: *LirStore, solution: *const arc_solve.Solution) ResourceError!void {
     const proc_count = store.procSpecCount();
     var groups = try collections.DisjointSets.init(store.allocator, proc_count);
     defer groups.deinit(store.allocator);
     var grouped = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, proc_count);
     defer grouped.deinit(store.allocator);
+    var relocates = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, proc_count);
+    defer relocates.deinit(store.allocator);
 
     for (0..proc_count) |proc_index| {
         const caller: LIR.LirProcSpecId = @fromBackingInt(@as(u32, @intCast(proc_index)));
         for (solution.tailCallsOf(caller)) |tail_call| {
             const callee = store.getCFStmtImmediate(tail_call.stmt).assign_call.proc;
+            if (tail_call.frame_call == .relocate) relocates.set(proc_index);
             grouped.set(proc_index);
             grouped.set(@backingInt(callee));
             groups.unite(@intCast(proc_index), @backingInt(callee));
         }
     }
+    var origins = relocates.iterator(.{});
+    while (origins.next()) |i| relocates.set(groups.find(@intCast(i)));
     var members = grouped.iterator(.{});
     while (members.next()) |proc_index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@as(u32, @intCast(proc_index)));
         const spec = store.getProcSpecPtr(proc);
-        spec.tail_group = .some(@fromBackingInt(groups.find(@intCast(proc_index))));
-        spec.tail_carry = spec.abi == .roc and hasDynamicParam(store, spec.args);
+        const group = groups.find(@intCast(proc_index));
+        spec.tail_group = .some(@fromBackingInt(group));
+        spec.tail_carry = relocates.isSet(group) and spec.abi == .roc and hasDynamicParam(store, spec.args);
     }
 }
 
@@ -2190,9 +2195,7 @@ const ArcPlanStep = struct {
     /// effect is that variant's own.
     low_level_selection: ?LIR.LowLevel = null,
     retain_call_result: bool = false,
-    /// The call is a same-SCC tail call whose caller frame owns nothing once
-    /// the call starts.
-    replaces_frame: bool = false,
+    tail: packed struct { direct: LIR.FrameCall = .ordinary, defer_erased: bool = false } = .{},
     call_callee: collections.OptionalId(LIR.LirProcSpecId) = .none,
     call_demanded: arc_sig.RcSig = arc_sig.RcSig.all_owned,
     variant_request: collections.OptionalId(VariantRequestId) = .none,
@@ -2225,7 +2228,7 @@ const ArcPlanStep = struct {
         self.unique_args = 0;
         self.low_level_selection = null;
         self.retain_call_result = false;
-        self.replaces_frame = false;
+        self.tail = .{};
         self.call_callee = .none;
         self.call_demanded = arc_sig.RcSig.all_owned;
         self.variant_request = .none;
@@ -2953,15 +2956,15 @@ const Inserter = struct {
             } }, origin),
             .assign_call => |assign| blk: {
                 if (step.retain_call_result) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .borrowed_call_result }, next);
-                if (step.replaces_frame) {
+                if (step.tail.direct != .ordinary) {
                     const returned = self.store.getCFStmtImmediate(next);
                     if (returned.* != .ret or returned.ret.value != assign.target) {
                         arcInvariant("ARC frame-replacing call was not immediately followed by the return of its result");
                     }
                 }
                 var extra = self.store.stmtRowOrDefault(assign.extra);
-                const extra_row = if (extra.replaces_frame == step.replaces_frame) assign.extra else row: {
-                    extra.replaces_frame = step.replaces_frame;
+                const extra_row = if (extra.frame_call == step.tail.direct) assign.extra else row: {
+                    extra.frame_call = step.tail.direct;
                     break :row try self.store.addOptionalStmtRow(LIR.CallExtra, extra);
                 };
                 break :blk try self.store.addCFStmt(.{ .assign_call = .{
@@ -2978,7 +2981,7 @@ const Inserter = struct {
             .assign_call_erased => |assign_stmt| blk_assign: {
                 const assign = self.store.stmtRow(assign_stmt.data);
                 break :blk_assign blk: {
-                    if (step.replaces_frame) self.deferred_erased_call = true;
+                    if (step.tail.defer_erased) self.deferred_erased_call = true;
                     break :blk try self.store.addCFStmt(.{ .assign_call_erased = .{
                         .target = assign_stmt.target,
                         .data = try self.store.addStmtRow(LIR.ErasedCallData, .{
@@ -2988,7 +2991,7 @@ const Inserter = struct {
                             .reuse_closure = step.transfer_closure,
                             .reuse_source = assign.reuse_source,
                             .result_reuse = assign.result_reuse,
-                            .deferred = step.replaces_frame,
+                            .deferred = step.tail.defer_erased,
                         }),
                         .next = next,
                     } }, origin);
@@ -3089,10 +3092,10 @@ const Inserter = struct {
             .dyn => |dyn_stmt| blk: {
                 const op = self.store.stmtRow(dyn_stmt.data);
                 if (op == .call_erased) {
-                    if (step.replaces_frame) self.deferred_erased_call = true;
+                    if (step.tail.defer_erased) self.deferred_erased_call = true;
                     var call = op;
                     call.call_erased.reuse_closure = step.transfer_closure;
-                    call.call_erased.deferred = step.replaces_frame;
+                    call.call_erased.deferred = step.tail.defer_erased;
                     break :blk try self.store.addCFStmt(.{ .dyn = .{
                         .target = dyn_stmt.target,
                         .data = try self.store.addStmtRow(LIR.DynOp, call),
@@ -3449,7 +3452,7 @@ const Inserter = struct {
                     step.call_callee = .some(assign.proc);
                     step.call_demanded = transfer.args.demanded;
                     self.death_scratch.clearRetainingCapacity();
-                    if (tail_call != null) {
+                    if (tail_call) |fact| {
                         // The recursive frame is replaced at this call. The
                         // call result is not produced until afterwards; every
                         // other unit still in the exact state belongs to the
@@ -3457,7 +3460,10 @@ const Inserter = struct {
                         try self.releaseTailCallerFrame(&segment.owned, assign.target, self.death_scratch);
                         try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
                         step.pre_release_extra_reason = .some(.tail_call_frame);
-                        step.replaces_frame = self.sharesReturnContract(assign);
+                        step.tail.direct = if (fact.frame_call == .forward and self.store.getProcSpecImmediate(assign.proc).takesTailCarry())
+                            .transfer
+                        else
+                            fact.frame_call;
                     } else {
                         try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, transfer.args.demanded.ret_mode, assign.next, self.death_scratch);
                         try self.postStmtDeaths(&segment.owned, &.{}, assign.args, assign.next, self.death_scratch);
@@ -3483,7 +3489,7 @@ const Inserter = struct {
                         try self.releaseTailCallerFrame(&segment.owned, assign_stmt.target, self.death_scratch);
                         try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
                         step.pre_release_extra_reason = .some(.tail_call_frame);
-                        step.replaces_frame = true;
+                        step.tail.defer_erased = true;
                     } else {
                         try self.noteCallResultDeathIfUnused(&segment.owned, assign_stmt.target, .owned, assign_stmt.next, self.death_scratch);
                         const singles = [_]LIR.LocalId{ assign.closure, owner };
@@ -4016,18 +4022,6 @@ const Inserter = struct {
                 if (join.id == stmt.jump.target) break join.body;
             } else return false;
         }
-    }
-
-    /// Whether the callee of a tail call can return on the current
-    /// procedure's behalf: both use the Roc procedure ABI and the callee's
-    /// value is the procedure's whole result.
-    fn sharesReturnContract(self: *const Inserter, call: anytype) bool {
-        const caller = self.store.getProcSpec(self.current_proc);
-        const callee = self.store.getProcSpec(call.proc);
-        return caller.abi == .roc and callee.abi == .roc and
-            callee.hosted.get() == null and
-            self.store.getLocal(call.target).layout_idx == caller.ret_layout and
-            callee.ret_layout == caller.ret_layout;
     }
 
     /// Ends the exact ownership state of a caller frame before a same-SCC
@@ -5701,7 +5695,7 @@ const Inserter = struct {
                     try self.releaseTailCallerFrame(owned, target, self.death_scratch);
                     try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
                     step.pre_release_extra_reason = .some(.tail_call_frame);
-                    step.replaces_frame = true;
+                    step.tail.defer_erased = true;
                     return;
                 }
                 try self.noteCallResultDeathIfUnused(owned, target, .owned, next, self.death_scratch);

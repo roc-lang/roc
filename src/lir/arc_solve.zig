@@ -135,6 +135,9 @@ pub const JoinBody = struct {
 /// ownership unit before the caller frame can be replaced.
 pub const TailCallLifetime = struct {
     stmt: LIR.CFStmtId,
+    /// Before the group's carry ABI is known: a forwarding edge becomes a
+    /// transfer when its callee needs the owner of the incoming bytes.
+    frame_call: LIR.FrameCall = .ordinary,
     /// Each argument's anchoring parameter position, absent when the
     /// argument has no anchor.
     anchor_params: [arc_sig.tracked_param_count]collections.OptionalU8 = @splat(.none),
@@ -2263,7 +2266,7 @@ fn buildTailCallTable(
         if (!call.tail) continue;
         if (solver.scc[call.caller] != solver.scc[@backingInt(call.callee)]) continue;
 
-        var fact = TailCallLifetime{ .stmt = call.stmt };
+        var fact = TailCallLifetime{ .stmt = call.stmt, .frame_call = tailFrameCall(solver.store, call) };
         const args = solver.store.getLocalSpan(call.args);
         for (0..@min(GuardedList.borrowLen(args), arc_sig.tracked_param_count)) |position| {
             const argument = solver.domain.indexOf(GuardedList.at(args, position)) orelse continue;
@@ -2290,8 +2293,60 @@ fn buildTailCallTable(
     return .{ .offsets = offsets, .lens = lens, .facts = facts };
 }
 
+/// The storage proof is independent of the ownership of a parameter's
+/// contents. It applies to every position, not just the tracked RC prefix.
+fn tailFrameCall(store: *const LirStore, call: DirectCallFact) LIR.FrameCall {
+    const caller = store.getProcSpecImmediate(@fromBackingInt(call.caller));
+    const callee = store.getProcSpecImmediate(call.callee);
+    if (caller.abi != .roc or callee.abi != .roc or callee.hosted.get() != null or
+        store.getLocal(call.target).layout_idx != caller.ret_layout or callee.ret_layout != caller.ret_layout)
+        return .ordinary;
+    const params = store.getLocalSpan(callee.args);
+    const args = store.getLocalSpan(call.args);
+    for (0..params.len) |i| {
+        if (store.localDyn(GuardedList.at(params, i)) == null) continue;
+        const arg = store.localDyn(GuardedList.at(args, i)) orelse return .relocate;
+        if (arg.storage != .param) return .relocate;
+    }
+    return .forward;
+}
+
 fn tailCallLifetimeLessThan(_: void, left: TailCallLifetime, right: TailCallLifetime) bool {
     return @backingInt(left.stmt) < @backingInt(right.stmt);
+}
+
+test "issue 13364: check frame views and closed slots beyond the RC prefix" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(allocator, .native);
+    defer layouts.deinit();
+    const dynamic = try layouts.dynamicLayout();
+    const desc = try store.addLocal(.{ .layout_idx = .opaque_ptr });
+    const target = try store.addLocal(.{ .layout_idx = .u64 });
+    const param = try store.addLocal(.{ .layout_idx = dynamic, .dyn = .{ .desc = desc, .storage = .param } });
+    var args: [arc_sig.tracked_param_count + 1]LIR.LocalId = undefined;
+    for (args[0 .. args.len - 1]) |*arg| arg.* = try store.addLocal(.{ .layout_idx = .u64 });
+    args[args.len - 1] = param;
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
+        .args = try store.addLocalSpan(&args),
+        .ret_layout = .u64,
+    }, .none);
+    const view = try store.addLocal(.{ .layout_idx = dynamic, .dyn = .{ .desc = desc, .storage = .view } });
+    const frame = try store.addLocal(.{ .layout_idx = dynamic, .dyn = .{ .desc = desc, .storage = .frame } });
+    for ([_]LIR.LocalId{ param, view, frame, target }, [_]LIR.FrameCall{ .forward, .relocate, .relocate, .relocate }) |source, expected| {
+        args[args.len - 1] = source;
+        try std.testing.expectEqual(expected, tailFrameCall(&store, .{
+            .caller = @backingInt(proc),
+            .callee = proc,
+            .args = try store.addLocalSpan(&args),
+            .target = target,
+            .stmt = @fromBackingInt(0),
+            .tail = true,
+        }));
+    }
 }
 
 /// Mirrors `Solution.unitLocalOf` in the dense solver domain. Borrowed pure

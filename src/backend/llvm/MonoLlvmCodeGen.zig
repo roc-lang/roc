@@ -2446,10 +2446,7 @@ pub const MonoLlvmCodeGen = struct {
     /// The WebAssembly form of a frame-replacing call: leave the callee and
     /// its arguments pending for the group's driver and return. The value
     /// returned is never read; the driver writes the callee's result over it.
-    /// Dynamic arguments move into a carry the callee owns, because their
-    /// bytes may live in the frame being replaced or in this procedure's own
-    /// carry, which is released once nothing here reads it.
-    fn emitPendingTailCall(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, args: LocalSpan) Error!void {
+    fn emitPendingTailCall(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, args: LocalSpan, plan: lir.LIR.FrameCall) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const proc = self.store.getProcSpec(proc_id);
@@ -2465,7 +2462,7 @@ pub const MonoLlvmCodeGen = struct {
         const carry_offset = self.tailArgOffsets(arg_layouts, offsets);
         const moved = try self.allocator.alloc(LlvmBuilder.Value, arg_locals.len);
         defer self.allocator.free(moved);
-        const carry: ?LlvmBuilder.Value = if (proc.takesTailCarry()) try self.emitTailCarry(proc, arg_locals, moved) else null;
+        const carry = try self.tailCallStorage(plan, proc, arg_locals, moved);
         const param_locals = self.store.getLocalSpan(proc.args);
         for (arg_layouts, offsets, 0..) |arg_layout, offset, i| {
             const dst = try self.offsetPtr(self.tail_args_ptr.?, offset);
@@ -2484,7 +2481,7 @@ pub const MonoLlvmCodeGen = struct {
         if (carry) |storage| try self.storePointer(try self.offsetPtr(self.tail_args_ptr.?, carry_offset), storage);
         if (proc.takesPendingCell()) try self.storePointer(try self.offsetPtr(self.tail_args_ptr.?, carry_offset + self.targetWordSize()), self.pending_cell orelse
             llvmInvariantFmt("frame-replacing call to proc {d} without a pending cell", .{@backingInt(proc_id)}));
-        try self.emitFreeCarry();
+        if (plan != .transfer) try self.emitFreeCarry();
         _ = wip.store(.normal, try self.intValue(.i32, tailMemberNumber(driver, proc_id)), self.tail_pending_ptr.?, LlvmBuilder.Alignment.fromByteUnits(4)) catch return error.OutOfMemory;
         if (self.fast_ret_registers) |registers| {
             const ret_ty = try self.cAbiRegisterCarrierType(builder, registers);
@@ -3257,7 +3254,7 @@ pub const MonoLlvmCodeGen = struct {
                     };
                 },
                 .arg => |index| {
-                    if (codegen.store.stmtRowOrDefault(call.extra).replaces_frame) return .value;
+                    if (codegen.store.stmtRowOrDefault(call.extra).frame_call != .ordinary) return .value;
                     if (sig.tail_args.stored[index]) return .value;
                     return switch (sig.lowered.args[index]) {
                         .none, .registers => .value,
@@ -4699,8 +4696,8 @@ pub const MonoLlvmCodeGen = struct {
             .init_uninitialized => |uninit| {
                 try work.append(wa, .{ .node = uninit.next });
             },
-            .assign_call => |assign| if (self.store.stmtRowOrDefault(assign.extra).replaces_frame) {
-                try self.emitFrameReplacingCall(assign.proc, assign.args);
+            .assign_call => |assign| if (self.store.stmtRowOrDefault(assign.extra).frame_call != .ordinary) {
+                try self.emitFrameReplacingCall(assign.proc, assign.args, self.store.stmtRowOrDefault(assign.extra).frame_call);
             } else {
                 const extra = self.store.stmtRowOrDefault(assign.extra);
                 try self.emitDirectCall(assign.target, assign.proc, assign.args, extra.is_cold);
@@ -5016,7 +5013,7 @@ pub const MonoLlvmCodeGen = struct {
                 .init_uninitialized, .assign_ref, .assign_literal, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return,
             }
             const call = stmt.assign_call;
-            if (codegen.store.stmtRowOrDefault(call.extra).replaces_frame) return;
+            if (codegen.store.stmtRowOrDefault(call.extra).frame_call != .ordinary) return;
             const proc = codegen.store.getProcSpec(call.proc);
             if (proc.hosted.get() != null) return;
             if (!codegen.enable_default_platform_diagnostics and codegen.inlineEverywhere(call.proc)) return;
@@ -5231,8 +5228,8 @@ pub const MonoLlvmCodeGen = struct {
     /// storage, a result returned through a pointer goes straight to this
     /// procedure's own result pointer, and the call is the function's last
     /// instruction before its return.
-    fn emitFrameReplacingCall(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, args: LocalSpan) Error!void {
-        if (self.usesTailDrivers()) return self.emitPendingTailCall(proc_id, args);
+    fn emitFrameReplacingCall(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, args: LocalSpan, plan: lir.LIR.FrameCall) Error!void {
+        if (self.usesTailDrivers()) return self.emitPendingTailCall(proc_id, args, plan);
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const proc = self.store.getProcSpec(proc_id);
@@ -5259,18 +5256,13 @@ pub const MonoLlvmCodeGen = struct {
             try param_types.append(self.allocator, ptr_ty);
             try call_args.append(self.allocator, self.ret_ptr_arg orelse return error.CompilationFailed);
         }
-        // Dynamic arguments move into a carry the callee owns, because their
-        // bytes may live in the frame being replaced; then this procedure's
-        // own carry, which they may have lived in, is released.
         const moved = try self.allocator.alloc(LlvmBuilder.Value, arg_locals.len);
         defer self.allocator.free(moved);
-        const carry: ?LlvmBuilder.Value = if (sig.carry_index != null) try self.emitTailCarry(proc, arg_locals, moved) else null;
-        try self.emitFreeCarry();
+        const carry = try self.tailCallStorage(plan, proc, arg_locals, moved);
         const param_locals = self.store.getLocalSpan(proc.args);
         for (sig.lowered.args, sig.arg_layouts, 0..) |placement, arg_layout, i| {
             const arg_local = GuardedList.at(arg_locals, i);
             const dynamic_param = self.localDyn(GuardedList.at(param_locals, i)) != null;
-            if (dynamic_param and carry == null) llvmInvariantFmt("frame-replacing call to proc {d} passes a dynamic argument without a carry", .{@backingInt(proc_id)});
             if (sig.tail_args.stored[i]) {
                 if (dynamic_param) {
                     _ = try self.writeTailArgAddress(self.ownTailScratch(), sig, i, moved[i]);
@@ -5313,6 +5305,7 @@ pub const MonoLlvmCodeGen = struct {
             try call_args.append(self.allocator, self.current_tail_scratch orelse
                 llvmInvariantFmt("frame-replacing call into a tail group from outside it", .{}));
         }
+        if (plan != .transfer) try self.emitFreeCarry();
         const result = wip.call(.musttail, self.fastCallConv(proc), attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
         if (sig.lowered.ret == .registers) {
             _ = wip.ret(result) catch return error.OutOfMemory;
@@ -12717,6 +12710,19 @@ pub const MonoLlvmCodeGen = struct {
     fn emitFreeCarry(self: *MonoLlvmCodeGen) Error!void {
         const carry = self.current_carry orelse return;
         _ = try self.callBoxyRuntime("roc_desc_carry_free", .void, &.{try self.ptrType()}, &.{carry});
+    }
+
+    /// Both musttail and the pending driver pass exactly the addresses and
+    /// storage owner ARC selected.
+    fn tailCallStorage(self: *MonoLlvmCodeGen, plan: lir.LIR.FrameCall, callee: LirProcSpec, args: anytype, addresses: []LlvmBuilder.Value) Error!?LlvmBuilder.Value {
+        if (plan == .relocate) return try self.emitTailCarry(callee, args, addresses);
+        const params = self.store.getLocalSpan(callee.args);
+        for (0..args.len) |i| {
+            if (self.localDyn(GuardedList.at(params, i)) != null) addresses[i] = try self.dynAddress(GuardedList.at(args, i));
+        }
+        if (plan == .transfer) return self.current_carry.?;
+        std.debug.assert(plan == .forward);
+        return null;
     }
 
     /// Copy the bytes of every argument a frame-replacing call to `callee`
