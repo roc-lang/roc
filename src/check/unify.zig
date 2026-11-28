@@ -4851,12 +4851,7 @@ const Unifier = struct {
             return a_constraints;
         }
 
-        {
-            const a_longer = a_len >= b_len;
-            const longer = if (a_longer) a_constraints else b_constraints;
-            const shorter = if (a_longer) b_constraints else a_constraints;
-            if (try self.appendConstraintsInOrder(longer, shorter)) |joined| return joined;
-        }
+        if (try self.joinConstraints(receivers, a_constraints, b_constraints)) |joined| return joined;
 
         // Partition constraints
         const partitioned = try self.partitionStaticDispatchConstraints(a_constraints, b_constraints);
@@ -4910,96 +4905,213 @@ const Unifier = struct {
         return self.types_store.static_dispatch_constraints.rangeToEnd(top);
     }
 
-    /// Join `shorter`'s requirements to the end of `longer`, a long list in
-    /// evidence order, when every one of them belongs there: none is a
-    /// literal's conversion, each is named like the requirement before it or
-    /// later than it, and none joins a group holding a literal's conversion.
-    /// The partition would keep both lists whole and append one to the
-    /// other; this reads `shorter` and what is remembered of `longer`
-    /// (`ConstraintListSummary`) and never the rest of `longer`. Null leaves
-    /// the relation to the partition.
-    fn appendConstraintsInOrder(
+    /// Join the shorter of two requirement lists to the longer, a long one,
+    /// reading the shorter and what is remembered of the longer
+    /// (`ConstraintListSummary`) and never the rest of the longer. Each
+    /// joining requirement meets the longer list's group of its name as the
+    /// partition has it meet that group:
+    ///
+    /// - no group: it is kept;
+    /// - a group of independent requirements: it is kept, once the group's
+    ///   known callable heads agree with its own;
+    /// - a group that is one literal's conversion: it is related to that
+    ///   conversion and subsumed by it.
+    ///
+    /// The kept requirements follow the longer list, in evidence order
+    /// among themselves. Null leaves the relation to the partition: a short
+    /// list, an open probe, or a join that would change one of the longer
+    /// list's own requirements.
+    fn joinConstraints(
         self: *Self,
-        longer: StaticDispatchConstraint.SafeList.Range,
-        shorter: StaticDispatchConstraint.SafeList.Range,
+        receivers: RawTypePair,
+        a_range: StaticDispatchConstraint.SafeList.Range,
+        b_range: StaticDispatchConstraint.SafeList.Range,
     ) Error!?StaticDispatchConstraint.SafeList.Range {
         const store = self.types_store;
+        const scratch = self.scratch;
+        const longer_is_a = a_range.len() >= b_range.len();
+        const longer = if (longer_is_a) a_range else b_range;
+        const shorter = if (longer_is_a) b_range else a_range;
         if (longer.len() < min_summarized_constraints or store.probeOpen()) return null;
+        if (builtin.is_test) scratch.test_constraint_reads += shorter.len();
+        const summary = try self.constraintListSummary(longer);
+
+        // The joining requirements, in evidence order.
+        const order_top: usize = @intCast(scratch.b_static_dispatch_constraint_indices.len());
+        defer scratch.b_static_dispatch_constraint_indices.shrinkRetainingCapacity(order_top);
+        for (0..shorter.len()) |index| {
+            _ = try scratch.b_static_dispatch_constraint_indices.append(scratch.gpa, @intCast(index));
+        }
+        const order = scratch.b_static_dispatch_constraint_indices.items()[order_top..];
         {
-            const list = store.static_dispatch_constraints.sliceRange(longer);
-            var last_name = list[list.len - 1].fn_name;
-            for (store.static_dispatch_constraints.sliceRange(shorter)) |joining| {
-                if (isFixedLiteralOrigin(joining.origin)) return null;
-                if (joining.fn_name.eql(last_name)) continue;
-                if (!Ident.textLessThan(self.getTypeIdentText(last_name), self.getTypeIdentText(joining.fn_name))) return null;
-                last_name = joining.fn_name;
+            const by_evidence = ConstraintOrder{ .unifier = self, .constraints = store.static_dispatch_constraints.sliceRange(shorter) };
+            if (!std.sort.isSorted(u32, order, by_evidence, ConstraintOrder.lessThan)) {
+                std.mem.sort(u32, order, by_evidence, ConstraintOrder.lessThan);
             }
         }
-        if (builtin.is_test) self.scratch.test_constraint_reads += shorter.len();
-        const summary = try self.constraintListSummary(longer) orelse return null;
 
-        // The partition holds a group both lists share to one arity and one
-        // known effect mode. A group only one list holds is not compared
-        // until the other gains a requirement of its name.
-        var group = summary.last_group;
-        var shared = true;
-        const top: usize = @intCast(self.scratch.only_in_b_static_dispatch_constraints.len());
-        defer self.scratch.only_in_b_static_dispatch_constraints.shrinkRetainingCapacity(top);
-        for (0..shorter.len()) |index| {
-            const joining = store.static_dispatch_constraints.sliceRange(shorter)[index];
-            if (!joining.fn_name.eql(group.name)) {
-                group = .{ .name = joining.fn_name };
-                shared = false;
-            } else if (group.has_literal) return null;
-            const agrees = group.note(self.staticDispatchCallableHead(joining));
-            if (shared) {
-                if (!agrees) return error.TypeMismatch;
-            } else if (!agrees) {
+        // Decide whether the partition must relate these lists before
+        // anything is recorded.
+        {
+            const joining = store.static_dispatch_constraints.sliceRange(shorter);
+            const held = store.static_dispatch_constraints.sliceRange(longer);
+            var start: usize = 0;
+            while (start < order.len) {
+                const first = joining[order[start]];
+                var end = start + 1;
+                while (end < order.len and joining[order[end]].fn_name.eql(first.fn_name)) end += 1;
+                defer start = end;
+                const group = summary.groups.getPtr(first.fn_name) orelse continue;
+                // A group sorts its literal conversions first.
+                const joins_literal = isFixedLiteralOrigin(first.origin);
+                const position = group.literal orelse {
+                    // A literal's conversion subsumes the group it joins.
+                    if (joins_literal) return null;
+                    continue;
+                };
+                if (group.members != 1 or (joins_literal and !longer_is_a)) return null;
+                for (order[start..end]) |index| {
+                    if (!isFixedLiteralOrigin(joining[index].origin)) break;
+                    if (!literalConversionAbsorbs(store, held[position], joining[index])) return null;
+                }
+            }
+        }
+
+        const kept_top: usize = @intCast(scratch.only_in_b_static_dispatch_constraints.len());
+        defer scratch.only_in_b_static_dispatch_constraints.shrinkRetainingCapacity(kept_top);
+        const related_top: usize = @intCast(scratch.in_both_static_dispatch_constraints.len());
+        defer scratch.in_both_static_dispatch_constraints.shrinkRetainingCapacity(related_top);
+        errdefer self.forgetConstraintListSummary(longer);
+
+        var start: usize = 0;
+        while (start < order.len) {
+            const name = store.static_dispatch_constraints.sliceRange(shorter)[order[start]].fn_name;
+            var end = start + 1;
+            while (end < order.len and store.static_dispatch_constraints.sliceRange(shorter)[order[end]].fn_name.eql(name)) end += 1;
+            defer start = end;
+
+            const entry = try summary.groups.getOrPut(scratch.gpa, name);
+            if (!entry.found_existing) entry.value_ptr.* = .{};
+            const group = entry.value_ptr;
+            // The partition holds a group both lists hold to one arity and
+            // one known effect mode. A group only one list holds is not
+            // compared until the other gains a requirement of its name.
+            for (order[start..end]) |index| {
+                const joining = store.static_dispatch_constraints.sliceRange(shorter)[index];
+                if (group.noteHead(self.staticDispatchCallableHead(joining))) continue;
+                if (entry.found_existing) return error.TypeMismatch;
                 group.conflict = true;
             }
-            _ = try self.scratch.only_in_b_static_dispatch_constraints.append(self.scratch.gpa, joining);
+
+            if (entry.found_existing) if (group.literal) |position| {
+                const literal = store.static_dispatch_constraints.sliceRange(longer)[position];
+                for (order[start..end]) |index| {
+                    const joining = store.static_dispatch_constraints.sliceRange(shorter)[index];
+                    if (!isFixedLiteralOrigin(joining.origin)) break;
+                    try store.static_dispatch_relation_merges.append(store.gpa, .{ .dropped_fn_var = joining.fn_var, .retained_fn_var = literal.fn_var });
+                }
+                for (order[start..end]) |index| {
+                    const joining = store.static_dispatch_constraints.sliceRange(shorter)[index];
+                    _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{ .a = literal, .b = joining });
+                }
+                for (order[start..end]) |index| {
+                    const joining = store.static_dispatch_constraints.sliceRange(shorter)[index];
+                    if (isFixedLiteralOrigin(joining.origin)) continue;
+                    try store.static_dispatch_relation_merges.append(store.gpa, .{ .dropped_fn_var = joining.fn_var, .retained_fn_var = literal.fn_var });
+                }
+                continue;
+            };
+
+            for (order[start..end]) |index| {
+                const joining = store.static_dispatch_constraints.sliceRange(shorter)[index];
+                const kept: usize = @as(usize, @intCast(scratch.only_in_b_static_dispatch_constraints.len())) - kept_top;
+                group.add(joining, longer.len() + @as(u32, @intCast(kept)));
+                _ = try scratch.only_in_b_static_dispatch_constraints.append(scratch.gpa, joining);
+            }
         }
 
-        const joined = try store.unifierAppendStaticDispatchConstraintsAfter(
-            longer,
-            self.scratch.only_in_b_static_dispatch_constraints.items()[top..],
-        );
-        _ = self.scratch.constraint_list_summaries.remove(@backingInt(longer.start));
-        try self.scratch.constraint_list_summaries.put(self.scratch.gpa, @backingInt(joined.start), .{
-            .count = joined.len(),
-            .last_group = group,
-        });
+        // Relating a pair can append to the scratch list, so it is re-read
+        // by index.
+        const related_end: usize = @intCast(scratch.in_both_static_dispatch_constraints.len());
+        for (related_top..related_end) |index| {
+            const pair = scratch.in_both_static_dispatch_constraints.items()[index];
+            try self.unifyStaticDispatchConstraint(receivers, pair.a, pair.b);
+        }
+
+        const kept = scratch.only_in_b_static_dispatch_constraints.items()[kept_top..];
+        if (kept.len == 0) return longer;
+        const joined = try store.unifierAppendStaticDispatchConstraintsAfter(longer, kept);
+        if (joined.start != longer.start) {
+            // Removing one entry leaves capacity for its replacement. The
+            // summary owns its group index; never drop it on an OOM here.
+            const moved = scratch.constraint_list_summaries.fetchRemove(@backingInt(longer.start)).?.value;
+            scratch.constraint_list_summaries.putAssumeCapacityNoClobber(@backingInt(joined.start), moved);
+        }
+        scratch.constraint_list_summaries.getPtr(@backingInt(joined.start)).?.count = joined.len();
         return joined;
     }
 
-    /// What is remembered of `range`, a requirement list in evidence order,
-    /// reading the list only when nothing is. Null when the list is not in
-    /// evidence order.
+    /// What is remembered of the requirement list `range`, reading the list
+    /// only when nothing is.
     fn constraintListSummary(
         self: *Self,
         range: StaticDispatchConstraint.SafeList.Range,
-    ) std.mem.Allocator.Error!?ConstraintListSummary {
-        if (self.scratch.constraint_list_summaries.get(@backingInt(range.start))) |known| {
-            if (known.count == range.len()) return known;
-        }
+    ) std.mem.Allocator.Error!*ConstraintListSummary {
+        const scratch = self.scratch;
+        const entry = try scratch.constraint_list_summaries.getOrPut(scratch.gpa, @backingInt(range.start));
+        if (entry.found_existing) {
+            if (entry.value_ptr.count == range.len()) return entry.value_ptr;
+            entry.value_ptr.groups.clearRetainingCapacity();
+        } else entry.value_ptr.* = .{ .count = 0 };
+        const summary = entry.value_ptr;
+        errdefer self.forgetConstraintListSummary(range);
+
         const list = self.types_store.static_dispatch_constraints.sliceRange(range);
-        if (builtin.is_test) self.scratch.test_constraint_reads += list.len;
-        for (list[0 .. list.len - 1], list[1..]) |before, after| {
-            if (before.fn_name.eql(after.fn_name)) {
-                if (isFixedLiteralOrigin(after.origin) and !isFixedLiteralOrigin(before.origin)) return null;
-            } else if (!Ident.textLessThan(self.getTypeIdentText(before.fn_name), self.getTypeIdentText(after.fn_name))) return null;
+        if (builtin.is_test) scratch.test_constraint_reads += list.len;
+        for (list, 0..) |constraint, position| {
+            const group = try summary.groups.getOrPut(scratch.gpa, constraint.fn_name);
+            if (!group.found_existing) group.value_ptr.* = .{};
+            if (!group.value_ptr.noteHead(self.staticDispatchCallableHead(constraint))) group.value_ptr.conflict = true;
+            group.value_ptr.add(constraint, @intCast(position));
         }
-        var group: ConstraintGroupSummary = .{ .name = list[list.len - 1].fn_name };
-        var index = list.len;
-        while (index > 0 and list[index - 1].fn_name.eql(group.name)) {
-            index -= 1;
-            if (isFixedLiteralOrigin(list[index].origin)) group.has_literal = true;
-            if (!group.note(self.staticDispatchCallableHead(list[index]))) group.conflict = true;
-        }
-        const summary: ConstraintListSummary = .{ .count = range.len(), .last_group = group };
-        try self.scratch.constraint_list_summaries.put(self.scratch.gpa, @backingInt(range.start), summary);
+        summary.count = range.len();
         return summary;
     }
+
+    fn forgetConstraintListSummary(self: *Self, range: StaticDispatchConstraint.SafeList.Range) void {
+        var forgotten = self.scratch.constraint_list_summaries.fetchRemove(@backingInt(range.start)) orelse return;
+        forgotten.value.groups.deinit(self.scratch.gpa);
+    }
+
+    /// Evidence order over the positions of a requirement list: by method
+    /// name, a literal's conversions before independent requirements, then
+    /// by position.
+    const ConstraintOrder = struct {
+        unifier: *const Self,
+        constraints: []const StaticDispatchConstraint,
+
+        fn lessThan(context: @This(), a_index: u32, b_index: u32) bool {
+            const a = context.constraints[a_index];
+            const b = context.constraints[b_index];
+            if (!a.fn_name.eql(b.fn_name)) {
+                // Evidence order must survive import/copy remapping, but
+                // Ident.Idx ordering is local to one interner.
+                return Ident.textLessThan(
+                    context.unifier.getTypeIdentText(a.fn_name),
+                    context.unifier.getTypeIdentText(b.fn_name),
+                );
+            }
+
+            // Put literal relations before independent relations so each
+            // same-name group can be matched with a linear scan.
+            const a_is_literal = isFixedLiteralOrigin(a.origin);
+            const b_is_literal = isFixedLiteralOrigin(b.origin);
+            if (a_is_literal != b_is_literal) return a_is_literal;
+
+            // Preserve producer order within each semantic class.
+            return a_index < b_index;
+        }
+    };
 
     /// Whether a partition kept every constraint of `range`, unchanged and in
     /// `range`'s own order: `kept` lists them in partition order, which
@@ -5133,33 +5245,6 @@ const Unifier = struct {
         for (b_constraints, 0..) |_, i| {
             _ = try scratch.b_static_dispatch_constraint_indices.append(scratch.gpa, @intCast(i));
         }
-
-        const ConstraintOrder = struct {
-            unifier: *const Self,
-            constraints: []const StaticDispatchConstraint,
-
-            fn lessThan(context: @This(), a_index: u32, b_index: u32) bool {
-                const a = context.constraints[a_index];
-                const b = context.constraints[b_index];
-                if (!a.fn_name.eql(b.fn_name)) {
-                    // Evidence order must survive import/copy remapping, but
-                    // Ident.Idx ordering is local to one interner.
-                    return Ident.textLessThan(
-                        context.unifier.getTypeIdentText(a.fn_name),
-                        context.unifier.getTypeIdentText(b.fn_name),
-                    );
-                }
-
-                // Put literal relations before independent relations so each
-                // same-name group can be matched with a linear scan.
-                const a_is_literal = isFixedLiteralOrigin(a.origin);
-                const b_is_literal = isFixedLiteralOrigin(b.origin);
-                if (a_is_literal != b_is_literal) return a_is_literal;
-
-                // Preserve producer order within each semantic class.
-                return a_index < b_index;
-            }
-        };
 
         const a_indices = scratch.a_static_dispatch_constraint_indices.sliceRange(.{
             .start = @fromBackingInt(@intCast(a_indices_start)),
@@ -5787,22 +5872,22 @@ fn GrowthPath(comptime kind: RowKind) type {
     return std.ArrayList(struct { part: Var, entries: kind.Entry().SafeMultiList.Range });
 }
 
-/// The shortest requirement list `appendConstraintsInOrder` remembers.
+/// The shortest requirement list `joinConstraints` remembers.
 const min_summarized_constraints = 16;
 
-/// What the unifier remembers of a requirement list in evidence order, by
-/// the list's start in the store: how many requirements it summarized, and
-/// the last same-name group, the only one a requirement can join at the end.
+/// What the unifier remembers of a requirement list, by the list's start in
+/// the store: how many requirements it summarized, and each same-name group
+/// among them.
 const ConstraintListSummary = struct {
     count: u32,
-    last_group: ConstraintGroupSummary,
+    groups: std.AutoArrayHashMapUnmanaged(Ident.Idx, ConstraintGroupSummary) = .empty,
 };
 
 /// One same-name group of a requirement list.
 const ConstraintGroupSummary = struct {
-    name: Ident.Idx,
-    /// Whether the group holds a literal's conversion.
-    has_literal: bool = false,
+    members: u32 = 0,
+    /// Where in the list the group's first literal conversion is.
+    literal: ?u32 = null,
     /// The arity and effect mode of the group's callables whose heads were
     /// known when they were noted.
     arity: ?u32 = null,
@@ -5810,9 +5895,15 @@ const ConstraintGroupSummary = struct {
     /// Whether two of those heads disagreed.
     conflict: bool = false,
 
+    /// Count `constraint`, the list's requirement at `position`.
+    fn add(self: *ConstraintGroupSummary, constraint: StaticDispatchConstraint, position: u32) void {
+        self.members += 1;
+        if (self.literal == null and isFixedLiteralOrigin(constraint.origin)) self.literal = position;
+    }
+
     /// Note a member's callable head. False when it disagrees with the heads
     /// already noted, or two of those disagreed.
-    fn note(self: *ConstraintGroupSummary, mb_head: ?Unifier.StaticDispatchCallableHead) bool {
+    fn noteHead(self: *ConstraintGroupSummary, mb_head: ?Unifier.StaticDispatchCallableHead) bool {
         if (self.conflict) return false;
         const head = mb_head orelse return true;
         if (self.arity) |arity| {
@@ -5825,6 +5916,19 @@ const ConstraintGroupSummary = struct {
         return true;
     }
 };
+
+/// Whether folding the literal conversion `joining` into `retained`, as
+/// `mergeStaticDispatchConstraintMetadata` does, leaves `retained` as it is.
+fn literalConversionAbsorbs(store: *const types_mod.Store, retained: StaticDispatchConstraint, joining: StaticDispatchConstraint) bool {
+    if (!sameFixedLiteralClass(retained.origin, joining.origin)) return false;
+    if (retained.origin.literalKind() == .numeral) {
+        const retained_info = store.constraintNumeralInfo(retained).?;
+        const merged = types_mod.NumeralInfo.merged(store.constraintNumeralInfo(joining).?, retained_info);
+        if (!std.meta.eql(merged, retained_info)) return false;
+    }
+    if (retained.provenance.intro_expr == .none and joining.provenance.intro_expr != .none) return false;
+    return retained.interpolation != .none or joining.interpolation == .none;
+}
 
 /// An entry that reappears further along its row's extension chain.
 fn ChainDuplicate(comptime kind: RowKind) type {
@@ -6186,6 +6290,8 @@ pub const Scratch = struct {
         self.pure_demands.deinit(self.gpa);
         self.unify_work_stack.deinit(self.gpa);
         self.mismatch_flags.deinit(self.gpa);
+        var summaries = self.constraint_list_summaries.valueIterator();
+        while (summaries.next()) |summary| summary.groups.deinit(self.gpa);
         self.constraint_list_summaries.deinit(self.gpa);
         self.gathered_fields.deinit(self.gpa);
         self.only_in_a_fields.deinit(self.gpa);
